@@ -1,0 +1,96 @@
+#!/bin/sh
+
+# Direct Xray launcher for Entware.
+# Does not call xkeen.
+# Does not create firewall rules.
+# Intended for SOCKS-only localhost profiles.
+
+PROG="/opt/sbin/xray"
+CONF_DIR="/opt/etc/xray/configs"
+PIDFILE="/opt/var/run/xray-direct.pid"
+LOGFILE="/opt/var/log/xray-direct.log"
+
+mkdir -p /opt/var/run /opt/var/log
+
+is_running() {
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+start() {
+    if is_running; then
+        echo "xray-direct already running: $(cat "$PIDFILE")"
+        return 0
+    fi
+
+    if [ ! -x "$PROG" ]; then
+        echo "ERROR: xray binary not executable: $PROG" >&2
+        return 1
+    fi
+
+    if [ ! -d "$CONF_DIR" ]; then
+        echo "ERROR: config dir not found: $CONF_DIR" >&2
+        return 1
+    fi
+
+    echo "Starting xray-direct..."
+    "$PROG" run -confdir "$CONF_DIR" >> "$LOGFILE" 2>&1 &
+    echo $! > "$PIDFILE"
+
+    sleep 2
+
+    if is_running; then
+        echo "xray-direct started: $(cat "$PIDFILE")"
+        return 0
+    fi
+
+    echo "ERROR: xray-direct failed to start. Last log lines:" >&2
+    tail -40 "$LOGFILE" >&2 2>/dev/null || true
+    rm -f "$PIDFILE"
+    return 1
+}
+
+stop() {
+    if ! is_running; then
+        echo "xray-direct is not running"
+        rm -f "$PIDFILE"
+        return 0
+    fi
+
+    PID="$(cat "$PIDFILE")"
+    echo "Stopping xray-direct: $PID"
+    kill "$PID" 2>/dev/null || true
+
+    i=0
+    while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 10 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "Force stopping xray-direct: $PID"
+        kill -9 "$PID" 2>/dev/null || true
+    fi
+
+    rm -f "$PIDFILE"
+    echo "xray-direct stopped"
+}
+
+status() {
+    if is_running; then
+        echo "xray-direct running: $(cat "$PIDFILE")"
+        return 0
+    fi
+    echo "xray-direct not running"
+    return 3
+}
+
+case "${1:-}" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; start ;;
+    status) status ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 2
+        ;;
+esac

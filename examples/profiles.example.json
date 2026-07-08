@@ -1,0 +1,34 @@
+{
+  "profiles": [
+    {
+      "name": "profile-a",
+      "port": 1082,
+      "subscription_url_env": "PROFILE_A_SUB_URL",
+      "select": {
+        "index": 0,
+        "require_security": "reality",
+        "require_network": "tcp"
+      }
+    },
+    {
+      "name": "profile-b",
+      "port": 1083,
+      "subscription_url_env": "PROFILE_B_SUB_URL",
+      "select": {
+        "name_contains": "profile-b",
+        "require_security": "reality",
+        "require_network": "tcp"
+      }
+    },
+    {
+      "name": "profile-c",
+      "port": 1084,
+      "subscription_url_env": "PROFILE_C_SUB_URL",
+      "select": {
+        "host_contains": "example-node",
+        "require_security": "reality",
+        "require_network": "tcp"
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+# Router backups and secrets
+*.cfg
+*.tar.gz
+*.tgz
+*.zip
+*.backup
+*.secret
+*.secrets
+secrets/
+profiles.json
+profiles.yaml
+subscriptions.txt
+subscription*.txt
+sub*.txt
+
+# Generated Xray config files can contain secrets
+generated/
+03_inbounds.json
+04_outbounds.json
+05_routing.json
+*.vless
+*.sub
+final-netcraze-xray-*
+netcraze-hopper4g-final-*
+startup-config*
+*.startup-config
+opt/etc/xray/
+**/opt/etc/xray/
+
+# Local editor/system files
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.pyc
