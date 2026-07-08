@@ -2,7 +2,7 @@
 
 ## Xray не стартует
 
-Проверьте config:
+Проверьте конфиг:
 
 ```sh
 /opt/sbin/xray run -test -confdir /opt/etc/xray/configs
@@ -37,7 +37,7 @@ sh /opt/etc/init.d/S23xray-direct start
 
 ## Появились firewall rules
 
-Этот toolkit не должен создавать firewall rules.
+Этот набор инструментов не должен создавать firewall-правила.
 
 Проверьте:
 
@@ -56,15 +56,15 @@ xkeen -start
 
 Проверьте:
 
-- устройство назначено в правильную connection policy;
-- policy содержит только нужное proxy connection;
-- Xray listener для этой policy запущен;
+- устройство назначено в правильную политику подключений;
+- политика подключений содержит только нужное proxy connection;
+- локальный SOCKS-порт Xray для этой политики запущен;
 - устройство не сменило MAC из-за private/random MAC;
-- default policy не перехватывает устройство.
+- Default policy не перехватывает устройство.
 
 ## После reboot Xray не запустился
 
-Проверьте права init scripts:
+Проверьте права init-скриптов:
 
 ```sh
 ls -l /opt/etc/init.d/S23xray-direct
@@ -92,7 +92,7 @@ sh scripts/healthcheck.sh
 
 Ожидаемо:
 
-- Xray process есть;
+- процесс Xray есть;
 - нужные порты слушают только `127.0.0.1`;
-- firewall check пустой по `xkeen|TPROXY|61219|1082|1083|1084`;
-- IP через SOCKS отличается от direct IP.
+- проверка firewall пустая по `xkeen|TPROXY|61219|1082|1083|1084`;
+- IP через SOCKS отличается от IP при прямом подключении.

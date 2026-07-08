@@ -1,6 +1,6 @@
 # Netcraze/Keenetic Web UI guide — RU
 
-Этот проект специально оставляет настройку Proxy connections и Connection policies ручным шагом через Web UI. Так безопаснее: видно, какие клиенты уходят через proxy, а default policy не меняется случайно.
+Этот проект специально оставляет настройку Proxy connections и Connection policies вручную через веб-интерфейс. Так безопаснее: видно, какие клиенты уходят через proxy, а Default policy не меняется случайно.
 
 ## Proxy connections
 
@@ -18,7 +18,7 @@ Authentication оставьте disabled, если вы явно не включ
 
 ## Connection policies
 
-Создайте отдельную policy для каждого режима:
+Создайте отдельную политику подключений для каждого режима:
 
 | Policy | Connection |
 |---|---|
@@ -28,20 +28,20 @@ Authentication оставьте disabled, если вы явно не включ
 
 Default policy не меняйте.
 
-Назначайте только нужное устройство, например `TV`, в выбранную policy.
+Назначайте только нужное устройство, например `TV`, в выбранную политику подключений.
 
 ## Безопасное переключение
 
 - Основной режим: `TV` → `TV-VERTPATH`
 - Резерв 1: `TV` → `TV-WHITE5`
 - Резерв 2: `TV` → `TV-FROST2`
-- Прямой интернет: `TV` → default policy
+- Прямой интернет: `TV` → Default policy
 
 ## Чего избегать
 
 - Не добавляйте целый segment.
 - Не добавляйте all clients.
-- Не переносите default policy на proxy connection.
+- Не переносите Default policy на proxy connection.
 - Не открывайте локальные SOCKS-порты в LAN/WAN.
 - Не меняйте Default policy, если цель — настроить только одно устройство.
 
@@ -56,5 +56,5 @@ sh scripts/healthcheck.sh
 В Web UI:
 
 - нужные proxy connections должны быть connected/up;
-- выбранная policy должна содержать только нужное устройство;
-- default policy должна оставаться основной для остальных клиентов.
+- выбранная политика подключений должна содержать только нужное устройство;
+- Default policy должна оставаться основной для остальных клиентов.
