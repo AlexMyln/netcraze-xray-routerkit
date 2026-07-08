@@ -7,6 +7,8 @@
 
 Safe public starter kit for running Xray VLESS/Reality client profiles on Netcraze/Keenetic-style routers with USB storage, Entware/OPKG, local SOCKS listeners, and Web UI connection policies.
 
+Русская версия: [README.ru.md](README.ru.md)
+
 ## Architecture
 
 ```text
@@ -152,17 +154,28 @@ scripts/healthcheck.sh             Read-only runtime, listener, firewall, IP che
 scripts/backup.sh                  Create local router backup archives; never publish them
 templates/S23xray-direct           Direct-run init script for Entware
 examples/profiles.example.json     Secret-free profile template
+README.ru.md                       Russian README
+docs/install-from-zero.ru.md       Install from zero guide in Russian
 docs/netcraze-ui.md                Web UI proxy and policy guide
+docs/netcraze-ui.ru.md             Web UI proxy and policy guide in Russian
 docs/restore.md                    Restore notes
 docs/troubleshooting.md            Common problems and checks
+docs/troubleshooting.ru.md         Common problems and checks in Russian
 docs/friend-instruction.md         End-user switching guide
+docs/friend-instruction.ru.md      End-user switching guide in Russian
+docs/announcement.ru.md            Russian announcement draft
 ```
 
 ## Docs
 
+- [Русская версия README](README.ru.md)
+- [Install from zero — RU](docs/install-from-zero.ru.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
+- [Netcraze/Keenetic Web UI guide — RU](docs/netcraze-ui.ru.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Troubleshooting — RU](docs/troubleshooting.ru.md)
 - [Friend instruction](docs/friend-instruction.md)
+- [Friend instruction — RU](docs/friend-instruction.ru.md)
 - [Restore notes](docs/restore.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
