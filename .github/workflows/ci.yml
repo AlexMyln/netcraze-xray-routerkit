@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          sh -n scripts/install-xray-direct.sh
+          sh -n scripts/healthcheck.sh
+          sh -n scripts/backup.sh
+          sh -n templates/S23xray-direct
+
+      - name: Python syntax
+        run: python3 -m py_compile scripts/generate-xray-profiles.py
+
+      - name: Forbidden file guard
+        run: |
+          set -eu
+          found="$(find . -path ./.git -prune -o -type f \( \
+            -name '*.cfg' -o \
+            -name '*.tar.gz' -o \
+            -name 'final-netcraze-xray-*' -o \
+            -name 'netcraze-hopper4g-final-*' -o \
+            -path './opt/etc/xray/*' -o \
+            -name 'profiles.json' \
+          \) -print)"
+          if [ -n "$found" ]; then
+            echo "Forbidden backup/config/profile files found:"
+            printf '%s\n' "$found"
+            exit 1
+          fi
+
+      - name: Secret guard
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          root = Path(".")
+          skip_dirs = {".git", "__pycache__"}
+          skip_suffixes = {".pyc", ".zip", ".tar.gz", ".tgz"}
+
+          private_host_pattern = r"link" + r"\.vertpath"
+          private_api_pattern = "frost" + "-api"
+          vless_scheme = "vless" + "://"
+
+          patterns = [
+              ("private subscription hostname", re.compile(private_host_pattern + "|" + private_api_pattern, re.I)),
+              ("real VLESS URL", re.compile(re.escape(vless_scheme) + r"[^\s\"'<>]*@", re.I)),
+              ("Reality key query parameter", re.compile(r"(?:[?&#]|\b)(?:pbk|sid)=[A-Za-z0-9_-]{2,}", re.I)),
+              ("UUID-like value", re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
+          ]
+
+          def should_skip(path: Path) -> bool:
+              if any(part in skip_dirs for part in path.parts):
+                  return True
+              text = str(path)
+              return any(text.endswith(suffix) for suffix in skip_suffixes)
+
+          def mask(value: str) -> str:
+              value = value.strip()
+              if len(value) <= 12:
+                  return value[:3] + "..."
+              return value[:6] + "..." + value[-4:]
+
+          findings = []
+          for path in sorted(p for p in root.rglob("*") if p.is_file() and not should_skip(p)):
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  text = path.read_text(encoding="utf-8", errors="replace")
+              for lineno, line in enumerate(text.splitlines(), 1):
+                  for label, pattern in patterns:
+                      for match in pattern.finditer(line):
+                          findings.append((path, lineno, label, mask(match.group(0))))
+
+          if findings:
+              print("Potential public secret exposure found:")
+              for path, lineno, label, masked in findings:
+                  print(f"{path}:{lineno}: {label}: {masked}")
+              sys.exit(1)
+
+          print("Secret guard passed.")
+          PY
