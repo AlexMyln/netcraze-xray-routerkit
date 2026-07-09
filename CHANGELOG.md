@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Hardened `install --apply` pipeline with strict plan, preflight, backup, install, and healthcheck steps.
+- Apply summaries and rollback hints for failed install/healthcheck flows.
+- CLI tests for apply pipeline ordering, dry-run behavior, failure handling, and skip flags.
 - Safe `install` subcommand in the unified CLI.
 - Plan-only install mode by default.
 - Explicit `--apply` gate for install operations.
