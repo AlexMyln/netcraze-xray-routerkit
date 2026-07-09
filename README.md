@@ -11,6 +11,10 @@ Safe public starter kit for running Xray VLESS/Reality client profiles on Netcra
 
 Changelog: [CHANGELOG.md](CHANGELOG.md)
 
+## Repository Media
+
+- GitHub social preview asset: [assets/social-preview.png](assets/social-preview.png)
+
 ## Architecture
 
 ```text
@@ -156,6 +160,7 @@ scripts/healthcheck.sh             Read-only runtime, listener, firewall, IP che
 scripts/backup.sh                  Create local router backup archives; never publish them
 templates/S23xray-direct           Direct-run init script for Entware
 examples/profiles.example.json     Secret-free profile template
+assets/social-preview.png          GitHub social preview image
 README.ru.md                       Russian README
 docs/install-from-zero.ru.md       Install from zero guide in Russian
 docs/netcraze-ui.md                Web UI proxy and policy guide
