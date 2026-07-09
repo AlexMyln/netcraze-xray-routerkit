@@ -76,6 +76,23 @@ Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 v0.2-alpha foundation для guided installer уже в работе. Новый read-only preflight и локальный wizard для `profiles.json` описаны в [документации guided installer](docs/guided-installer.ru.md).
 
+### Единый CLI
+
+```sh
+python3 scripts/routerkit.py wizard
+python3 scripts/routerkit.py generate --profiles profiles.json --out generated
+python3 scripts/routerkit.py plan --generated generated
+```
+
+Проверки на стороне роутера:
+
+```sh
+python3 scripts/routerkit.py preflight
+python3 scripts/routerkit.py healthcheck
+```
+
+Флаг `--dry-run` показывает, какую команду wrapper запустил бы.
+
 1. Установить Entware/OPKG на EXT4 USB-накопитель.
 2. Установить бинарник Xray на роутер.
 3. Скопировать `examples/profiles.example.json` в локальный файл `profiles.json`, который не попадает в git.
@@ -180,6 +197,7 @@ Web UI proxy connections:
 ## Структура репозитория
 
 ```text
+scripts/routerkit.py                Единый CLI wrapper для routerkit helpers
 scripts/generate-xray-profiles.py  Генерация 03/04/05 фрагментов конфига Xray
 scripts/routerkit-wizard.py        Интерактивный локальный wizard для profiles.json
 scripts/routerkit-plan.py          Dry-run install plan без изменений на роутере
