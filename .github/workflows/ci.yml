@@ -26,6 +26,10 @@ jobs:
           python3 -m py_compile scripts/generate-xray-profiles.py
           python3 -m py_compile scripts/routerkit-wizard.py
 
+      - name: Python tests
+        run: |
+          python3 -m unittest discover -s tests -v
+
       - name: Forbidden file guard
         run: |
           set -eu
