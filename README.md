@@ -72,6 +72,23 @@ Router-side proxy setups often drift into hard-to-audit firewall modes, broad de
 
 The v0.2-alpha guided installer foundation is in progress. For the new read-only preflight and local profiles wizard, see [Guided installer foundation](docs/guided-installer.md).
 
+### Unified CLI
+
+```sh
+python3 scripts/routerkit.py wizard
+python3 scripts/routerkit.py generate --profiles profiles.json --out generated
+python3 scripts/routerkit.py plan --generated generated
+```
+
+Router-side checks:
+
+```sh
+python3 scripts/routerkit.py preflight
+python3 scripts/routerkit.py healthcheck
+```
+
+Use `--dry-run` to preview the wrapper command.
+
 1. Install Entware/OPKG on an EXT4 USB storage device.
 2. Install the Xray binary on the router.
 3. Copy `examples/profiles.example.json` to local ignored `profiles.json`.
@@ -176,6 +193,7 @@ The repository intentionally keeps only a secret-free example profile file. Real
 ## Repository Layout
 
 ```text
+scripts/routerkit.py                Unified CLI wrapper for routerkit helpers
 scripts/generate-xray-profiles.py  Generate 03/04/05 Xray config fragments
 scripts/routerkit-wizard.py        Interactive local profiles.json wizard
 scripts/routerkit-plan.py          Dry-run install plan without router changes

@@ -11,6 +11,31 @@
 - бинарник Xray доступен по пути `/opt/sbin/xray`;
 - `/opt` и `/opt/etc` доступны на роутере.
 
+## Единый CLI
+
+`scripts/routerkit.py` — единая Python-точка входа для foundation guided installer. Она только делегирует запуск существующим скриптам и возвращает exit code дочернего процесса.
+
+```sh
+python3 scripts/routerkit.py wizard
+python3 scripts/routerkit.py generate --profiles profiles.json --out generated
+python3 scripts/routerkit.py plan --generated generated
+```
+
+Проверки на стороне роутера:
+
+```sh
+python3 scripts/routerkit.py preflight
+python3 scripts/routerkit.py healthcheck
+```
+
+Флаг `--dry-run` показывает, какую команду wrapper запустил бы:
+
+```sh
+python3 scripts/routerkit.py --dry-run plan --generated generated --strict
+```
+
+Wrapper не автоматизирует Netcraze Web UI, не создаёт firewall rules, не вызывает `xkeen -start` и не делает скрытых изменений в `/opt`. Команда `backup` делегирует запуск `scripts/backup.sh`; backup archives могут содержать secrets, их нельзя публиковать.
+
 ## Что делает wizard
 
 `scripts/routerkit-wizard.py` помогает создать локальный `profiles.json` без ручного редактирования JSON.
@@ -76,19 +101,19 @@ python3 scripts/routerkit-plan.py --generated generated --json
 1. Запустить wizard локально:
 
 ```sh
-python3 scripts/routerkit-wizard.py
+python3 scripts/routerkit.py wizard
 ```
 
 2. Сгенерировать локальные config fragments:
 
 ```sh
-python3 scripts/generate-xray-profiles.py --profiles profiles.json --out generated
+python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 ```
 
 3. Посмотреть локальный install plan:
 
 ```sh
-python3 scripts/routerkit-plan.py --generated generated
+python3 scripts/routerkit.py plan --generated generated
 ```
 
 4. Скопировать generated config fragments на роутер через ваш приватный способ передачи.
