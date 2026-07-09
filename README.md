@@ -11,6 +11,8 @@ Safe public starter kit for running Xray VLESS/Reality client profiles on Netcra
 
 Changelog: [CHANGELOG.md](CHANGELOG.md)
 
+Guided installer docs: [docs/guided-installer.md](docs/guided-installer.md)
+
 ## Repository Media
 
 - GitHub social preview asset: [assets/social-preview.png](assets/social-preview.png)
@@ -67,6 +69,8 @@ Router-side proxy setups often drift into hard-to-audit firewall modes, broad de
 - CI includes syntax checks and a repository secret guard.
 
 ## Quick Start
+
+The v0.2-alpha guided installer foundation is in progress. For the new read-only preflight and local profiles wizard, see [Guided installer foundation](docs/guided-installer.md).
 
 1. Install Entware/OPKG on an EXT4 USB storage device.
 2. Install the Xray binary on the router.
@@ -155,6 +159,8 @@ The repository intentionally keeps only a secret-free example profile file. Real
 
 ```text
 scripts/generate-xray-profiles.py  Generate 03/04/05 Xray config fragments
+scripts/routerkit-wizard.py        Interactive local profiles.json wizard
+scripts/preflight.sh               Read-only Entware/router preflight checks
 scripts/install-xray-direct.sh     Install generated configs and init script
 scripts/healthcheck.sh             Read-only runtime, listener, firewall, IP checks
 scripts/backup.sh                  Create local router backup archives; never publish them
@@ -163,6 +169,8 @@ examples/profiles.example.json     Secret-free profile template
 assets/social-preview.png          GitHub social preview image
 README.ru.md                       Russian README
 docs/install-from-zero.ru.md       Install from zero guide in Russian
+docs/guided-installer.md           Guided installer foundation
+docs/guided-installer.ru.md        Guided installer foundation in Russian
 docs/installer-scope.md            Guided installer scope and prerequisites
 docs/installer-scope.ru.md         Guided installer scope and prerequisites in Russian
 docs/netcraze-ui.md                Web UI proxy and policy guide
@@ -179,6 +187,8 @@ docs/announcement.ru.md            Russian announcement draft
 
 - [Русская версия README](README.ru.md)
 - [Changelog](CHANGELOG.md)
+- [Guided installer foundation](docs/guided-installer.md)
+- [Guided installer foundation — RU](docs/guided-installer.ru.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
 - [Installer scope](docs/installer-scope.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
