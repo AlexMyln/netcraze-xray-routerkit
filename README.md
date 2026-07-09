@@ -163,6 +163,8 @@ examples/profiles.example.json     Secret-free profile template
 assets/social-preview.png          GitHub social preview image
 README.ru.md                       Russian README
 docs/install-from-zero.ru.md       Install from zero guide in Russian
+docs/installer-scope.md            Guided installer scope and prerequisites
+docs/installer-scope.ru.md         Guided installer scope and prerequisites in Russian
 docs/netcraze-ui.md                Web UI proxy and policy guide
 docs/netcraze-ui.ru.md             Web UI proxy and policy guide in Russian
 docs/restore.md                    Restore notes
@@ -178,6 +180,7 @@ docs/announcement.ru.md            Russian announcement draft
 - [Русская версия README](README.ru.md)
 - [Changelog](CHANGELOG.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
+- [Installer scope](docs/installer-scope.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
 - [Netcraze/Keenetic Web UI guide — RU](docs/netcraze-ui.ru.md)
 - [Troubleshooting](docs/troubleshooting.md)
@@ -192,7 +195,7 @@ Use the GitHub issue templates for sanitized bug reports and feature requests.
 
 ## Roadmap
 
-- Move toward a guided one-click installer after Entware/OPKG and Xray prerequisites are already in place: generate profiles, install configs, install `S23xray-direct`, run healthchecks, and print exact Netcraze Web UI steps.
+- Move toward a guided one-click installer after Entware/OPKG and Xray prerequisites are already in place: generate profiles, install configs, install `S23xray-direct`, run healthchecks, and print exact Netcraze Web UI steps. The guided installer assumes Entware, SSH, and Xray are already available.
 - Keep the from-zero path manual for USB storage, Entware/Xray setup, and Netcraze Web UI/device policy decisions; no ready-to-flash USB/router image is promised.
 - Add a dry-run mode for install planning.
 - Add optional config rendering previews with masked secrets.

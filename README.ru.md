@@ -170,6 +170,8 @@ README.ru.md                       Русская версия README
 
 docs/netcraze-ui.md                Web UI guide для proxy/policy
 docs/install-from-zero.ru.md       Установка с нуля на русском
+docs/installer-scope.md            Installer scope и prerequisites
+docs/installer-scope.ru.md         Область работы установщика и prerequisites
 docs/netcraze-ui.ru.md             Русская инструкция по Web UI
 docs/restore.md                    Restore notes
 docs/troubleshooting.md            Troubleshooting
@@ -182,6 +184,7 @@ docs/announcement.ru.md            Черновик анонса на русск
 ## Документация
 
 - [Changelog](CHANGELOG.md)
+- [Область работы установщика](docs/installer-scope.ru.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
 - [Netcraze/Keenetic Web UI guide — RU](docs/netcraze-ui.ru.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
@@ -197,7 +200,7 @@ docs/announcement.ru.md            Черновик анонса на русск
 
 ## Roadmap
 
-- Двигаться к guided one-click installer после того, как Entware/OPKG и Xray уже подготовлены: генерировать профили, устанавливать конфиги, устанавливать `S23xray-direct`, запускать healthchecks и печатать точные шаги для Netcraze Web UI.
+- Двигаться к guided one-click installer после того, как Entware/OPKG и Xray уже подготовлены: генерировать профили, устанавливать конфиги, устанавливать `S23xray-direct`, запускать healthchecks и печатать точные шаги для Netcraze Web UI. Установщик предполагает, что Entware, SSH и Xray уже доступны.
 - Оставить from-zero путь ручным для USB-накопителя, установки Entware/Xray и решений в Netcraze Web UI по устройствам/политикам; готовый образ флешки или роутера не обещается.
 - Добавить dry-run режим для планирования установки.
 - Добавить предпросмотр конфигов с замаскированными секретами.
