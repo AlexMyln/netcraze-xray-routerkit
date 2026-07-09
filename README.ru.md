@@ -11,6 +11,8 @@ English: [README.md](README.md)
 
 Changelog: [CHANGELOG.md](CHANGELOG.md)
 
+Документация guided installer: [docs/guided-installer.ru.md](docs/guided-installer.ru.md)
+
 ## Медиа репозитория
 
 - Asset для GitHub Social preview: [assets/social-preview.png](assets/social-preview.png)
@@ -71,6 +73,8 @@ Changelog: [CHANGELOG.md](CHANGELOG.md)
 ## Быстрый старт
 
 > Это не образ флешки и не автоматический установщик. Entware/OPKG и Xray должны быть подготовлены отдельно.
+
+v0.2-alpha foundation для guided installer уже в работе. Новый read-only preflight и локальный wizard для `profiles.json` описаны в [документации guided installer](docs/guided-installer.ru.md).
 
 1. Установить Entware/OPKG на EXT4 USB-накопитель.
 2. Установить бинарник Xray на роутер.
@@ -159,6 +163,8 @@ Web UI proxy connections:
 
 ```text
 scripts/generate-xray-profiles.py  Генерация 03/04/05 фрагментов конфига Xray
+scripts/routerkit-wizard.py        Интерактивный локальный wizard для profiles.json
+scripts/preflight.sh               Read-only preflight checks для Entware/router
 scripts/install-xray-direct.sh     Установка сгенерированных конфигов и init-скрипта
 scripts/healthcheck.sh             Проверки без изменений: runtime, порты, firewall и IP
 scripts/backup.sh                  Создание локального backup-архива; не публиковать
@@ -170,6 +176,8 @@ README.ru.md                       Русская версия README
 
 docs/netcraze-ui.md                Web UI guide для proxy/policy
 docs/install-from-zero.ru.md       Установка с нуля на русском
+docs/guided-installer.md           Guided installer foundation
+docs/guided-installer.ru.md        Основа guided installer на русском
 docs/installer-scope.md            Installer scope и prerequisites
 docs/installer-scope.ru.md         Область работы установщика и prerequisites
 docs/netcraze-ui.ru.md             Русская инструкция по Web UI
@@ -184,6 +192,8 @@ docs/announcement.ru.md            Черновик анонса на русск
 ## Документация
 
 - [Changelog](CHANGELOG.md)
+- [Guided installer foundation](docs/guided-installer.md)
+- [Основа guided installer](docs/guided-installer.ru.md)
 - [Область работы установщика](docs/installer-scope.ru.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
 - [Netcraze/Keenetic Web UI guide — RU](docs/netcraze-ui.ru.md)
