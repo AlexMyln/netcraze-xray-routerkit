@@ -108,6 +108,14 @@ sh scripts/healthcheck.sh
 
 9. Вручную создать proxy connections и политики подключений в веб-интерфейсе Netcraze/Keenetic.
 
+### Тесты
+
+Локальный запуск тестов:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
 ## Пример топологии
 
 ```text
