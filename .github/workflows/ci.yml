@@ -18,10 +18,13 @@ jobs:
           sh -n scripts/install-xray-direct.sh
           sh -n scripts/healthcheck.sh
           sh -n scripts/backup.sh
+          sh -n scripts/preflight.sh
           sh -n templates/S23xray-direct
 
       - name: Python syntax
-        run: python3 -m py_compile scripts/generate-xray-profiles.py
+        run: |
+          python3 -m py_compile scripts/generate-xray-profiles.py
+          python3 -m py_compile scripts/routerkit-wizard.py
 
       - name: Forbidden file guard
         run: |

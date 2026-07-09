@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Guided installer foundation: preflight script and interactive local profiles wizard.
+- Guided installer documentation in English and Russian.
+
 ## [0.1.2] - 2026-07-09
 
 ### Added
