@@ -11,6 +11,31 @@ Before using this flow, prepare the router manually:
 - the Xray binary is available at `/opt/sbin/xray`;
 - `/opt` and `/opt/etc` are available on the router.
 
+## Unified CLI
+
+`scripts/routerkit.py` is the unified Python entrypoint for the guided installer foundation. It only delegates to existing scripts and returns the delegated process exit code.
+
+```sh
+python3 scripts/routerkit.py wizard
+python3 scripts/routerkit.py generate --profiles profiles.json --out generated
+python3 scripts/routerkit.py plan --generated generated
+```
+
+Router-side checks:
+
+```sh
+python3 scripts/routerkit.py preflight
+python3 scripts/routerkit.py healthcheck
+```
+
+Use `--dry-run` to preview the command that the wrapper would run:
+
+```sh
+python3 scripts/routerkit.py --dry-run plan --generated generated --strict
+```
+
+The wrapper does not automate the Netcraze Web UI, create firewall rules, call `xkeen -start`, or make hidden `/opt` changes. The `backup` command delegates to `scripts/backup.sh`; backup archives may contain secrets and must not be published.
+
 ## What the wizard does
 
 `scripts/routerkit-wizard.py` helps create a local `profiles.json` file without hand-editing JSON.
@@ -76,19 +101,19 @@ python3 scripts/routerkit-plan.py --generated generated --json
 1. Run the wizard locally:
 
 ```sh
-python3 scripts/routerkit-wizard.py
+python3 scripts/routerkit.py wizard
 ```
 
 2. Generate local config fragments:
 
 ```sh
-python3 scripts/generate-xray-profiles.py --profiles profiles.json --out generated
+python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 ```
 
 3. Preview the local install plan:
 
 ```sh
-python3 scripts/routerkit-plan.py --generated generated
+python3 scripts/routerkit.py plan --generated generated
 ```
 
 4. Copy the generated config fragments to the router using your private transfer method.

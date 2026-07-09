@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Unified `scripts/routerkit.py` CLI entrypoint for wizard, generate, plan, preflight, healthcheck, and backup commands.
+- CLI tests for command construction and dry-run behavior.
 - Dry-run install plan script for previewing routerkit install operations.
 - Unit tests for install plan generation and secret suppression.
 - Unit tests for the config generator and local profiles wizard.
