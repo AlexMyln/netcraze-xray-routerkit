@@ -96,6 +96,28 @@ python3 scripts/routerkit-plan.py --generated generated
 python3 scripts/routerkit-plan.py --generated generated --json
 ```
 
+## Команда install
+
+`scripts/routerkit.py install` безопасна по умолчанию. Без `--apply` она запускает такой же strict plan mode и не меняет файлы:
+
+```sh
+python3 scripts/routerkit.py install --generated generated
+```
+
+С альтернативным target для плана:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --target-root /opt
+```
+
+Только `--apply` делегирует запуск install shell script:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --apply
+```
+
+Команда не автоматизирует политики Netcraze Web UI, не создаёт firewall rules, не вызывает `xkeen -start` и не включает autostart по умолчанию. Флаг `--enable-autostart` зарезервирован и сейчас завершает команду до любого install step. Autostart остаётся ручным действием после healthcheck.
+
 ## Пример flow
 
 1. Запустить wizard локально:
@@ -113,11 +135,11 @@ python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 3. Посмотреть локальный install plan:
 
 ```sh
-python3 scripts/routerkit.py plan --generated generated
+python3 scripts/routerkit.py install --generated generated
 ```
 
 4. Скопировать generated config fragments на роутер через ваш приватный способ передачи.
-5. Запустить install script на роутере после review generated files.
+5. Запустить `python3 scripts/routerkit.py install --generated generated --apply` на роутере после review generated files.
 6. Запустить healthcheck.
 7. Вручную создать Netcraze Web UI proxy connections и policies.
 
