@@ -11,6 +11,10 @@ English: [README.md](README.md)
 
 Changelog: [CHANGELOG.md](CHANGELOG.md)
 
+## Медиа репозитория
+
+- Asset для GitHub Social preview: [assets/social-preview.png](assets/social-preview.png)
+
 ## Архитектура
 
 ```text
@@ -161,6 +165,7 @@ scripts/backup.sh                  Создание локального backup-
 
 templates/S23xray-direct           Прямой init-скрипт для Entware
 examples/profiles.example.json     Шаблон профиля без секретов
+assets/social-preview.png          Картинка для GitHub Social preview
 README.ru.md                       Русская версия README
 
 docs/netcraze-ui.md                Web UI guide для proxy/policy

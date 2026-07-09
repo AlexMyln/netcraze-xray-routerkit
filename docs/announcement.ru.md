@@ -29,3 +29,5 @@ Netcraze proxy connections
 Это не Docker-образ, не готовый образ флешки и не автоматический установщик. Это набор шаблонов, скриптов и документации, чтобы аккуратно собрать похожую схему и не заворачивать весь дом в proxy случайным движением мыши.
 
 Репозиторий: https://github.com/AlexMyln/netcraze-xray-routerkit
+
+Картинка для GitHub Social preview: `../assets/social-preview.png`
