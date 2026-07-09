@@ -25,6 +25,7 @@ jobs:
         run: |
           python3 -m py_compile scripts/generate-xray-profiles.py
           python3 -m py_compile scripts/routerkit-wizard.py
+          python3 -m py_compile scripts/routerkit-plan.py
 
       - name: Python tests
         run: |

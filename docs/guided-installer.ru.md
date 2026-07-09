@@ -53,6 +53,24 @@ Wizard не:
 
 Preflight read-only: он не создаёт файлы, не меняет permissions, не запускает и не останавливает Xray, не вызывает xkeen start command.
 
+## Install plan / dry-run
+
+`scripts/routerkit-plan.py` показывает install operations для локальных generated config fragments без изменений в `/opt`.
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated
+```
+
+Он проверяет, что `03_inbounds.json`, `04_outbounds.json` и `05_routing.json` являются valid JSON, проверяет loopback-only inbound listeners, показывает summary профилей без outbound secrets и выводит planned copy targets в `/opt/etc/xray/configs`.
+
+План оставляет `S24xray` disabled и явно не вызывает `xkeen -start`, не трогает firewall rules, не включает autostart автоматически, не публикует/не сохраняет secrets и не меняет политики Netcraze Web UI.
+
+Для machine-readable output:
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated --json
+```
+
 ## Пример flow
 
 1. Запустить wizard локально:
@@ -67,10 +85,16 @@ python3 scripts/routerkit-wizard.py
 python3 scripts/generate-xray-profiles.py --profiles profiles.json --out generated
 ```
 
-3. Скопировать generated config fragments на роутер через ваш приватный способ передачи.
-4. Запустить install script на роутере после review generated files.
-5. Запустить healthcheck.
-6. Вручную создать Netcraze Web UI proxy connections и policies.
+3. Посмотреть локальный install plan:
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated
+```
+
+4. Скопировать generated config fragments на роутер через ваш приватный способ передачи.
+5. Запустить install script на роутере после review generated files.
+6. Запустить healthcheck.
+7. Вручную создать Netcraze Web UI proxy connections и policies.
 
 ## Security notes
 

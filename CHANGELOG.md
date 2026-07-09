@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Dry-run install plan script for previewing routerkit install operations.
+- Unit tests for install plan generation and secret suppression.
 - Unit tests for the config generator and local profiles wizard.
 - CI test discovery for the Python test suite.
 - Guided installer foundation: preflight script and interactive local profiles wizard.
