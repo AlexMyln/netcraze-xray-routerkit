@@ -131,6 +131,24 @@ python3 scripts/routerkit-plan.py --generated generated
 
 The plan suppresses secret-bearing outbound fields and does not call `xkeen -start`, touch firewall rules, enable autostart, or change Web UI policies.
 
+### Install command
+
+Plan-only mode:
+
+```sh
+python3 scripts/routerkit.py install --generated generated
+```
+
+Apply mode:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --apply
+```
+
+`install` does not automate Web UI policies, does not call `xkeen -start`, does not touch firewall rules, and does not enable autostart by default.
+
+The `--enable-autostart` flag is reserved for a later explicit flow. Autostart remains manual after healthcheck.
+
 ### Testing
 
 Local tests:

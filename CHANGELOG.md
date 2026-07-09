@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Safe `install` subcommand in the unified CLI.
+- Plan-only install mode by default.
+- Explicit `--apply` gate for install operations.
 - Unified `scripts/routerkit.py` CLI entrypoint for wizard, generate, plan, preflight, healthcheck, and backup commands.
 - CLI tests for command construction and dry-run behavior.
 - Dry-run install plan script for previewing routerkit install operations.

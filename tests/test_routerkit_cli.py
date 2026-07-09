@@ -4,6 +4,7 @@ import io
 import shlex
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -72,6 +73,31 @@ class RouterkitCliCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_install_without_apply_builds_strict_plan_command(self):
+        args = cli.parse_args(["install", "--generated", "generated", "--target-root", "/opt"])
+
+        command = cli.build_command(args, ROOT)
+
+        self.assertEqual(
+            command,
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "routerkit-plan.py"),
+                "--generated",
+                "generated",
+                "--target-root",
+                "/opt",
+                "--strict",
+            ],
+        )
+
+    def test_install_apply_builds_install_command(self):
+        args = cli.parse_args(["install", "--generated", "generated", "--apply"])
+
+        command = cli.build_command(args, ROOT)
+
+        self.assertEqual(command, ["sh", str(ROOT / "scripts" / "install-xray-direct.sh"), "generated"])
+
     def test_preflight_builds_expected_command(self):
         args = cli.parse_args(["preflight"])
 
@@ -96,6 +122,36 @@ class RouterkitCliCommandTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(stdout.getvalue(), shlex.join(command) + "\n")
+
+    def test_install_apply_dry_run_prints_command_without_executing(self):
+        stdout = io.StringIO()
+        with mock.patch.object(cli.subprocess, "run", side_effect=AssertionError("must not execute")):
+            with contextlib.redirect_stdout(stdout):
+                code = cli.main(["--repo-root", str(ROOT), "install", "--generated", "generated", "--apply", "--dry-run"])
+
+        expected = ["sh", str(ROOT / "scripts" / "install-xray-direct.sh"), "generated"]
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue(), shlex.join(expected) + "\n")
+
+    def test_install_enable_autostart_fails_safely_without_execution(self):
+        stderr = io.StringIO()
+        with mock.patch.object(cli, "run_command", side_effect=AssertionError("must not execute")):
+            with contextlib.redirect_stderr(stderr):
+                code = cli.main(["--repo-root", str(ROOT), "install", "--enable-autostart"])
+
+        self.assertEqual(code, 2)
+        self.assertIn("Autostart enabling will be added", stderr.getvalue())
+
+    def test_install_apply_enable_autostart_fails_safely_without_execution(self):
+        stderr = io.StringIO()
+        with mock.patch.object(cli, "run_command", side_effect=AssertionError("must not execute")):
+            with contextlib.redirect_stderr(stderr):
+                code = cli.main(
+                    ["--repo-root", str(ROOT), "install", "--generated", "generated", "--apply", "--enable-autostart"]
+                )
+
+        self.assertEqual(code, 2)
+        self.assertIn("Autostart enabling will be added", stderr.getvalue())
 
 
 class RouterkitCliParseTests(unittest.TestCase):

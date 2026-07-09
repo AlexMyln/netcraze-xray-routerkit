@@ -96,6 +96,28 @@ For machine-readable output:
 python3 scripts/routerkit-plan.py --generated generated --json
 ```
 
+## Install command
+
+`scripts/routerkit.py install` is safe by default. Without `--apply`, it runs the same strict plan mode and does not change files:
+
+```sh
+python3 scripts/routerkit.py install --generated generated
+```
+
+With an alternate plan target:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --target-root /opt
+```
+
+Only `--apply` delegates to the install shell script:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --apply
+```
+
+The command does not automate Netcraze Web UI policies, does not create firewall rules, does not call `xkeen -start`, and does not enable autostart by default. The `--enable-autostart` flag is reserved and currently exits before running any install step. Autostart remains a manual action after healthcheck.
+
 ## Example flow
 
 1. Run the wizard locally:
@@ -113,11 +135,11 @@ python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 3. Preview the local install plan:
 
 ```sh
-python3 scripts/routerkit.py plan --generated generated
+python3 scripts/routerkit.py install --generated generated
 ```
 
 4. Copy the generated config fragments to the router using your private transfer method.
-5. Run the install script on the router after reviewing the generated files.
+5. Run `python3 scripts/routerkit.py install --generated generated --apply` on the router after reviewing the generated files.
 6. Run the healthcheck.
 7. Create Netcraze Web UI proxy connections and policies manually.
 

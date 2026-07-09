@@ -16,6 +16,22 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+INSTALL_PLAN_NOTICE = (
+    "Install is running in plan-only mode.\n"
+    "Use --apply to install generated configs and S23xray-direct."
+)
+
+AUTOSTART_RESERVED_MESSAGE = (
+    "Autostart enabling will be added after install apply flow is tested. "
+    "For now, run chmod manually after healthcheck."
+)
+
+
+class RouterkitCliError(Exception):
+    def __init__(self, message: str, exit_code: int = 2) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
 
 def repo_root_from_script() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -58,6 +74,21 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
         if args.strict:
             command.append("--strict")
         return command
+
+    if args.command == "install":
+        if args.enable_autostart:
+            raise RouterkitCliError(AUTOSTART_RESERVED_MESSAGE, exit_code=2)
+        if args.apply:
+            return ["sh", _repo_script(repo_root, "install-xray-direct.sh"), args.generated]
+        return [
+            sys.executable,
+            _repo_script(repo_root, "routerkit-plan.py"),
+            "--generated",
+            args.generated,
+            "--target-root",
+            args.target_root,
+            "--strict",
+        ]
 
     if args.command == "preflight":
         return ["sh", _repo_script(repo_root, "preflight.sh")]
@@ -137,6 +168,40 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     plan.add_argument("--json", action="store_true", help="Render machine-readable JSON output.")
     plan.add_argument("--strict", action="store_true", help="Treat missing listen values as critical.")
 
+    install = subparsers.add_parser(
+        "install",
+        help="Run a safe install plan by default; use --apply for the install script.",
+        description="Run a safe install plan by default; use --apply for the install script.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    install.add_argument(
+        "--generated",
+        default="generated",
+        help="Generated config directory; default: generated.",
+    )
+    install.add_argument(
+        "--target-root",
+        default="/opt",
+        help="Install target root for plan mode; default: /opt.",
+    )
+    install.add_argument(
+        "--apply",
+        action="store_true",
+        help="Run the install shell script instead of the plan-only mode.",
+    )
+    install.add_argument(
+        "--enable-autostart",
+        action="store_true",
+        help="Reserved for a later explicit autostart flow.",
+    )
+    install.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+
     subparsers.add_parser(
         "preflight",
         help="Run router preflight checks. preflight is intended to run on Entware/router Linux, not on macOS/Windows.",
@@ -164,7 +229,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     repo_root = Path(args.repo_root).resolve() if args.repo_root else repo_root_from_script()
-    command = build_command(args, repo_root)
+    try:
+        command = build_command(args, repo_root)
+    except RouterkitCliError as exc:
+        print(f"routerkit: {exc}", file=sys.stderr)
+        return exc.exit_code
+    if args.command == "install" and not args.apply and not args.dry_run:
+        print(INSTALL_PLAN_NOTICE)
     return run_command(command, dry_run=args.dry_run)
 
 
