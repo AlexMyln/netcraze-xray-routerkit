@@ -9,6 +9,8 @@ Safe public starter kit for running Xray VLESS/Reality client profiles on Netcra
 
 Русская версия: [README.ru.md](README.ru.md)
 
+Changelog: [CHANGELOG.md](CHANGELOG.md)
+
 ## Architecture
 
 ```text
@@ -169,6 +171,7 @@ docs/announcement.ru.md            Russian announcement draft
 ## Docs
 
 - [Русская версия README](README.ru.md)
+- [Changelog](CHANGELOG.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
 - [Netcraze/Keenetic Web UI guide — RU](docs/netcraze-ui.ru.md)
@@ -179,6 +182,8 @@ docs/announcement.ru.md            Russian announcement draft
 - [Restore notes](docs/restore.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
+
+Use the GitHub issue templates for sanitized bug reports and feature requests.
 
 ## Roadmap
 

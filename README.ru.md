@@ -9,6 +9,8 @@
 
 English: [README.md](README.md)
 
+Changelog: [CHANGELOG.md](CHANGELOG.md)
+
 ## Архитектура
 
 ```text
@@ -174,6 +176,7 @@ docs/announcement.ru.md            Черновик анонса на русск
 
 ## Документация
 
+- [Changelog](CHANGELOG.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
 - [Netcraze/Keenetic Web UI guide — RU](docs/netcraze-ui.ru.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
@@ -184,6 +187,8 @@ docs/announcement.ru.md            Черновик анонса на русск
 - [Restore notes](docs/restore.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
+
+Для багов и идей используйте GitHub issue templates; примеры и логи должны быть очищены от секретов.
 
 ## Roadmap
 
