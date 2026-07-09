@@ -182,6 +182,8 @@ docs/announcement.ru.md            Russian announcement draft
 
 ## Roadmap
 
+- Move toward a guided one-click installer after Entware/OPKG and Xray prerequisites are already in place: generate profiles, install configs, install `S23xray-direct`, run healthchecks, and print exact Netcraze Web UI steps.
+- Keep the from-zero path manual for USB storage, Entware/Xray setup, and Netcraze Web UI/device policy decisions; no ready-to-flash USB/router image is promised.
 - Add a dry-run mode for install planning.
 - Add optional config rendering previews with masked secrets.
 - Add sample Web UI naming checklists.

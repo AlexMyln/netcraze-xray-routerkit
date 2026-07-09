@@ -10,9 +10,9 @@
 
 | Name | Type | Server | Port |
 |---|---|---|---:|
-| `XRAY-VERTPATH` | SOCKS5 | `127.0.0.1` | `1082` |
-| `XRAY-WHITE5` | SOCKS5 | `127.0.0.1` | `1083` |
-| `XRAY-FROST2` | SOCKS5 | `127.0.0.1` | `1084` |
+| `XRAY-PROFILE-A` | SOCKS5 | `127.0.0.1` | `1082` |
+| `XRAY-PROFILE-B` | SOCKS5 | `127.0.0.1` | `1083` |
+| `XRAY-PROFILE-C` | SOCKS5 | `127.0.0.1` | `1084` |
 
 Authentication оставьте disabled, если вы явно не включали SOCKS auth в Xray.
 
@@ -22,9 +22,9 @@ Authentication оставьте disabled, если вы явно не включ
 
 | Policy | Connection |
 |---|---|
-| `TV-VERTPATH` | only `XRAY-VERTPATH` |
-| `TV-WHITE5` | only `XRAY-WHITE5` |
-| `TV-FROST2` | only `XRAY-FROST2` |
+| `CLIENT-PROFILE-A` | only `XRAY-PROFILE-A` |
+| `CLIENT-PROFILE-B` | only `XRAY-PROFILE-B` |
+| `CLIENT-PROFILE-C` | only `XRAY-PROFILE-C` |
 
 Default policy не меняйте.
 
@@ -32,10 +32,10 @@ Default policy не меняйте.
 
 ## Безопасное переключение
 
-- Основной режим: `TV` → `TV-VERTPATH`
-- Резерв 1: `TV` → `TV-WHITE5`
-- Резерв 2: `TV` → `TV-FROST2`
-- Прямой интернет: `TV` → Default policy
+- Основной режим: выбранный клиент -> `CLIENT-PROFILE-A`
+- Резерв 1: выбранный клиент -> `CLIENT-PROFILE-B`
+- Резерв 2: выбранный клиент -> `CLIENT-PROFILE-C`
+- Прямой интернет: выбранный клиент -> Default policy
 
 ## Чего избегать
 
