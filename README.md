@@ -104,6 +104,16 @@ sh scripts/healthcheck.sh
 
 9. Create Netcraze/Keenetic proxy connections and connection policies manually in the Web UI.
 
+### Install plan / dry-run
+
+Preview what the guided installer would do without changing `/opt`:
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated
+```
+
+The plan suppresses secret-bearing outbound fields and does not call `xkeen -start`, touch firewall rules, enable autostart, or change Web UI policies.
+
 ### Testing
 
 Local tests:
@@ -168,6 +178,7 @@ The repository intentionally keeps only a secret-free example profile file. Real
 ```text
 scripts/generate-xray-profiles.py  Generate 03/04/05 Xray config fragments
 scripts/routerkit-wizard.py        Interactive local profiles.json wizard
+scripts/routerkit-plan.py          Dry-run install plan without router changes
 scripts/preflight.sh               Read-only Entware/router preflight checks
 scripts/install-xray-direct.sh     Install generated configs and init script
 scripts/healthcheck.sh             Read-only runtime, listener, firewall, IP checks
@@ -215,7 +226,7 @@ Use the GitHub issue templates for sanitized bug reports and feature requests.
 
 - Move toward a guided one-click installer after Entware/OPKG and Xray prerequisites are already in place: generate profiles, install configs, install `S23xray-direct`, run healthchecks, and print exact Netcraze Web UI steps. The guided installer assumes Entware, SSH, and Xray are already available.
 - Keep the from-zero path manual for USB storage, Entware/Xray setup, and Netcraze Web UI/device policy decisions; no ready-to-flash USB/router image is promised.
-- Add a dry-run mode for install planning.
+- Extend dry-run install planning with optional masked previews.
 - Add optional config rendering previews with masked secrets.
 - Add sample Web UI naming checklists.
 - Add shellcheck once the target Entware shell compatibility matrix is documented.

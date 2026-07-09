@@ -53,6 +53,24 @@ It checks:
 
 It is read-only: it does not create files, change permissions, start or stop Xray, or call any xkeen start command.
 
+## Install plan / dry-run
+
+`scripts/routerkit-plan.py` previews the install operations for local generated config fragments without changing `/opt`.
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated
+```
+
+It checks that `03_inbounds.json`, `04_outbounds.json`, and `05_routing.json` are valid JSON, verifies loopback-only inbound listeners, summarizes profiles without printing outbound secrets, and shows the planned copy targets under `/opt/etc/xray/configs`.
+
+The plan keeps `S24xray` disabled and explicitly does not call `xkeen -start`, touch firewall rules, enable autostart automatically, publish/store secrets, or change Netcraze Web UI policies.
+
+For machine-readable output:
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated --json
+```
+
 ## Example flow
 
 1. Run the wizard locally:
@@ -67,10 +85,16 @@ python3 scripts/routerkit-wizard.py
 python3 scripts/generate-xray-profiles.py --profiles profiles.json --out generated
 ```
 
-3. Copy the generated config fragments to the router using your private transfer method.
-4. Run the install script on the router after reviewing the generated files.
-5. Run the healthcheck.
-6. Create Netcraze Web UI proxy connections and policies manually.
+3. Preview the local install plan:
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated
+```
+
+4. Copy the generated config fragments to the router using your private transfer method.
+5. Run the install script on the router after reviewing the generated files.
+6. Run the healthcheck.
+7. Create Netcraze Web UI proxy connections and policies manually.
 
 ## Security notes
 
