@@ -108,6 +108,16 @@ sh scripts/healthcheck.sh
 
 9. Вручную создать proxy connections и политики подключений в веб-интерфейсе Netcraze/Keenetic.
 
+### Install plan / dry-run
+
+Посмотреть, что guided installer сделал бы, без изменений в `/opt`:
+
+```sh
+python3 scripts/routerkit-plan.py --generated generated
+```
+
+План скрывает secret-bearing поля outbounds и не вызывает `xkeen -start`, не трогает firewall, не включает autostart и не меняет политики Web UI.
+
 ### Тесты
 
 Локальный запуск тестов:
@@ -172,6 +182,7 @@ Web UI proxy connections:
 ```text
 scripts/generate-xray-profiles.py  Генерация 03/04/05 фрагментов конфига Xray
 scripts/routerkit-wizard.py        Интерактивный локальный wizard для profiles.json
+scripts/routerkit-plan.py          Dry-run install plan без изменений на роутере
 scripts/preflight.sh               Read-only preflight checks для Entware/router
 scripts/install-xray-direct.sh     Установка сгенерированных конфигов и init-скрипта
 scripts/healthcheck.sh             Проверки без изменений: runtime, порты, firewall и IP
@@ -220,7 +231,7 @@ docs/announcement.ru.md            Черновик анонса на русск
 
 - Двигаться к guided one-click installer после того, как Entware/OPKG и Xray уже подготовлены: генерировать профили, устанавливать конфиги, устанавливать `S23xray-direct`, запускать healthchecks и печатать точные шаги для Netcraze Web UI. Установщик предполагает, что Entware, SSH и Xray уже доступны.
 - Оставить from-zero путь ручным для USB-накопителя, установки Entware/Xray и решений в Netcraze Web UI по устройствам/политикам; готовый образ флешки или роутера не обещается.
-- Добавить dry-run режим для планирования установки.
+- Расширить dry-run план установки optional masked previews.
 - Добавить предпросмотр конфигов с замаскированными секретами.
 - Добавить примеры чеклистов для имён в Web UI.
 - Добавить полный гайд с нуля: USB → Entware → Xray → Web UI.
