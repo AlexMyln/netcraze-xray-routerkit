@@ -203,6 +203,10 @@ def print_summary(profiles: List[Dict[str, Any]]) -> None:
 def write_profiles(path: Path, profiles: List[Dict[str, Any]]) -> None:
     data = {"profiles": profiles}
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError as exc:
+        print(f"Warning: could not set private permissions on {path}: {exc}")
 
 
 def run_generator(profiles_path: Path) -> int:
@@ -222,6 +226,7 @@ def run_generator(profiles_path: Path) -> int:
         return 1
     if result.returncode == 0:
         print("Generation completed. Output directory: generated")
+        print("generated/ may contain secrets. Do not commit it.")
     else:
         print(f"Generation failed with exit code {result.returncode}.")
         print("Generator output was suppressed to avoid printing subscription details.")
@@ -283,7 +288,8 @@ def main() -> int:
         return 1
 
     write_profiles(profiles_path, profiles)
-    print(f"Wrote {profiles_path}. Keep this file out of git.")
+    print(f"Wrote {profiles_path}.")
+    print("profiles.json may contain secrets. Keep it private and out of git.")
 
     print()
     print("Next local step:")

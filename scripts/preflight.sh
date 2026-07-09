@@ -181,19 +181,19 @@ fi
 
 LISTENERS="$(collect_listeners)"
 if [ -n "$LISTENERS" ]; then
-    TARGET_LISTENERS="$(printf '%s\n' "$LISTENERS" | grep -E "$PORTS_RE" || true)"
+    TARGET_LISTENERS="$(printf '%s\n' "$LISTENERS" | grep -E ":($PORTS_RE)([[:space:]]|$)" || true)"
     if [ -n "$TARGET_LISTENERS" ]; then
         printf '%s\n' "$TARGET_LISTENERS"
     else
         ok "no listeners found on target ports: $PORTS_RE"
     fi
 
-    PUBLIC_LISTENERS="$(printf '%s\n' "$TARGET_LISTENERS" | grep -E "0\.0\.0\.0:($PORTS_RE)([[:space:]]|$)" || true)"
-    if [ -n "$PUBLIC_LISTENERS" ]; then
-        fail "target port is listening on 0.0.0.0"
-        printf '%s\n' "$PUBLIC_LISTENERS"
+    NON_LOOPBACK_TARGET_LISTENERS="$(printf '%s\n' "$TARGET_LISTENERS" | grep -Ev '(^|[[:space:]])127\.0\.0\.1:('"$PORTS_RE"')([[:space:]]|$)|(^|[[:space:]])::1:('"$PORTS_RE"')([[:space:]]|$)|(^|[[:space:]])\[::1\]:('"$PORTS_RE"')([[:space:]]|$)' || true)"
+    if [ -n "$NON_LOOPBACK_TARGET_LISTENERS" ]; then
+        fail "target port is listening on a non-loopback address"
+        printf '%s\n' "$NON_LOOPBACK_TARGET_LISTENERS"
     else
-        ok "no 0.0.0.0 listeners found on target ports: $PORTS_RE"
+        ok "target port listeners are loopback-only"
     fi
 else
     if is_xray_running; then
