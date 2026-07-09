@@ -159,7 +159,7 @@ class RouterkitPlanTests(unittest.TestCase):
         self.assertTrue(missing["warnings"])
         self.assertFalse(missing["errors"])
 
-    def test_missing_generated_file_warns_by_default_and_fails_strict(self):
+    def test_missing_generated_file_is_critical_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             generated = Path(tmp) / "generated"
             generated.mkdir()
@@ -173,9 +173,16 @@ class RouterkitPlanTests(unittest.TestCase):
             )
 
             default_plan = plan_module.build_plan(generated, Path("/opt"))
-            self.assertFalse(default_plan["errors"])
-            self.assertTrue(default_plan["warnings"])
-            self.assertIn("04_outbounds.json", plan_module.render_text_plan(default_plan))
+            text = plan_module.render_text_plan(default_plan)
+
+            self.assertTrue(default_plan["errors"])
+            self.assertIn("04_outbounds.json", "\n".join(default_plan["errors"]))
+            self.assertIn("Critical validation failures", text)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = plan_module.main(["--generated", str(generated)])
+            self.assertEqual(code, 1)
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):

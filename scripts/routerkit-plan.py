@@ -205,10 +205,7 @@ def build_plan(generated_dir: Path, target_root: Path, strict: bool = False) -> 
         }
         if not path.exists():
             message = f"Missing generated file: {path}"
-            if strict:
-                plan["errors"].append(message)
-            else:
-                plan["warnings"].append(message)
+            plan["errors"].append(message)
             plan["files"].append(file_info)
             continue
 
@@ -362,7 +359,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--generated", default="generated", help="Generated config directory")
     parser.add_argument("--target-root", default="/opt", help="Install target root")
     parser.add_argument("--json", action="store_true", help="Render machine-readable JSON output")
-    parser.add_argument("--strict", action="store_true", help="Treat missing generated files as critical")
+    parser.add_argument("--strict", action="store_true", help="Treat missing listen values as critical")
     return parser.parse_args(argv)
 
 
