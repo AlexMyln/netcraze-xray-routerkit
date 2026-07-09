@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Unit tests for the config generator and local profiles wizard.
+- CI test discovery for the Python test suite.
 - Guided installer foundation: preflight script and interactive local profiles wizard.
 - Guided installer documentation in English and Russian.
 

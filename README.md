@@ -104,6 +104,14 @@ sh scripts/healthcheck.sh
 
 9. Create Netcraze/Keenetic proxy connections and connection policies manually in the Web UI.
 
+### Testing
+
+Local tests:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
 ## Example Topology
 
 ```text
