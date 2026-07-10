@@ -116,6 +116,26 @@ class RouterkitCliCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_install_without_apply_builds_strict_plan_for_custom_target_root(self):
+        args = cli.parse_args(
+            ["install", "--generated", "generated", "--target-root", "/tmp/routerkit-test"]
+        )
+
+        command = cli.build_command(args, ROOT)
+
+        self.assertEqual(
+            command,
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "routerkit-plan.py"),
+                "--generated",
+                "generated",
+                "--target-root",
+                "/tmp/routerkit-test",
+                "--strict",
+            ],
+        )
+
     def test_install_without_apply_prints_plan_only_notice(self):
         stdout = io.StringIO()
         with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
@@ -127,13 +147,54 @@ class RouterkitCliCommandTests(unittest.TestCase):
         self.assertIn("Install is running in plan-only mode.", stdout.getvalue())
         self.assertIn("Use --apply to install generated configs and S23xray-direct.", stdout.getvalue())
 
-    def test_install_apply_builds_default_pipeline_in_exact_order(self):
-        args = cli.parse_args(["install", "--generated", "generated", "--apply"])
+    def test_install_apply_with_opt_target_builds_default_pipeline_in_exact_order(self):
+        args = cli.parse_args(
+            ["install", "--generated", "generated", "--target-root", "/opt", "--apply"]
+        )
 
         steps = cli.build_install_apply_steps(args, ROOT)
 
         self.assertEqual([step.command for step in steps], apply_commands())
         self.assertEqual([step.name for step in steps], ["strict plan", "preflight", "backup", "install", "healthcheck"])
+
+    def test_install_apply_rejects_custom_target_root_without_execution(self):
+        stderr = io.StringIO()
+        with mock.patch.object(cli.subprocess, "run") as run:
+            with contextlib.redirect_stderr(stderr):
+                code = cli.main(
+                    [
+                        "--repo-root",
+                        str(ROOT),
+                        "install",
+                        "--generated",
+                        "generated",
+                        "--target-root",
+                        "/tmp/routerkit-test",
+                        "--apply",
+                    ]
+                )
+
+        self.assertEqual(code, 2)
+        run.assert_not_called()
+        self.assertIn(
+            "routerkit: install --apply currently supports only --target-root /opt.",
+            stderr.getvalue(),
+        )
+
+    def test_install_skip_flags_require_apply_without_execution(self):
+        for skip_flag in ("--skip-preflight", "--skip-backup", "--skip-healthcheck"):
+            with self.subTest(skip_flag=skip_flag):
+                stderr = io.StringIO()
+                with mock.patch.object(cli.subprocess, "run") as run:
+                    with contextlib.redirect_stderr(stderr):
+                        code = cli.main(["--repo-root", str(ROOT), "install", skip_flag])
+
+                self.assertEqual(code, 2)
+                run.assert_not_called()
+                self.assertIn(
+                    "routerkit: --skip-preflight, --skip-backup, and --skip-healthcheck require --apply.",
+                    stderr.getvalue(),
+                )
 
     def test_install_apply_skip_preflight_omits_preflight_only(self):
         args = cli.parse_args(["install", "--generated", "generated", "--apply", "--skip-preflight"])
@@ -265,6 +326,24 @@ class RouterkitCliCommandTests(unittest.TestCase):
         self.assertEqual(code, 23)
         self.assertIn("Backup was skipped; rollback files may not be available.", stderr.getvalue())
 
+    def test_install_apply_oserror_on_install_prints_rollback_hint_and_stops(self):
+        stderr = io.StringIO()
+        with mock.patch.object(
+            cli.subprocess,
+            "run",
+            side_effect=[completed(0), completed(0), completed(0), OSError("install unavailable")],
+        ) as run:
+            with contextlib.redirect_stderr(stderr):
+                code = cli.main(["--repo-root", str(ROOT), "install", "--generated", "generated", "--apply"])
+
+        self.assertEqual(code, 127)
+        self.assertEqual([call.args[0] for call in run.call_args_list], apply_commands()[:4])
+        output = stderr.getvalue()
+        self.assertIn("routerkit: could not run install: install unavailable", output)
+        self.assertIn("Rollback hint:", output)
+        self.assertIn("Backup was created by the previous safety step.", output)
+        self.assertIn("Do not publish backup archives.", output)
+
     def test_install_apply_failed_healthcheck_warns_after_install(self):
         stderr = io.StringIO()
         with mock.patch.object(
@@ -279,6 +358,29 @@ class RouterkitCliCommandTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in run.call_args_list], apply_commands())
         output = stderr.getvalue()
         self.assertIn("healthcheck failed with exit code 31", output)
+        self.assertIn("Install may have completed but healthcheck failed.", output)
+        self.assertIn("Use the backup created before apply if rollback is needed.", output)
+        self.assertIn("Do not publish backup archives.", output)
+
+    def test_install_apply_oserror_on_healthcheck_warns_and_stops(self):
+        stderr = io.StringIO()
+        steps = cli.build_install_apply_steps(
+            cli.parse_args(["install", "--generated", "generated", "--apply"]),
+            ROOT,
+        )
+        steps.append(cli.CommandStep("after healthcheck", ["must-not-run"]))
+        with mock.patch.object(
+            cli.subprocess,
+            "run",
+            side_effect=[completed(0), completed(0), completed(0), completed(0), OSError("healthcheck unavailable")],
+        ) as run:
+            with contextlib.redirect_stderr(stderr):
+                code = cli.run_steps(steps)
+
+        self.assertEqual(code, 127)
+        self.assertEqual([call.args[0] for call in run.call_args_list], apply_commands())
+        output = stderr.getvalue()
+        self.assertIn("routerkit: could not run healthcheck: healthcheck unavailable", output)
         self.assertIn("Install may have completed but healthcheck failed.", output)
         self.assertIn("Use the backup created before apply if rollback is needed.", output)
         self.assertIn("Do not publish backup archives.", output)

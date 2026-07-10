@@ -27,6 +27,12 @@ AUTOSTART_RESERVED_MESSAGE = (
     "For now, run chmod manually after healthcheck."
 )
 
+INSTALL_APPLY_TARGET_ROOT_MESSAGE = "install --apply currently supports only --target-root /opt."
+
+SKIP_FLAGS_REQUIRE_APPLY_MESSAGE = (
+    "--skip-preflight, --skip-backup, and --skip-healthcheck require --apply."
+)
+
 
 class RouterkitCliError(Exception):
     def __init__(self, message: str, exit_code: int = 2) -> None:
@@ -47,6 +53,15 @@ def repo_root_from_script() -> Path:
 
 def _repo_script(repo_root: Path, name: str) -> str:
     return str(repo_root / "scripts" / name)
+
+
+def validate_install_args(args: argparse.Namespace) -> None:
+    if args.enable_autostart:
+        raise RouterkitCliError(AUTOSTART_RESERVED_MESSAGE, exit_code=2)
+    if not args.apply and any((args.skip_preflight, args.skip_backup, args.skip_healthcheck)):
+        raise RouterkitCliError(SKIP_FLAGS_REQUIRE_APPLY_MESSAGE, exit_code=2)
+    if args.apply and args.target_root != "/opt":
+        raise RouterkitCliError(INSTALL_APPLY_TARGET_ROOT_MESSAGE, exit_code=2)
 
 
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
@@ -84,8 +99,7 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
         return command
 
     if args.command == "install":
-        if args.enable_autostart:
-            raise RouterkitCliError(AUTOSTART_RESERVED_MESSAGE, exit_code=2)
+        validate_install_args(args)
         if args.apply:
             raise ValueError("install --apply uses build_install_apply_steps")
         return [
@@ -111,8 +125,7 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
 
 
 def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List[CommandStep]:
-    if args.enable_autostart:
-        raise RouterkitCliError(AUTOSTART_RESERVED_MESSAGE, exit_code=2)
+    validate_install_args(args)
 
     repo_root = Path(repo_root)
     steps = [
@@ -236,6 +249,10 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
             completed = subprocess.run(list(step.command), check=False)
         except OSError as exc:
             print(f"routerkit: could not run {step.name}: {exc}", file=sys.stderr)
+            if step.name == "install":
+                _print_install_rollback_hint(steps, completed_names)
+            elif step.name == "healthcheck":
+                _print_healthcheck_warning(steps, completed_names)
             return 127
 
         if completed.returncode != 0:
