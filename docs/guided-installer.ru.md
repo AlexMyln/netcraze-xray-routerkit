@@ -110,13 +110,40 @@ python3 scripts/routerkit.py install --generated generated
 python3 scripts/routerkit.py install --generated generated --target-root /opt
 ```
 
-Только `--apply` делегирует запуск install shell script:
+`--apply` запускает усиленный apply pipeline:
 
 ```sh
 python3 scripts/routerkit.py install --generated generated --apply
 ```
 
-Команда не автоматизирует политики Netcraze Web UI, не создаёт firewall rules, не вызывает `xkeen -start` и не включает autostart по умолчанию. Флаг `--enable-autostart` зарезервирован и сейчас завершает команду до любого install step. Autostart остаётся ручным действием после healthcheck.
+Pipeline по умолчанию:
+
+1. строгий install plan;
+2. router preflight;
+3. backup;
+4. установка generated configs и S23xray-direct;
+5. healthcheck.
+
+Если шаг до install завершается ошибкой, pipeline останавливается и не запускает следующие шаги. Если install падает после backup, CLI печатает rollback hint со ссылкой на backup output/path, который вывел `scripts/backup.sh`. Если healthcheck падает после install, CLI предупреждает, что install мог завершиться, и предлагает смотреть logs и использовать pre-apply backup при необходимости rollback.
+
+Backup archives могут содержать secret-bearing router files. Не публикуйте backup archives.
+
+Команда не автоматизирует политики Netcraze Web UI, не создаёт firewall rules, не вызывает `xkeen -start` и не включает autostart. Флаг `--enable-autostart` зарезервирован и сейчас завершает команду до любого install step. Autostart остаётся ручным действием после healthcheck.
+
+Посмотреть apply pipeline без запуска:
+
+```sh
+python3 scripts/routerkit.py --dry-run install --generated generated --apply
+python3 scripts/routerkit.py install --generated generated --apply --dry-run
+```
+
+Для advanced/debug usage доступны skip flags, но они не recommended:
+
+- `--skip-preflight`;
+- `--skip-backup`;
+- `--skip-healthcheck`.
+
+Default apply flow выполняет все safety steps. Если пропустить backup, rollback может быть сложнее.
 
 ## Пример flow
 
@@ -140,7 +167,7 @@ python3 scripts/routerkit.py install --generated generated
 
 4. Скопировать generated config fragments на роутер через ваш приватный способ передачи.
 5. Запустить `python3 scripts/routerkit.py install --generated generated --apply` на роутере после review generated files.
-6. Запустить healthcheck.
+6. Проверить apply summary и healthcheck output.
 7. Вручную создать Netcraze Web UI proxy connections и policies.
 
 ## Security notes

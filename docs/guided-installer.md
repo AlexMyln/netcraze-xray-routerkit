@@ -110,13 +110,40 @@ With an alternate plan target:
 python3 scripts/routerkit.py install --generated generated --target-root /opt
 ```
 
-Only `--apply` delegates to the install shell script:
+`--apply` runs the hardened apply pipeline:
 
 ```sh
 python3 scripts/routerkit.py install --generated generated --apply
 ```
 
-The command does not automate Netcraze Web UI policies, does not create firewall rules, does not call `xkeen -start`, and does not enable autostart by default. The `--enable-autostart` flag is reserved and currently exits before running any install step. Autostart remains a manual action after healthcheck.
+Default apply pipeline:
+
+1. strict install plan;
+2. router preflight;
+3. backup;
+4. install generated configs and S23xray-direct;
+5. healthcheck.
+
+If a step before install fails, the pipeline stops and does not run later steps. If install fails after backup, the CLI prints a rollback hint that points back to the backup output/path printed by `scripts/backup.sh`. If healthcheck fails after install, the CLI warns that install may have completed and points to logs and the pre-apply backup.
+
+Backups may contain secret-bearing router files. Do not publish backup archives.
+
+The command does not automate Netcraze Web UI policies, does not create firewall rules, does not call `xkeen -start`, and does not enable autostart. The `--enable-autostart` flag is reserved and currently exits before running any install step. Autostart remains a manual action after healthcheck.
+
+Preview the apply pipeline without running it:
+
+```sh
+python3 scripts/routerkit.py --dry-run install --generated generated --apply
+python3 scripts/routerkit.py install --generated generated --apply --dry-run
+```
+
+Advanced/debug skip flags are available, but they are not recommended:
+
+- `--skip-preflight`;
+- `--skip-backup`;
+- `--skip-healthcheck`.
+
+The default apply flow runs all safety steps. Skipping backup means rollback may be harder.
 
 ## Example flow
 
@@ -140,7 +167,7 @@ python3 scripts/routerkit.py install --generated generated
 
 4. Copy the generated config fragments to the router using your private transfer method.
 5. Run `python3 scripts/routerkit.py install --generated generated --apply` on the router after reviewing the generated files.
-6. Run the healthcheck.
+6. Review the apply summary and healthcheck output.
 7. Create Netcraze Web UI proxy connections and policies manually.
 
 ## Security notes

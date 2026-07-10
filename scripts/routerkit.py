@@ -13,6 +13,7 @@ import argparse
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -26,11 +27,24 @@ AUTOSTART_RESERVED_MESSAGE = (
     "For now, run chmod manually after healthcheck."
 )
 
+INSTALL_APPLY_TARGET_ROOT_MESSAGE = "install --apply currently supports only --target-root /opt."
+
+SKIP_FLAGS_REQUIRE_APPLY_MESSAGE = (
+    "--skip-preflight, --skip-backup, and --skip-healthcheck require --apply."
+)
+
 
 class RouterkitCliError(Exception):
     def __init__(self, message: str, exit_code: int = 2) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+
+
+@dataclass(frozen=True)
+class CommandStep:
+    name: str
+    command: List[str]
+    rollback_relevant: bool = False
 
 
 def repo_root_from_script() -> Path:
@@ -39,6 +53,15 @@ def repo_root_from_script() -> Path:
 
 def _repo_script(repo_root: Path, name: str) -> str:
     return str(repo_root / "scripts" / name)
+
+
+def validate_install_args(args: argparse.Namespace) -> None:
+    if args.enable_autostart:
+        raise RouterkitCliError(AUTOSTART_RESERVED_MESSAGE, exit_code=2)
+    if not args.apply and any((args.skip_preflight, args.skip_backup, args.skip_healthcheck)):
+        raise RouterkitCliError(SKIP_FLAGS_REQUIRE_APPLY_MESSAGE, exit_code=2)
+    if args.apply and args.target_root != "/opt":
+        raise RouterkitCliError(INSTALL_APPLY_TARGET_ROOT_MESSAGE, exit_code=2)
 
 
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
@@ -76,10 +99,9 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
         return command
 
     if args.command == "install":
-        if args.enable_autostart:
-            raise RouterkitCliError(AUTOSTART_RESERVED_MESSAGE, exit_code=2)
+        validate_install_args(args)
         if args.apply:
-            return ["sh", _repo_script(repo_root, "install-xray-direct.sh"), args.generated]
+            raise ValueError("install --apply uses build_install_apply_steps")
         return [
             sys.executable,
             _repo_script(repo_root, "routerkit-plan.py"),
@@ -102,18 +124,152 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
     raise ValueError(f"unsupported command: {args.command}")
 
 
-def run_command(command: Sequence[str], dry_run: bool = False) -> int:
+def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List[CommandStep]:
+    validate_install_args(args)
+
+    repo_root = Path(repo_root)
+    steps = [
+        CommandStep(
+            "strict plan",
+            [
+                sys.executable,
+                _repo_script(repo_root, "routerkit-plan.py"),
+                "--generated",
+                args.generated,
+                "--target-root",
+                args.target_root,
+                "--strict",
+            ],
+        )
+    ]
+    if not args.skip_preflight:
+        steps.append(CommandStep("preflight", ["sh", _repo_script(repo_root, "preflight.sh")]))
+    if not args.skip_backup:
+        steps.append(CommandStep("backup", ["sh", _repo_script(repo_root, "backup.sh")], rollback_relevant=True))
+    steps.append(CommandStep("install", ["sh", _repo_script(repo_root, "install-xray-direct.sh"), args.generated]))
+    if not args.skip_healthcheck:
+        steps.append(CommandStep("healthcheck", ["sh", _repo_script(repo_root, "healthcheck.sh")]))
+    return steps
+
+
+def build_steps(args: argparse.Namespace, repo_root: Path) -> List[CommandStep]:
+    if args.command == "install" and args.apply:
+        return build_install_apply_steps(args, repo_root)
+    return [CommandStep(args.command, build_command(args, repo_root))]
+
+
+def _render_token(token: str, repo_root: Optional[Path]) -> str:
+    if token == sys.executable:
+        return "python3"
+    if repo_root is not None:
+        try:
+            return Path(token).resolve().relative_to(repo_root).as_posix()
+        except (OSError, ValueError):
+            pass
+    return token
+
+
+def render_steps(steps: Sequence[CommandStep], repo_root: Optional[Path] = None) -> str:
+    if len(steps) == 1:
+        command = [_render_token(token, repo_root) for token in steps[0].command]
+        return shlex.join(command)
+
+    lines = ["Would run install apply pipeline:"]
+    for index, step in enumerate(steps, start=1):
+        command = [_render_token(token, repo_root) for token in step.command]
+        lines.append(f"{index}. {shlex.join(command)}")
+    return "\n".join(lines)
+
+
+def _backup_completed(steps: Sequence[CommandStep], completed_names: Sequence[str]) -> bool:
+    return any(step.name == "backup" for step in steps) and "backup" in completed_names
+
+
+def _backup_skipped(steps: Sequence[CommandStep]) -> bool:
+    return not any(step.name == "backup" for step in steps)
+
+
+def _print_install_rollback_hint(steps: Sequence[CommandStep], completed_names: Sequence[str]) -> None:
+    print("Rollback hint:", file=sys.stderr)
+    if _backup_completed(steps, completed_names):
+        print("- Backup was created by the previous safety step.", file=sys.stderr)
+        print("- Use the backup output/path printed by scripts/backup.sh above.", file=sys.stderr)
+    elif _backup_skipped(steps):
+        print("- Backup was skipped; rollback files may not be available.", file=sys.stderr)
+    else:
+        print("- Backup did not complete; rollback files may not be available.", file=sys.stderr)
+    print("- Backup archives may contain secrets.", file=sys.stderr)
+    print("- Do not publish backup archives.", file=sys.stderr)
+
+
+def _print_healthcheck_warning(steps: Sequence[CommandStep], completed_names: Sequence[str]) -> None:
+    print("Warning:", file=sys.stderr)
+    print("- Install may have completed but healthcheck failed.", file=sys.stderr)
+    print("- Inspect logs.", file=sys.stderr)
+    if _backup_completed(steps, completed_names):
+        print("- Use the backup created before apply if rollback is needed.", file=sys.stderr)
+    elif _backup_skipped(steps):
+        print("- Backup was skipped; rollback files may not be available.", file=sys.stderr)
+    else:
+        print("- Backup did not complete; rollback files may not be available.", file=sys.stderr)
+    print("- Do not publish backup archives.", file=sys.stderr)
+
+
+def print_apply_summary(steps: Sequence[CommandStep]) -> None:
+    step_names = {step.name for step in steps}
+    print("Apply summary:")
+    print("- Strict plan passed.")
+    if "preflight" in step_names:
+        print("- Preflight passed.")
+    else:
+        print("- Preflight was skipped.")
+    if "backup" in step_names:
+        print("- Backup completed.")
+    else:
+        print("- Backup was skipped; rollback files may not be available.")
+    print("- Install completed.")
+    if "healthcheck" in step_names:
+        print("- Healthcheck passed.")
+    else:
+        print("- Healthcheck was skipped.")
+    print("- Autostart was not enabled.")
+    print("- Web UI policies were not changed.")
+    print("- Firewall rules were not changed.")
+    print("- xkeen -start was not called.")
+
+
+def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Optional[Path] = None) -> int:
     if dry_run:
-        print(shlex.join(list(command)))
+        print(render_steps(steps, repo_root))
         return 0
 
-    try:
-        completed = subprocess.run(list(command), check=False)
-    except OSError as exc:
-        print(f"routerkit: could not run command: {exc}", file=sys.stderr)
-        return 127
+    completed_names: List[str] = []
+    for step in steps:
+        try:
+            completed = subprocess.run(list(step.command), check=False)
+        except OSError as exc:
+            print(f"routerkit: could not run {step.name}: {exc}", file=sys.stderr)
+            if step.name == "install":
+                _print_install_rollback_hint(steps, completed_names)
+            elif step.name == "healthcheck":
+                _print_healthcheck_warning(steps, completed_names)
+            return 127
 
-    return completed.returncode
+        if completed.returncode != 0:
+            print(f"routerkit: {step.name} failed with exit code {completed.returncode}.", file=sys.stderr)
+            if step.name == "install":
+                _print_install_rollback_hint(steps, completed_names)
+            elif step.name == "healthcheck":
+                _print_healthcheck_warning(steps, completed_names)
+            return completed.returncode
+
+        completed_names.append(step.name)
+
+    return 0
+
+
+def run_command(command: Sequence[str], dry_run: bool = False) -> int:
+    return run_steps([CommandStep("command", list(command))], dry_run=dry_run)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -195,6 +351,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Reserved for a later explicit autostart flow.",
     )
     install.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Advanced/debug only: skip router preflight before apply.",
+    )
+    install.add_argument(
+        "--skip-backup",
+        action="store_true",
+        help="Advanced/debug only: skip backup before apply; rollback may be harder.",
+    )
+    install.add_argument(
+        "--skip-healthcheck",
+        action="store_true",
+        help="Advanced/debug only: skip healthcheck after apply.",
+    )
+    install.add_argument(
         "--dry-run",
         dest="dry_run",
         action="store_true",
@@ -230,13 +401,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     repo_root = Path(args.repo_root).resolve() if args.repo_root else repo_root_from_script()
     try:
-        command = build_command(args, repo_root)
+        steps = build_steps(args, repo_root)
     except RouterkitCliError as exc:
         print(f"routerkit: {exc}", file=sys.stderr)
         return exc.exit_code
     if args.command == "install" and not args.apply and not args.dry_run:
         print(INSTALL_PLAN_NOTICE)
-    return run_command(command, dry_run=args.dry_run)
+    code = run_steps(steps, dry_run=args.dry_run, repo_root=repo_root)
+    if code == 0 and args.command == "install" and args.apply and not args.dry_run:
+        print_apply_summary(steps)
+    return code
 
 
 if __name__ == "__main__":
