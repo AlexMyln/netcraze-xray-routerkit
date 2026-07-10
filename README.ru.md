@@ -108,7 +108,7 @@ python3 scripts/generate-xray-profiles.py \
 6. Установить сгенерированные конфиги и прямой init-скрипт на роутере:
 
 ```sh
-sh scripts/install-xray-direct.sh generated
+python3 scripts/routerkit.py install --generated generated --apply
 ```
 
 7. Запустить Xray напрямую:
@@ -117,7 +117,7 @@ sh scripts/install-xray-direct.sh generated
 sh /opt/etc/init.d/S23xray-direct start
 ```
 
-8. Выполнить read-only healthcheck:
+8. Ещё раз выполнить read-only healthcheck после ручного start:
 
 ```sh
 sh scripts/healthcheck.sh
@@ -149,7 +149,33 @@ python3 scripts/routerkit.py install --generated generated
 python3 scripts/routerkit.py install --generated generated --apply
 ```
 
-`install` не автоматизирует политики Web UI, не вызывает `xkeen -start`, не трогает firewall и не включает autostart по умолчанию.
+### Усиленный apply flow
+
+`install --apply` выполняет safety-steps вокруг установки:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --apply
+```
+
+Pipeline по умолчанию:
+
+1. строгий install plan;
+2. router preflight;
+3. backup;
+4. установка generated configs и S23xray-direct;
+5. healthcheck.
+
+Backup-архивы могут содержать секретные файлы роутера. Не публикуйте backup archives.
+
+`install --apply` не автоматизирует политики Web UI, не вызывает `xkeen -start`, не трогает firewall и не включает autostart.
+
+Для advanced/debug usage доступны skip flags: `--skip-preflight`, `--skip-backup` и `--skip-healthcheck`. Они не recommended; default apply flow выполняет все safety steps. Если пропустить backup, rollback может быть сложнее.
+
+Посмотреть apply pipeline без запуска:
+
+```sh
+python3 scripts/routerkit.py --dry-run install --generated generated --apply
+```
 
 Флаг `--enable-autostart` зарезервирован для отдельного будущего flow. Autostart остаётся ручным шагом после healthcheck.
 
