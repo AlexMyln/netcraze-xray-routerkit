@@ -742,10 +742,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 manifest, target_root=Path(args.target_root)
             )
         except BootstrapTermination as exc:
-            print(
-                "bootstrap: terminated after bounded child shutdown and staging cleanup.",
-                file=sys.stderr,
-            )
+            if exc.recovery_verified:
+                message = (
+                    "bootstrap: terminated after active-child shutdown, verified "
+                    "binary recovery, and staging cleanup."
+                )
+            else:
+                message = (
+                    "bootstrap: terminated after active-child shutdown and staging "
+                    "cleanup; no signal-time binary recovery was required."
+                )
+            print(message, file=sys.stderr)
             return termination_exit_code(exc)
         except BootstrapApplyError as exc:
             print("bootstrap: {}".format(exc), file=sys.stderr)

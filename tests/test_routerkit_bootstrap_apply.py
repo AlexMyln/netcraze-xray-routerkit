@@ -375,6 +375,182 @@ class TransactionIntegrationTests(unittest.TestCase):
             restored = (root / "sbin/xray").read_bytes()
         self.assertEqual(restored, original)
 
+    def test_signal_after_replacement_returns_only_after_verified_rollback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_target(tmp)
+            original = (root / "sbin/xray").read_bytes()
+            manifest, archive = self.make_manifest_and_archive(tmp)
+            downloader = lambda *args, **kwargs: local_downloader(
+                *args, **kwargs, archive_path=archive
+            )
+            real_install = apply._install_candidate
+            install_calls = 0
+
+            def terminate_after_install(candidate, candidate_hash, target):
+                nonlocal install_calls
+                real_install(candidate, candidate_hash, target)
+                install_calls += 1
+                if install_calls == 1:
+                    raise apply.BootstrapTermination(
+                        getattr(signal, "SIGTERM", 15)
+                    )
+
+            with mock.patch.object(
+                apply, "_install_candidate", side_effect=terminate_after_install
+            ):
+                with self.assertRaises(apply.BootstrapTermination) as raised:
+                    apply.apply_bootstrap_transaction(
+                        manifest, target_root=root, downloader=downloader
+                    )
+            restored = (root / "sbin/xray").read_bytes()
+            receipt_exists = (root / apply.STATE_RELATIVE_PATH).exists()
+
+        self.assertEqual(
+            apply.termination_exit_code(raised.exception),
+            128 + getattr(signal, "SIGTERM", 15),
+        )
+        self.assertEqual(restored, original)
+        self.assertFalse(receipt_exists)
+
+    def test_signal_rollback_failure_is_never_swallowed_or_downgraded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_target(tmp)
+            manifest, archive = self.make_manifest_and_archive(tmp)
+            downloader = lambda *args, **kwargs: local_downloader(
+                *args, **kwargs, archive_path=archive
+            )
+            real_install = apply._install_candidate
+
+            def terminate_after_install(candidate, candidate_hash, target):
+                real_install(candidate, candidate_hash, target)
+                raise apply.BootstrapTermination(getattr(signal, "SIGTERM", 15))
+
+            with mock.patch.object(
+                apply, "_install_candidate", side_effect=terminate_after_install
+            ), mock.patch.object(
+                apply,
+                "_rollback",
+                side_effect=apply.BootstrapRollbackError("synthetic rollback failure"),
+            ), mock.patch.object(apply, "_remove_receipt") as remove_receipt:
+                with self.assertRaises(apply.BootstrapRollbackError) as raised:
+                    apply.apply_bootstrap_transaction(
+                        manifest, target_root=root, downloader=downloader
+                    )
+
+        self.assertEqual(raised.exception.exit_code, 3)
+        self.assertIn("Signal-time replacement recovery could not be proven", str(raised.exception))
+        self.assertIn(str(root / apply.BACKUP_RELATIVE_DIR), str(raised.exception))
+        remove_receipt.assert_not_called()
+
+    def test_rollback_failure_outranks_staging_cleanup_failure(self):
+        rollback = apply.BootstrapRollbackError("rollback unproven")
+        cleanup = apply.BootstrapApplyError("staging cleanup unproven")
+        combined = apply._combine_finalization_error(rollback, cleanup)
+        self.assertIsInstance(combined, apply.BootstrapRollbackError)
+        self.assertEqual(combined.exit_code, 3)
+        self.assertIn("rollback unproven", str(combined))
+        self.assertIn("staging cleanup unproven", str(combined))
+
+    def test_signal_rollback_and_cleanup_failure_keeps_rollback_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_target(tmp)
+            manifest, archive = self.make_manifest_and_archive(tmp)
+            downloader = lambda *args, **kwargs: local_downloader(
+                *args, **kwargs, archive_path=archive
+            )
+            real_install = apply._install_candidate
+
+            def terminate_after_install(candidate, candidate_hash, target):
+                real_install(candidate, candidate_hash, target)
+                raise apply.BootstrapTermination(getattr(signal, "SIGTERM", 15))
+
+            with mock.patch.object(
+                apply, "_install_candidate", side_effect=terminate_after_install
+            ), mock.patch.object(
+                apply,
+                "_rollback",
+                side_effect=apply.BootstrapRollbackError("rollback unproven"),
+            ), mock.patch.object(
+                apply,
+                "_cleanup_staging",
+                side_effect=apply.BootstrapApplyError("staging cleanup unproven"),
+            ):
+                with self.assertRaises(apply.BootstrapRollbackError) as raised:
+                    apply.apply_bootstrap_transaction(
+                        manifest, target_root=root, downloader=downloader
+                    )
+
+        self.assertEqual(raised.exception.exit_code, 3)
+        self.assertIn("could not be proven", str(raised.exception))
+        self.assertIn("staging cleanup unproven", str(raised.exception))
+
+    def test_cleanup_failure_outranks_verified_signal_recovery(self):
+        termination = apply.BootstrapTermination(getattr(signal, "SIGTERM", 15))
+        cleanup = apply.BootstrapApplyError("staging cleanup unproven")
+        combined = apply._combine_finalization_error(termination, cleanup)
+        self.assertIs(combined, cleanup)
+
+    def test_cleanup_failure_after_verified_signal_rollback_is_not_signal_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_target(tmp)
+            original = (root / "sbin/xray").read_bytes()
+            manifest, archive = self.make_manifest_and_archive(tmp)
+            downloader = lambda *args, **kwargs: local_downloader(
+                *args, **kwargs, archive_path=archive
+            )
+            real_install = apply._install_candidate
+            install_calls = 0
+
+            def terminate_after_install(candidate, candidate_hash, target):
+                nonlocal install_calls
+                real_install(candidate, candidate_hash, target)
+                install_calls += 1
+                if install_calls == 1:
+                    raise apply.BootstrapTermination(
+                        getattr(signal, "SIGTERM", 15)
+                    )
+
+            with mock.patch.object(
+                apply, "_install_candidate", side_effect=terminate_after_install
+            ), mock.patch.object(
+                apply,
+                "_cleanup_staging",
+                side_effect=apply.BootstrapApplyError("staging cleanup unproven"),
+            ):
+                with self.assertRaises(apply.BootstrapApplyError) as raised:
+                    apply.apply_bootstrap_transaction(
+                        manifest, target_root=root, downloader=downloader
+                    )
+            restored = (root / "sbin/xray").read_bytes()
+
+        self.assertNotIsInstance(raised.exception, apply.BootstrapRollbackError)
+        self.assertIn("staging cleanup unproven", str(raised.exception))
+        self.assertEqual(restored, original)
+
+    def test_original_validation_failure_keeps_precedence_after_verified_rollback(self):
+        original = apply.BootstrapApplyError("original validation failure", exit_code=7)
+        cleanup = apply.BootstrapApplyError("staging cleanup unproven")
+        combined = apply._combine_finalization_error(original, cleanup)
+        self.assertIsInstance(combined, apply.BootstrapApplyError)
+        self.assertEqual(combined.exit_code, 7)
+        self.assertTrue(str(combined).startswith("original validation failure"))
+
+    def test_clean_install_removal_failure_is_a_rollback_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / apply.TARGET_RELATIVE_PATH
+            write_executable(target, "26.3.27")
+            with mock.patch.object(Path, "unlink", side_effect=OSError("synthetic")):
+                with self.assertRaises(apply.BootstrapRollbackError):
+                    apply._rollback(
+                        target,
+                        None,
+                        None,
+                        target_root=root,
+                        lifecycle=apply.BootstrapSignalLifecycle(),
+                        runner=apply.run_bounded_process,
+                    )
+
     def test_termination_during_download_cleans_staging_and_restores_handlers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self.make_target(tmp)

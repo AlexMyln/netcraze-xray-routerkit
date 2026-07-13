@@ -64,6 +64,7 @@ class BootstrapTermination(BaseException):
         super().__init__(signum)
         self.signum = signum
         self.prior_exit_code = prior_exit_code
+        self.recovery_verified = False
 
 
 def termination_exit_code(exc: BootstrapTermination) -> int:
@@ -154,6 +155,7 @@ class BootstrapSignalLifecycle:
         self.requested_signum: Optional[int] = None
         self._previous_handlers: Dict[int, object] = {}
         self._phase = "inactive"
+        self._recovery_active = False
 
     @staticmethod
     def handled_signals() -> Tuple[int, ...]:
@@ -178,10 +180,19 @@ class BootstrapSignalLifecycle:
 
     def restore(self) -> None:
         self._phase = "restoring"
+        restore_failed = False
         for signum, previous in self._previous_handlers.items():
-            signal.signal(signum, previous)
+            try:
+                signal.signal(signum, previous)
+            except (OSError, RuntimeError, ValueError):
+                restore_failed = True
         self._previous_handlers.clear()
+        self._recovery_active = False
         self._phase = "inactive"
+        if restore_failed:
+            raise BootstrapApplyError(
+                "Bootstrap signal handlers could not be restored."
+            )
 
     def _handle_signal(self, signum: int, _frame: Optional[FrameType]) -> None:
         if self.requested_signum is None:
@@ -192,18 +203,26 @@ class BootstrapSignalLifecycle:
 
     def child_started(self, child: subprocess.Popen) -> None:
         self.active_child = child
-        self._phase = "active"
+        self._phase = "recovery" if self._recovery_active else "active"
         self.raise_if_requested()
 
     def child_reaped(self) -> None:
         self.active_child = None
-        self._phase = "active"
+        self._phase = "recovery" if self._recovery_active else "active"
+
+    def begin_recovery(self) -> None:
+        self._recovery_active = True
+        self._phase = "recovery"
+
+    def end_recovery(self) -> None:
+        self._recovery_active = False
+        self._phase = "terminating" if self.requested_signum is not None else "active"
 
     def begin_cleanup(self) -> None:
         self._phase = "cleanup"
 
     def raise_if_requested(self, prior_exit_code: Optional[int] = None) -> None:
-        if self.requested_signum is not None:
+        if self.requested_signum is not None and not self._recovery_active:
             self._phase = "terminating"
             raise BootstrapTermination(self.requested_signum, prior_exit_code)
 
@@ -1040,14 +1059,24 @@ def _rollback(
         try:
             metadata = target.lstat()
         except FileNotFoundError:
-            _fsync_directory(target.parent)
+            try:
+                _fsync_directory(target.parent)
+            except OSError:
+                raise BootstrapRollbackError(
+                    "Replacement failed and automatic rollback could not be proven."
+                ) from None
             return
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             raise BootstrapRollbackError(
                 "Replacement failed and automatic rollback could not be proven."
             )
-        target.unlink()
-        _fsync_directory(target.parent)
+        try:
+            target.unlink()
+            _fsync_directory(target.parent)
+        except OSError:
+            raise BootstrapRollbackError(
+                "Replacement failed and automatic rollback could not be proven."
+            ) from None
         if target.exists():
             raise BootstrapRollbackError(
                 "Replacement failed and automatic rollback could not be proven."
@@ -1073,6 +1102,15 @@ def _rollback(
                 backup
             )
         )
+    if existing.version is not None:
+        try:
+            validate_version_output(completed.stdout, existing.version)
+        except BootstrapApplyError:
+            raise BootstrapRollbackError(
+                "Replacement failed and automatic rollback could not be proven; backup: {}".format(
+                    backup
+                )
+            ) from None
 
 
 def _cleanup_staging(
@@ -1118,13 +1156,15 @@ def _cleanup_staging(
         ) from None
 
 
-def apply_bootstrap_transaction(
+def _execute_bootstrap_transaction(
     manifest: Mapping[str, Any],
     *,
-    target_root: Path = Path("/opt"),
-    downloader: Callable[..., Any] = download_pinned_archive,
-    runner: Callable[..., ProcessResult] = run_bounded_process,
-    lifecycle: Optional[BootstrapSignalLifecycle] = None,
+    target_root: Path,
+    downloader: Callable[..., Any],
+    runner: Callable[..., ProcessResult],
+    lifecycle: BootstrapSignalLifecycle,
+    owned_lifecycle: bool,
+    finalization_state: Dict[str, Any],
 ) -> TransactionResult:
     """Apply fixed packages and one manifest-pinned Xray transaction."""
 
@@ -1137,8 +1177,6 @@ def apply_bootstrap_transaction(
     result = TransactionResult(
         environment="Linux arm64 {}".format(target_root), artifact_release=release
     )
-    owned_lifecycle = lifecycle is None
-    lifecycle = lifecycle or BootstrapSignalLifecycle()
     staging = None
     staging_identity = None
     replacement_started = False
@@ -1308,9 +1346,10 @@ def apply_bootstrap_transaction(
                 exit_code=exc.exit_code,
             ) from None
         raise
-    except BootstrapTermination:
+    except BootstrapTermination as termination:
         if replacement_started and not result.post_install_verified:
             result.rollback_attempted = True
+            lifecycle.begin_recovery()
             try:
                 _rollback(
                     target_root / TARGET_RELATIVE_PATH,
@@ -1322,17 +1361,94 @@ def apply_bootstrap_transaction(
                 )
                 result.rollback_verified = True
                 _remove_receipt(target_root / STATE_RELATIVE_PATH)
+                termination.recovery_verified = True
             except BaseException:
-                pass
-        raise
+                message = "Signal-time replacement recovery could not be proven"
+                if backup is not None:
+                    message += "; backup: {}".format(backup)
+                raise BootstrapRollbackError(message + ".") from None
+            finally:
+                lifecycle.end_recovery()
+        raise termination
     finally:
-        lifecycle.begin_cleanup()
-        cleanup_error = None
+        finalization_state["staging"] = staging
+        finalization_state["staging_identity"] = staging_identity
+
+
+def _combine_finalization_error(
+    pending_error: Optional[BaseException], finalization_error: BootstrapApplyError
+) -> BaseException:
+    if isinstance(pending_error, BootstrapRollbackError):
+        return BootstrapRollbackError("{} {}".format(pending_error, finalization_error))
+    if isinstance(pending_error, BootstrapApplyError):
+        return BootstrapApplyError(
+            "{} {}".format(pending_error, finalization_error),
+            exit_code=pending_error.exit_code,
+        )
+    if pending_error is not None and not isinstance(
+        pending_error, BootstrapTermination
+    ):
+        return pending_error
+    return finalization_error
+
+
+def apply_bootstrap_transaction(
+    manifest: Mapping[str, Any],
+    *,
+    target_root: Path = Path("/opt"),
+    downloader: Callable[..., Any] = download_pinned_archive,
+    runner: Callable[..., ProcessResult] = run_bounded_process,
+    lifecycle: Optional[BootstrapSignalLifecycle] = None,
+) -> TransactionResult:
+    """Apply fixed packages and one manifest-pinned Xray transaction."""
+
+    owned_lifecycle = lifecycle is None
+    active_lifecycle = lifecycle or BootstrapSignalLifecycle()
+    finalization_state: Dict[str, Any] = {}
+    transaction_result = None
+    pending_error: Optional[BaseException] = None
+    try:
+        transaction_result = _execute_bootstrap_transaction(
+            manifest,
+            target_root=Path(target_root),
+            downloader=downloader,
+            runner=runner,
+            lifecycle=active_lifecycle,
+            owned_lifecycle=owned_lifecycle,
+            finalization_state=finalization_state,
+        )
+    except BaseException as exc:
+        pending_error = exc
+
+    active_lifecycle.begin_cleanup()
+    finalization_error = None
+    try:
+        _cleanup_staging(
+            finalization_state.get("staging"),
+            finalization_state.get("staging_identity"),
+        )
+    except BootstrapApplyError as exc:
+        finalization_error = exc
+
+    if owned_lifecycle:
         try:
-            _cleanup_staging(staging, staging_identity)
+            active_lifecycle.restore()
         except BootstrapApplyError as exc:
-            cleanup_error = exc
-        if owned_lifecycle:
-            lifecycle.restore()
-        if cleanup_error is not None:
-            raise cleanup_error
+            if finalization_error is None:
+                finalization_error = exc
+            else:
+                finalization_error = BootstrapApplyError(
+                    "{} {}".format(finalization_error, exc)
+                )
+
+    if pending_error is None and active_lifecycle.requested_signum is not None:
+        pending_error = BootstrapTermination(active_lifecycle.requested_signum)
+
+    if finalization_error is not None:
+        pending_error = _combine_finalization_error(
+            pending_error, finalization_error
+        )
+    if pending_error is not None:
+        raise pending_error
+    assert transaction_result is not None
+    return transaction_result

@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Bootstrap now treats signal-time rollback as a recovery critical section and never suppresses an unproven binary rollback.
 - Bootstrap artifact acquisition is HTTPS-only, proxy-free, destination-validated, bounded, checksum-gated, and safely extracted.
 - Unified setup now consumes dedicated `ROUTERKIT_*` source variables and removes them from resolver workers and all later generator, plan, and apply subprocess environments.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.

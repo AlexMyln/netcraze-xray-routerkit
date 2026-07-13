@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import signal
 import sys
 import tempfile
 import unittest
@@ -338,6 +339,60 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(errors, "")
         self.assertIn("no-write apply preview", output)
         transaction.assert_not_called()
+
+    def test_verified_signal_recovery_uses_conventional_exit_and_precise_message(self):
+        inventory = json.loads(
+            (FIXTURES / "supported-aarch64.json").read_text(encoding="utf-8")
+        )
+        import routerkit_bootstrap_apply as apply_module
+
+        termination = apply_module.BootstrapTermination(
+            getattr(signal, "SIGTERM", 15)
+        )
+        termination.recovery_verified = True
+        with mock.patch.object(
+            bootstrap, "collect_inventory", return_value=inventory
+        ), mock.patch.object(
+            apply_module, "validate_apply_environment"
+        ), mock.patch.object(
+            apply_module, "validate_existing_target_metadata"
+        ), mock.patch.object(
+            apply_module, "resolve_opkg"
+        ), mock.patch.object(
+            apply_module, "apply_bootstrap_transaction", side_effect=termination
+        ):
+            code, output, errors = run_main("--apply", "--yes")
+
+        self.assertEqual(code, 128 + getattr(signal, "SIGTERM", 15))
+        self.assertIn("verified binary recovery", errors)
+        self.assertNotIn("Bootstrap apply result", output)
+
+    def test_json_rollback_failure_has_no_success_result_object(self):
+        inventory = json.loads(
+            (FIXTURES / "supported-aarch64.json").read_text(encoding="utf-8")
+        )
+        import routerkit_bootstrap_apply as apply_module
+
+        failure = apply_module.BootstrapRollbackError(
+            "Signal-time replacement recovery could not be proven; backup: /synthetic/backup."
+        )
+        with mock.patch.object(
+            bootstrap, "collect_inventory", return_value=inventory
+        ), mock.patch.object(
+            apply_module, "validate_apply_environment"
+        ), mock.patch.object(
+            apply_module, "validate_existing_target_metadata"
+        ), mock.patch.object(
+            apply_module, "resolve_opkg"
+        ), mock.patch.object(
+            apply_module, "apply_bootstrap_transaction", side_effect=failure
+        ):
+            code, output, errors = run_main("--apply", "--yes", "--json")
+
+        self.assertEqual(code, 3)
+        self.assertEqual(output, "")
+        self.assertIn("could not be proven", errors)
+        self.assertNotIn('"mode"', errors)
 
     def test_dry_run_is_explicitly_read_only(self):
         code, output, _ = run_main(
