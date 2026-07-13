@@ -1,0 +1,4 @@
+{
+  "security_values": ["tls", "none"],
+  "network_values": ["grpc", "ws"]
+}

@@ -104,6 +104,21 @@ Unified setup перехватывает и подавляет вывод genera
 
 Это milestone, а не финальная реализация [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). Read-only planner/manifest закрывает [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), а bootstrap apply остаётся в [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13). Autostart — #14, Netcraze proxy/policy — #15, hardware validation всё ещё заблокирован #16. `setup` пока не вызывает `bootstrap`.
 
+### Offline-выбор источника профилей
+
+Offline profile-source core принимает payload через скрытый ввод, указанную переменную окружения или защищённый локальный текстовый файл. Без сетевого доступа он разбирает одну raw VLESS-ссылку, newline subscription, Base64 subscription text, строки во вложенном JSON и Base64-encoded JSON:
+
+```sh
+python3 scripts/routerkit.py profile-source
+python3 scripts/routerkit.py profile-source --source-env ROUTERKIT_PROFILE_SOURCE
+python3 scripts/routerkit.py profile-source --source-file /private/path/payload.txt --list
+python3 scripts/routerkit.py profile-source --source-file /private/path/payload.txt --primary-index 1 --fallback-index 2
+```
+
+Можно выбрать только VLESS Reality nodes с TCP (включая нормализованный Xray alias `raw`), структурно допустимым Reality public key, валидным optional hexadecimal short ID и без flow либо с `xtls-rprx-vision`. Summary не содержит ссылки, identifiers, host, SNI, Reality keys, short IDs или spider paths. `--source-file` отклоняет symlink и не-regular files; на POSIX права должны быть только для владельца, например `0400` или `0600`, и tool никогда не меняет их автоматически. Неподдерживаемые URI schemes отклоняются без вывода source. Выбор включает ровно один primary и до двух fallback на детерминированных портах `1082`, `1083` и `1084`. Итоговый `profiles.json` атомарно публикуется с mode `0600` на POSIX и без явного `--force` не перезаписывает файл, появившийся во время публикации; даже `--force` отклоняет symlink и не-regular destination. Файл содержит secrets, поэтому его нельзя коммитить или публиковать.
+
+Команда не загружает HTTPS subscriptions и не раскрывает shortlinks — это остаётся в [#23](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/23). Автоматическая интеграция с `setup` остаётся в [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24), обычное поведение `routerkit setup` не изменено.
+
 Отдельные команды также доступны:
 
 ```sh
