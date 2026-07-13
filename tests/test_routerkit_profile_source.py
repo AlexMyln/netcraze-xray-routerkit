@@ -221,6 +221,7 @@ class SecretSafeSummaryTests(unittest.TestCase):
 class SelectionAndOutputTests(unittest.TestCase):
     def setUp(self):
         self.nodes = [core.parse_vless(make_link(item)) for item in fixture_nodes()]
+        self.document = core.build_profiles_document(core.select_nodes(self.nodes, 1))
 
     def test_primary_only(self):
         selected = core.select_nodes(self.nodes, 1)
@@ -256,17 +257,100 @@ class SelectionAndOutputTests(unittest.TestCase):
         self.assertEqual([item["port"] for item in profiles], [1082, 1083, 1084])
         self.assertTrue(all(item["select"]["index"] == 0 for item in profiles))
 
-    def test_private_atomic_write_and_overwrite(self):
-        document = core.build_profiles_document(core.select_nodes(self.nodes, 1))
+    def test_existing_regular_destination_requires_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "profiles.json"
-            core.write_private_json(output, document)
+            output.write_text("competing", encoding="utf-8")
+            with self.assertRaises(core.OutputExistsError):
+                core.write_private_json(output, self.document)
+            self.assertEqual(output.read_text(encoding="utf-8"), "competing")
+
+    def test_no_overwrite_uses_link_and_preserves_private_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            real_link = os.link
+            with mock.patch.object(core.os, "link", wraps=real_link) as link_mock:
+                with mock.patch.object(
+                    core.os, "replace", side_effect=AssertionError("replace used")
+                ) as replace_mock:
+                    core.write_private_json(output, self.document)
+            link_mock.assert_called_once()
+            replace_mock.assert_not_called()
             if os.name == "posix":
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
             self.assertEqual(list(Path(directory).glob(".profiles.json.*")), [])
-            with self.assertRaises(core.OutputExistsError):
-                core.write_private_json(output, document)
-            core.write_private_json(output, document, overwrite=True)
+
+    def test_overwrite_uses_replace_and_preserves_private_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            output.write_text("old", encoding="utf-8")
+            real_replace = os.replace
+            with mock.patch.object(core.os, "link", side_effect=AssertionError("link used")):
+                with mock.patch.object(core.os, "replace", wraps=real_replace) as replace_mock:
+                    core.write_private_json(output, self.document, overwrite=True)
+            replace_mock.assert_called_once()
+            if os.name == "posix":
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+            self.assertEqual(list(Path(directory).glob(".profiles.json.*")), [])
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_output_symlink_is_rejected_even_with_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target.json"
+            target.write_text("competing", encoding="utf-8")
+            output = Path(directory) / "profiles.json"
+            output.symlink_to(target)
+            with self.assertRaises(core.ProfileSourceError):
+                core.write_private_json(output, self.document, overwrite=True)
+            self.assertEqual(target.read_text(encoding="utf-8"), "competing")
+
+    def test_output_directory_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            output.mkdir()
+            with self.assertRaises(core.ProfileSourceError):
+                core.write_private_json(output, self.document, overwrite=True)
+
+    def test_publish_race_preserves_competing_destination_and_cleans_temp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            real_link = os.link
+
+            def create_competitor_then_link(source, destination):
+                Path(destination).write_text("competing", encoding="utf-8")
+                real_link(source, destination)
+
+            with mock.patch.object(core.os, "link", side_effect=create_competitor_then_link):
+                with self.assertRaises(core.OutputExistsError):
+                    core.write_private_json(output, self.document)
+            self.assertEqual(output.read_text(encoding="utf-8"), "competing")
+            self.assertEqual(list(Path(directory).glob(".profiles.json.*")), [])
+
+    def test_link_error_is_generic_and_cleans_temp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            with mock.patch.object(core.os, "link", side_effect=OSError("synthetic detail")):
+                with self.assertRaises(core.ProfileSourceError) as caught:
+                    core.write_private_json(output, self.document)
+            self.assertNotIn("synthetic detail", str(caught.exception))
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).glob(".profiles.json.*")), [])
+
+    def test_missing_link_support_fails_closed_and_cleans_temp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            with mock.patch.object(core.os, "link", None):
+                with self.assertRaises(core.ProfileSourceError):
+                    core.write_private_json(output, self.document)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).glob(".profiles.json.*")), [])
+
+    def test_overwrite_creates_no_backup_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            output.write_text("old", encoding="utf-8")
+            core.write_private_json(output, self.document, overwrite=True)
+            self.assertEqual([item.name for item in Path(directory).iterdir()], ["profiles.json"])
             self.assertEqual(list(Path(directory).glob(".profiles.json.*")), [])
 
 
@@ -300,6 +384,7 @@ class CliSafetyTests(unittest.TestCase):
             source = Path(directory) / "source.txt"
             output = Path(directory) / "profiles.json"
             source.write_text(link, encoding="utf-8")
+            source.chmod(0o600)
             code, _, _ = self.run_cli(["--source-file", str(source), "--list", "--output", str(output)])
             self.assertEqual(code, 0)
             self.assertFalse(output.exists())
@@ -309,8 +394,20 @@ class CliSafetyTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertFalse(output.exists())
 
-    def test_https_and_other_url_schemes_return_two_without_network(self):
-        for value, message in (("https://example.invalid/source", cli.HTTPS_MESSAGE), ("http://example.invalid/source", cli.UNSUPPORTED_URL_MESSAGE)):
+    def test_uri_schemes_return_two_without_network_or_echo(self):
+        cases = (
+            ("https://example.invalid/source", cli.HTTPS_MESSAGE),
+            ("http://example.invalid/source", cli.UNSUPPORTED_URL_MESSAGE),
+            ("file:/private/source", cli.UNSUPPORTED_URL_MESSAGE),
+            ("file:///private/source", cli.UNSUPPORTED_URL_MESSAGE),
+            ("data:text/plain,private-value", cli.UNSUPPORTED_URL_MESSAGE),
+            ("ftp://example.invalid/source", cli.UNSUPPORTED_URL_MESSAGE),
+            ("mailto:private@example.invalid", cli.UNSUPPORTED_URL_MESSAGE),
+            ("ssh://example.invalid/source", cli.UNSUPPORTED_URL_MESSAGE),
+            ("FiLe:/private/mixed-case", cli.UNSUPPORTED_URL_MESSAGE),
+            ("  MAILTO:private@example.invalid  \n", cli.UNSUPPORTED_URL_MESSAGE),
+        )
+        for value, message in cases:
             with self.subTest(value=value):
                 with mock.patch.object(cli.getpass, "getpass", return_value=value):
                     with mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("network attempted")):
@@ -318,6 +415,114 @@ class CliSafetyTests(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertIn(message, stderr)
                 self.assertNotIn(value, stdout + stderr)
+
+    def test_colon_later_in_malformed_payload_is_not_classified_as_scheme(self):
+        value = "ordinary payload with colon: private-value"
+        with mock.patch.object(cli.getpass, "getpass", return_value=value):
+            code, stdout, stderr = self.run_cli(["--list"])
+        self.assertEqual(code, 1)
+        self.assertNotIn(cli.UNSUPPORTED_URL_MESSAGE, stderr)
+        self.assertNotIn(value, stdout + stderr)
+
+    def test_mixed_case_raw_vless_with_whitespace_is_accepted(self):
+        link = make_link()
+        payload = "  VlEsS" + link[5:] + "  \n"
+        with mock.patch.object(cli.getpass, "getpass", return_value=payload):
+            code, stdout, stderr = self.run_cli(["--list"])
+        self.assertEqual(code, 0)
+        self.assertNotIn(payload, stdout + stderr)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission semantics required")
+    def test_owner_only_source_modes_are_accepted(self):
+        link = make_link()
+        for mode in (0o400, 0o600):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source.txt"
+                source.write_text(link, encoding="utf-8")
+                source.chmod(mode)
+                code, stdout, stderr = self.run_cli(["--source-file", str(source), "--list"])
+                self.assertEqual(code, 0)
+                self.assertNotIn(link, stdout + stderr)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission semantics required")
+    def test_group_or_other_source_modes_are_rejected_without_output(self):
+        marker = "DO_NOT_" + "LEAK_SOURCE_VALUE"
+        for mode in (0o644, 0o660):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source.txt"
+                output = Path(directory) / "profiles.json"
+                source.write_text(marker, encoding="utf-8")
+                source.chmod(mode)
+                code, stdout, stderr = self.run_cli([
+                    "--source-file", str(source), "--list", "--output", str(output)
+                ])
+                self.assertEqual(code, 2)
+                self.assertFalse(output.exists())
+                self.assertNotIn(marker, stdout + stderr)
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_source_symlink_is_rejected_without_output(self):
+        marker = "DO_NOT_" + "LEAK_SOURCE_VALUE"
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target.txt"
+            target.write_text(marker, encoding="utf-8")
+            target.chmod(0o600)
+            source = Path(directory) / "source.txt"
+            source.symlink_to(target)
+            output = Path(directory) / "profiles.json"
+            code, stdout, stderr = self.run_cli([
+                "--source-file", str(source), "--list", "--output", str(output)
+            ])
+            self.assertEqual(code, 2)
+            self.assertFalse(output.exists())
+            self.assertNotIn(marker, stdout + stderr)
+
+    def test_source_directory_is_rejected_without_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            output = Path(directory) / "profiles.json"
+            code, _, _ = self.run_cli([
+                "--source-file", str(source), "--list", "--output", str(output)
+            ])
+            self.assertEqual(code, 2)
+            self.assertFalse(output.exists())
+
+    def test_oversized_and_invalid_utf8_sources_are_rejected(self):
+        cases = (
+            b"x" * (core.MAX_PAYLOAD_BYTES + 1),
+            b"\xff\xfe\xfd",
+        )
+        for data in cases:
+            with self.subTest(size=len(data)), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source.txt"
+                output = Path(directory) / "profiles.json"
+                source.write_bytes(data)
+                source.chmod(0o600)
+                code, _, _ = self.run_cli([
+                    "--source-file", str(source), "--list", "--output", str(output)
+                ])
+                self.assertEqual(code, 1)
+                self.assertFalse(output.exists())
+
+    def test_source_descriptor_is_closed_on_success_and_read_failure(self):
+        link = make_link()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.txt"
+            source.write_text(link, encoding="utf-8")
+            source.chmod(0o600)
+            real_close = os.close
+            with mock.patch.object(cli.os, "close", wraps=real_close) as close_mock:
+                self.assertEqual(cli._read_source_file(str(source)), link)
+            close_mock.assert_called_once()
+
+            real_close = os.close
+            with mock.patch.object(cli.os, "read", side_effect=OSError("synthetic detail")):
+                with mock.patch.object(cli.os, "close", wraps=real_close) as close_mock:
+                    with self.assertRaises(cli.CliConfigurationError) as caught:
+                        cli._read_source_file(str(source))
+            close_mock.assert_called_once()
+            self.assertNotIn("synthetic detail", str(caught.exception))
 
     def test_json_listing_does_not_expose_marker(self):
         marker = "DO_NOT_" + "LEAK_SECRET_VALUE"

@@ -31,7 +31,8 @@ from routerkit_profile_source import (
 
 
 HTTPS_MESSAGE = "HTTPS source resolution is not implemented in this release; tracked in #23."
-UNSUPPORTED_URL_MESSAGE = "This source URL scheme is not supported."
+UNSUPPORTED_URL_MESSAGE = "This source scheme is not supported."
+_URI_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 
 class CliConfigurationError(Exception):
@@ -77,23 +78,54 @@ def validate_args(args: argparse.Namespace) -> None:
             raise CliConfigurationError(str(exc)) from None
 
 
+def _validate_source_file_metadata(metadata: os.stat_result) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        raise CliConfigurationError("Source file must be a regular, non-symlink file.")
+    if os.name == "posix" and stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise CliConfigurationError("Source file permissions must be owner-only on POSIX.")
+    if metadata.st_size > MAX_PAYLOAD_BYTES:
+        raise PayloadValidationError("Payload is too large.")
+
+
 def _read_source_file(path_text: str) -> str:
     path = Path(path_text)
+    fd = -1
     try:
-        metadata = path.stat()
-        if not stat.S_ISREG(metadata.st_mode):
-            raise CliConfigurationError("Source file must be a regular file.")
-        if metadata.st_size > MAX_PAYLOAD_BYTES:
-            raise PayloadValidationError("Payload is too large.")
-        data = path.read_bytes()
-    except CliConfigurationError:
+        path_metadata = path.lstat()
+        if stat.S_ISLNK(path_metadata.st_mode):
+            raise CliConfigurationError("Source file must be a regular, non-symlink file.")
+        _validate_source_file_metadata(path_metadata)
+
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        opened_metadata = os.fstat(fd)
+        _validate_source_file_metadata(opened_metadata)
+        if (path_metadata.st_dev, path_metadata.st_ino) != (
+            opened_metadata.st_dev,
+            opened_metadata.st_ino,
+        ):
+            raise CliConfigurationError("Source file changed before it could be read safely.")
+
+        data = bytearray()
+        while len(data) <= MAX_PAYLOAD_BYTES:
+            chunk = os.read(fd, min(65536, MAX_PAYLOAD_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+    except (CliConfigurationError, PayloadValidationError):
         raise
     except OSError:
         raise CliConfigurationError("Could not read the source file.") from None
+    finally:
+        if fd >= 0:
+            os.close(fd)
     if len(data) > MAX_PAYLOAD_BYTES:
         raise PayloadValidationError("Payload is too large.")
     try:
-        return data.decode("utf-8")
+        return bytes(data).decode("utf-8")
     except UnicodeDecodeError:
         raise PayloadValidationError("Source file must contain UTF-8 text.") from None
 
@@ -114,12 +146,15 @@ def read_payload(args: argparse.Namespace) -> str:
 
 def reject_network_source(payload: str) -> None:
     value = payload.strip()
-    if re.match(r"(?i)^https://", value):
+    match = _URI_SCHEME_RE.match(value)
+    if match is None:
+        return
+    scheme = match.group(0)[:-1].lower()
+    if scheme == "vless":
+        return
+    if scheme == "https":
         raise CliConfigurationError(HTTPS_MESSAGE)
-    if re.match(r"(?i)^[a-z][a-z0-9+.-]*://", value) and not re.match(
-        r"(?i)^vless://", value
-    ):
-        raise CliConfigurationError(UNSUPPORTED_URL_MESSAGE)
+    raise CliConfigurationError(UNSUPPORTED_URL_MESSAGE)
 
 
 def render_text_list(nodes: Sequence[NodeRecord]) -> None:

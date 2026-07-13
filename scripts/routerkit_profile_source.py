@@ -13,6 +13,7 @@ import binascii
 import json
 import os
 import re
+import stat
 import tempfile
 import urllib.parse
 import uuid as uuid_module
@@ -68,6 +69,18 @@ class SelectionError(ProfileSourceError):
 
 class OutputExistsError(ProfileSourceError):
     pass
+
+
+def _inspect_output_destination(destination: Path) -> Optional[os.stat_result]:
+    try:
+        metadata = destination.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise ProfileSourceError("Could not inspect the private output path.") from None
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ProfileSourceError("Private output path must be a regular, non-symlink file.")
+    return metadata
 
 
 @dataclass(frozen=True, repr=False)
@@ -434,10 +447,11 @@ def write_private_json(
     *,
     overwrite: bool = False,
 ) -> None:
-    """Atomically write JSON with mode 0600 and no secret-bearing backup."""
+    """Publish private JSON with mode 0600 and no secret-bearing backup."""
 
     destination = Path(path)
-    if destination.exists() and not overwrite:
+    existing = _inspect_output_destination(destination)
+    if existing is not None and not overwrite:
         raise OutputExistsError("Output file already exists; use --force to replace it.")
     if not destination.parent.exists() or not destination.parent.is_dir():
         raise ProfileSourceError("Output directory does not exist.")
@@ -455,12 +469,29 @@ def write_private_json(
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_path, destination)
-        temporary_path = None
-        if os.name == "posix":
-            os.chmod(destination, 0o600)
-    except OSError as exc:
-        raise ProfileSourceError("Could not write the private profiles file.") from exc
+
+        if overwrite:
+            _inspect_output_destination(destination)
+            os.replace(temporary_path, destination)
+            temporary_path = None
+        else:
+            link = getattr(os, "link", None)
+            if not callable(link):
+                raise ProfileSourceError(
+                    "Atomic no-overwrite publication is not supported on this platform."
+                )
+            try:
+                link(temporary_path, destination)
+            except FileExistsError:
+                raise OutputExistsError(
+                    "Output file already exists; use --force to replace it."
+                ) from None
+            temporary_path.unlink()
+            temporary_path = None
+    except (OutputExistsError, ProfileSourceError):
+        raise
+    except OSError:
+        raise ProfileSourceError("Could not write the private profiles file.") from None
     finally:
         if fd >= 0:
             os.close(fd)
