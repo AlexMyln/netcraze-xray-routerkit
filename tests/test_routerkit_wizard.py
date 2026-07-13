@@ -1,9 +1,12 @@
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import stat
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -43,6 +46,34 @@ class WriteProfilesTests(unittest.TestCase):
             mode = stat.S_IMODE(path.stat().st_mode)
             if os.name == "posix":
                 self.assertEqual(mode, 0o600)
+
+
+class WizardCliTests(unittest.TestCase):
+    def test_no_generator_prompt_writes_profiles_without_prompt_or_subprocess(self):
+        profiles = [
+            {
+                "name": "alpha",
+                "port": 1082,
+                "subscription_url_env": "SYNTHETIC_SUB_URL",
+                "select": {"index": 0, "require_security": "reality", "require_network": "tcp"},
+            }
+        ]
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profiles.json"
+            with mock.patch.object(wizard, "build_profiles", return_value=profiles):
+                with mock.patch.object(wizard, "ask_yes_no", return_value=True) as ask_yes_no:
+                    with mock.patch.object(wizard.subprocess, "run") as run:
+                        with contextlib.redirect_stdout(stdout):
+                            code = wizard.main(["--profiles", str(path), "--no-generator-prompt"])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"profiles": profiles})
+
+        run.assert_not_called()
+        ask_yes_no.assert_called_once()
+        self.assertNotIn("Run the local generator now?", stdout.getvalue())
 
 
 class SourceTypeTests(unittest.TestCase):

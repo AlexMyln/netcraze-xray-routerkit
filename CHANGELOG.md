@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Initial `setup` orchestrator for wizard, generation, strict planning, explicit apply confirmation, and the hardened install pipeline.
+- Setup dry-run rendering and failure-propagation tests.
+- Wizard-only mode for orchestration without duplicate generator prompts.
 - Hardened `install --apply` pipeline with strict plan, preflight, backup, install, and healthcheck steps.
 - Apply summaries and rollback hints for failed install/healthcheck flows.
 - CLI tests for apply pipeline ordering, dry-run behavior, failure handling, and skip flags.
@@ -19,6 +22,9 @@ All notable changes to this project will be documented in this file.
 - CI test discovery for the Python test suite.
 - Guided installer foundation: preflight script and interactive local profiles wizard.
 - Guided installer documentation in English and Russian.
+
+### Security
+- Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
 
 ## [0.1.2] - 2026-07-09
 

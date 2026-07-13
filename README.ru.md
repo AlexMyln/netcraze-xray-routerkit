@@ -79,6 +79,20 @@ v0.2-alpha foundation для guided installer уже в работе. Новый
 ### Единый CLI
 
 ```sh
+python3 scripts/routerkit.py setup
+python3 scripts/routerkit.py setup --apply
+python3 scripts/routerkit.py setup --apply --yes
+```
+
+`setup` — первый implementation slice дорожной карты one-command installer. Команда объединяет существующие стадии wizard, локальной генерации, strict plan, явного apply confirmation, preflight, backup, install и healthcheck. Без `--apply` она останавливается после локальной генерации и успешного strict plan. С `--apply` она запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не safety stages.
+
+Unified setup перехватывает и подавляет вывод generator, потому что он может содержать данные, производные от подписки или учётных данных; standalone generation сохраняет прежнее диагностическое поведение.
+
+Это milestone, а не финальная реализация epic #5. Bootstrap prerequisites Entware/OPKG и Xray остаётся в #13, autostart — в #14, автоматизация Netcraze proxy/policy — в #15, hardware validation — в #16.
+
+Отдельные команды также доступны:
+
+```sh
 python3 scripts/routerkit.py wizard
 python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 python3 scripts/routerkit.py plan --generated generated
