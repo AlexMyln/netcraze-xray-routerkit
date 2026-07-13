@@ -100,9 +100,12 @@ Planner фиксирует явные соответствия команд па
 
 По умолчанию `setup` теперь использует завершённый стек profile-source. Источник передаётся через скрытый ввод, указанную environment variable или защищённый owner-only файл; HTTPS при необходимости безопасно разрешается; compatible nodes разбираются; выбирается один primary и до двух fallback. Setup сохраняет выбранные профили только в уникальном private workspace, подавляет вывод generator, сразу после генерации удаляет временные профили и запускает strict plan. Generated config fragments остаются локально и содержат secrets. Без `--apply` router apply stages не выполняются. С `--apply` setup запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не preflight, backup, install или healthcheck.
 
+В setup параметр `--source-env` принимает только валидное имя выделенной переменной `ROUTERKIT_*`. Raw value не попадает в argv или output, доступно только дочернему процессу profile-source acquisition и удаляется там до классификации URL, создания DNS resolver worker, parsing или selection. Generator, strict-plan, preflight, backup, install и healthcheck получают копию обычного environment без одной выбранной переменной. Standalone `profile-source --source-env` сохраняет прежнюю совместимость с произвольными валидными именами environment variables, если внутренний consume option, используемый setup, не указан явно.
+
 Неинтерактивный выбор не помещает raw source в argv:
 
 ```sh
+ROUTERKIT_PROFILE_SOURCE='...' \
 python3 scripts/routerkit.py setup --source-env ROUTERKIT_PROFILE_SOURCE --primary-index 1 --fallback-index 2
 python3 scripts/routerkit.py setup --source-file /protected/path/source.txt --primary-index 1
 ```

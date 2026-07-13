@@ -378,6 +378,67 @@ class CliSafetyTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn(link, stdout + stderr)
 
+    def test_internal_consume_flag_requires_environment_mode(self):
+        code, stdout, stderr = self.run_cli(["--consume-source-env", "--list"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("requires --source-env", stderr)
+
+    def test_internal_environment_consumption_precedes_acquisition_and_preserves_others(self):
+        name = "ROUTERKIT_CONSUMED_SOURCE"
+        other = "ROUTERKIT_UNRELATED_SETTING"
+        link = make_link(label="Consumed Offline")
+
+        def acquire(payload):
+            self.assertEqual(payload, link)
+            self.assertNotIn(name, os.environ)
+            self.assertEqual(os.environ[other], "kept")
+            return payload
+
+        with mock.patch.dict(os.environ, {name: link, other: "kept"}):
+            with mock.patch.object(cli, "acquire_source_payload", side_effect=acquire) as acquisition:
+                code, stdout, stderr = self.run_cli(
+                    ["--source-env", name, "--consume-source-env", "--list"]
+                )
+            self.assertNotIn(name, os.environ)
+            self.assertEqual(os.environ[other], "kept")
+        self.assertEqual(code, 0)
+        acquisition.assert_called_once_with(link)
+        self.assertNotIn(link, stdout + stderr)
+
+    def test_consumed_https_environment_is_absent_at_resolver_boundary(self):
+        name = "ROUTERKIT_HTTPS_SOURCE"
+        source = "https://source.example/path?token=DO_NOT_LEAK_CONSUMED"
+        link = make_link(label="Resolved Consumed")
+        resolved = network.ResolvedPayload(link, len(link.encode()), 0, "text/plain")
+
+        def resolve(value):
+            self.assertEqual(value, source)
+            self.assertNotIn(name, os.environ)
+            return resolved
+
+        with mock.patch.dict(os.environ, {name: source}):
+            with mock.patch.object(cli, "resolve_https_source", side_effect=resolve) as resolver:
+                code, stdout, stderr = self.run_cli(
+                    ["--source-env", name, "--consume-source-env", "--list"]
+                )
+            self.assertNotIn(name, os.environ)
+        self.assertEqual(code, 0)
+        resolver.assert_called_once_with(source)
+        self.assertNotIn(source, stdout + stderr)
+        self.assertNotIn(link, stdout + stderr)
+
+    def test_missing_consumed_environment_is_generic_and_secret_safe(self):
+        name = "ROUTERKIT_MISSING_SOURCE"
+        marker = "DO_NOT_LEAK_MISSING_SOURCE"
+        with mock.patch.dict(os.environ, {}, clear=True):
+            code, stdout, stderr = self.run_cli(
+                ["--source-env", name, "--consume-source-env", "--list"]
+            )
+        self.assertEqual(code, 2)
+        self.assertNotIn(marker, stdout + stderr)
+        self.assertIn("not set", stderr)
+
     def test_file_source_list_and_dry_run_create_no_output(self):
         link = make_link()
         with tempfile.TemporaryDirectory() as directory:

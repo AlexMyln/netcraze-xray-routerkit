@@ -59,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--source-env", metavar="ENV_NAME")
     source.add_argument("--source-file", metavar="PATH")
+    parser.add_argument("--consume-source-env", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--output", default="profiles.json")
     parser.add_argument("--list", action="store_true", help="List compatible nodes without writing.")
     parser.add_argument("--json", action="store_true", help="Use secret-safe JSON with --list.")
@@ -71,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    if args.consume_source_env and not args.source_env:
+        raise CliConfigurationError("--consume-source-env requires --source-env.")
     if args.json and not args.list:
         raise CliConfigurationError("--json is valid only with --list.")
     if args.fallback_index and args.primary_index is None:
@@ -102,8 +105,17 @@ def _read_source_file(path_text: str) -> str:
         raise CliConfigurationError(str(exc)) from None
 
 
+def consume_environment_payload(name: str) -> str:
+    value = os.environ.pop(name, None)
+    if value is None:
+        raise CliConfigurationError("Source environment variable is not set.")
+    return value
+
+
 def read_payload(args: argparse.Namespace) -> str:
     if args.source_env:
+        if args.consume_source_env:
+            return consume_environment_payload(args.source_env)
         value = os.environ.get(args.source_env)
         if value is None:
             raise CliConfigurationError("Source environment variable is not set.")

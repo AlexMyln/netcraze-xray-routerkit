@@ -97,7 +97,7 @@ class SetupArgumentModeTests(unittest.TestCase):
         self.assertIsNone(args.source_file)
 
     def test_source_environment_and_file_modes(self):
-        for option, value in (("--source-env", "SAFE_ENV"), ("--source-file", "/private/source")):
+        for option, value in (("--source-env", "ROUTERKIT_SAFE_ENV"), ("--source-file", "/private/source")):
             with self.subTest(option=option):
                 args = cli.parse_args(["setup", option, value])
                 cli.validate_setup_args(args)
@@ -184,6 +184,36 @@ class SetupArgumentModeTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("conflicts", stderr.getvalue())
 
+    def test_setup_source_environment_requires_dedicated_routerkit_name(self):
+        for name in ("ROUTERKIT_PROFILE_SOURCE", "ROUTERKIT_SUBSCRIPTION_INPUT"):
+            with self.subTest(name=name):
+                cli.validate_setup_args(cli.parse_args(["setup", "--source-env", name]))
+
+        for name in ("PATH", "HOME", "SECRET_SOURCE", "ROUTERKIT_BAD-NAME", "ROUTERKIT_"):
+            with self.subTest(name=name), self.assertRaises(cli.RouterkitCliError):
+                cli.validate_setup_args(cli.parse_args(["setup", "--source-env", name]))
+
+    def test_rejected_source_environment_stops_before_any_side_effect(self):
+        args = cli.parse_args(["setup", "--source-env", "HOME"])
+        fake_environ = mock.MagicMock()
+        with mock.patch.object(cli.os, "environ", fake_environ):
+            with mock.patch.object(cli, "create_setup_workspace", side_effect=AssertionError("no workspace")):
+                with mock.patch.object(cli, "secure_copy_reuse_profiles", side_effect=AssertionError("no file read")):
+                    with mock.patch.object(cli.subprocess, "run", side_effect=AssertionError("no subprocess")):
+                        with mock.patch.object(Path, "lstat", side_effect=AssertionError("no file access")):
+                            with mock.patch("builtins.input", side_effect=AssertionError("no prompt")):
+                                with self.assertRaises(cli.RouterkitCliError):
+                                    cli.run_setup(args, ROOT)
+        fake_environ.get.assert_not_called()
+        fake_environ.__getitem__.assert_not_called()
+        fake_environ.pop.assert_not_called()
+        fake_environ.copy.assert_not_called()
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(cli.main(["setup", "--source-env", "HOME"]), 2)
+        self.assertIn("ROUTERKIT_*", stderr.getvalue())
+
 
 class SetupDelegationTests(unittest.TestCase):
     def test_profile_source_command_uses_python_and_internal_yes(self):
@@ -191,7 +221,7 @@ class SetupDelegationTests(unittest.TestCase):
             [
                 "setup",
                 "--source-env",
-                "SAFE_ENV",
+                "ROUTERKIT_SAFE_ENV",
                 "--primary-index",
                 "1",
                 "--fallback-index",
@@ -211,7 +241,8 @@ class SetupDelegationTests(unittest.TestCase):
                 str(output),
                 "--yes",
                 "--source-env",
-                "SAFE_ENV",
+                "ROUTERKIT_SAFE_ENV",
+                "--consume-source-env",
                 "--primary-index",
                 "1",
                 "--fallback-index",
@@ -233,6 +264,21 @@ class SetupDelegationTests(unittest.TestCase):
             cli.run_steps([source, generator])
         self.assertNotIn("stdout", run.call_args_list[0].kwargs)
         self.assertIs(run.call_args_list[1].kwargs["stdout"], cli.subprocess.PIPE)
+
+    def test_setup_source_command_consumes_only_environment_mode(self):
+        env_step = cli.build_profile_source_step(
+            cli.parse_args(["setup", "--source-env", "ROUTERKIT_SOURCE"]),
+            ROOT,
+            Path("/private/profiles.json"),
+        )
+        file_step = cli.build_profile_source_step(
+            cli.parse_args(["setup", "--source-file", "/private/source"]),
+            ROOT,
+            Path("/private/profiles.json"),
+        )
+        self.assertIn("--consume-source-env", env_step.command)
+        self.assertNotIn("--consume-source-env", file_step.command)
+        self.assertEqual(env_step.remove_env_names, ())
 
     def test_profile_source_failure_and_oserror_preserve_codes(self):
         step = cli.CommandStep("profile source", ["source"])
@@ -340,6 +386,39 @@ class SetupPrivateWorkspaceTests(unittest.TestCase):
                     self.assertEqual(cli.run_setup(args, ROOT), 127)
             self.assertFalse(workspace.directory.exists())
 
+    def test_selected_source_environment_is_removed_on_source_failures(self):
+        name = "ROUTERKIT_FAILURE_SOURCE"
+        for outcome, expected in ((completed(23), 23), (OSError("unavailable"), 127)):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                workspace = workspace_under(Path(directory))
+                args = cli.parse_args(["setup", "--source-env", name, "--primary-index", "1"])
+                side_effect = outcome if isinstance(outcome, OSError) else None
+                return_value = None if side_effect else outcome
+                with mock.patch.dict(os.environ, {name: "PRIVATE_FAILURE_MARKER"}):
+                    with mock.patch.object(cli, "create_setup_workspace", return_value=workspace):
+                        with mock.patch.object(
+                            cli.subprocess,
+                            "run",
+                            return_value=return_value,
+                            side_effect=side_effect,
+                        ):
+                            self.assertEqual(cli.run_setup(args, ROOT), expected)
+                    self.assertNotIn(name, os.environ)
+                self.assertFalse(workspace.directory.exists())
+
+    def test_selected_source_environment_is_removed_on_keyboard_interrupt(self):
+        name = "ROUTERKIT_INTERRUPTED_SOURCE"
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = workspace_under(Path(directory))
+            args = cli.parse_args(["setup", "--source-env", name, "--primary-index", "1"])
+            with mock.patch.dict(os.environ, {name: "PRIVATE_INTERRUPT_MARKER"}):
+                with mock.patch.object(cli, "create_setup_workspace", return_value=workspace):
+                    with mock.patch.object(cli.subprocess, "run", side_effect=KeyboardInterrupt):
+                        with self.assertRaises(KeyboardInterrupt):
+                            cli.run_setup(args, ROOT)
+                self.assertNotIn(name, os.environ)
+            self.assertFalse(workspace.directory.exists())
+
     def test_generator_failure_cleans_workspace_and_preserves_code(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = workspace_under(Path(directory))
@@ -406,7 +485,7 @@ class SetupDryRunTests(unittest.TestCase):
                         self.assertEqual(cli.main(argv), 0)
 
     def test_dry_run_has_no_reads_prompts_subprocess_workspace_or_paths(self):
-        markers = ("PRIVATE_ENV_NAME", "/protected/source-marker", "/protected/reuse-marker")
+        markers = ("ROUTERKIT_PRIVATE_ENV_NAME", "/protected/source-marker", "/protected/reuse-marker")
         forms = (
             ["--source-env", markers[0]],
             ["--source-file", markers[1]],
@@ -426,6 +505,15 @@ class SetupDryRunTests(unittest.TestCase):
                 output = stdout.getvalue()
                 for marker in markers:
                     self.assertNotIn(marker, output)
+
+    def test_dry_run_does_not_read_or_remove_selected_environment(self):
+        name = "ROUTERKIT_DRY_RUN_SOURCE"
+        with mock.patch.dict(os.environ, {name: "PRIVATE_DRY_RUN_MARKER"}):
+            args = cli.parse_args(["setup", "--source-env", name, "--dry-run"])
+            with mock.patch.object(cli, "create_setup_workspace", side_effect=AssertionError("no workspace")):
+                with mock.patch.object(cli.subprocess, "run", side_effect=AssertionError("no subprocess")):
+                    self.assertEqual(cli.run_setup(args, ROOT), 0)
+            self.assertEqual(os.environ[name], "PRIVATE_DRY_RUN_MARKER")
 
     def test_source_reuse_and_legacy_render_abstract_stages(self):
         expected = (
@@ -561,6 +649,78 @@ class SetupExecutionOrderTests(unittest.TestCase):
                 ],
             )
 
+    def test_source_environment_is_limited_to_acquisition_child(self):
+        source_name = "ROUTERKIT_ISOLATED_SOURCE"
+        unrelated_name = "ROUTERKIT_UNRELATED_SETTING"
+        observed = []
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = workspace_under(Path(directory))
+            args = cli.parse_args(
+                ["setup", "--source-env", source_name, "--primary-index", "1", "--apply", "--yes"]
+            )
+
+            def runner(command, **kwargs):
+                stage = Path(command[1]).name
+                child_env = kwargs.get("env")
+                if stage == "routerkit-profile-source.py":
+                    self.assertIsNone(child_env)
+                    self.assertIn(source_name, os.environ)
+                    private_file(workspace.profiles_path, json.dumps(profiles_document()))
+                else:
+                    self.assertIsNotNone(child_env)
+                    self.assertNotIn(source_name, child_env)
+                    self.assertEqual(child_env[unrelated_name], "kept")
+                    self.assertEqual(child_env["PATH"], "/synthetic/path")
+                observed.append(stage)
+                return completed(0, "PRIVATE_GENERATOR_MARKER", "PRIVATE_GENERATOR_MARKER")
+
+            with mock.patch.dict(
+                os.environ,
+                {source_name: "PRIVATE_SOURCE_MARKER", unrelated_name: "kept", "PATH": "/synthetic/path"},
+            ):
+                with mock.patch.object(cli, "create_setup_workspace", return_value=workspace):
+                    with mock.patch.object(cli.subprocess, "run", side_effect=runner):
+                        self.assertEqual(cli.run_setup(args, ROOT), 0)
+                self.assertNotIn(source_name, os.environ)
+                self.assertEqual(os.environ[unrelated_name], "kept")
+                self.assertEqual(os.environ["PATH"], "/synthetic/path")
+
+        self.assertEqual(
+            observed,
+            [
+                "routerkit-profile-source.py",
+                "generate-xray-profiles.py",
+                "routerkit-plan.py",
+                "preflight.sh",
+                "backup.sh",
+                "install-xray-direct.sh",
+                "healthcheck.sh",
+            ],
+        )
+
+    def test_non_environment_setup_modes_do_not_sanitize_unrelated_environment(self):
+        name = "ROUTERKIT_UNRELATED_SOURCE"
+        cases = (
+            cli.parse_args(["setup", "--source-file", "/private/source"]),
+            cli.parse_args(["setup"]),
+            cli.parse_args(["setup", "--reuse-profiles", "/private/profiles"]),
+            cli.parse_args(["setup", "--legacy-wizard"]),
+        )
+        for args in cases:
+            with self.subTest(args=args):
+                steps = []
+                if cli.setup_profile_mode(args) == "source":
+                    steps.append(cli.build_profile_source_step(args, ROOT, Path("/private/profiles.json")))
+                steps.append(cli.build_generator_step(ROOT, Path("/private/profiles.json"), "generated"))
+                steps.append(cli.build_strict_plan_step(ROOT, "generated", "/opt"))
+                steps.extend(cli.build_router_apply_steps("generated", ROOT))
+                self.assertTrue(all(step.remove_env_names == () for step in steps))
+                with mock.patch.dict(os.environ, {name: "kept"}):
+                    with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                        self.assertEqual(cli.run_steps(steps), 0)
+                    self.assertTrue(all(call.kwargs["env"] is None for call in run.call_args_list))
+                    self.assertEqual(os.environ[name], "kept")
+
 
 class SetupOfflineIntegrationTests(unittest.TestCase):
     def test_protected_source_runs_generation_and_plan_without_persistent_profiles(self):
@@ -593,6 +753,7 @@ class SetupOfflineIntegrationTests(unittest.TestCase):
             )
             with mock.patch.dict(os.environ, {"ROUTERKIT_TEST_SOURCE": payload}):
                 self.assertEqual(cli.run_setup(args, ROOT), 0)
+                self.assertNotIn("ROUTERKIT_TEST_SOURCE", os.environ)
             self.assertTrue((generated / "03_inbounds.json").exists())
 
     def test_explicit_reuse_reaches_generator_through_private_copy(self):

@@ -159,7 +159,10 @@ python3 scripts/routerkit.py setup
 
 Для non-interactive input передавайте только имя environment variable или path защищённого file, но не raw source как обычный argument:
 
+Для `--source-env` setup требует валидное имя выделенной переменной `ROUTERKIT_*`. Дочерний процесс profile-source копирует и удаляет значение до классификации URL или создания DNS resolver worker; generator, strict plan и все apply subprocesses получают обычный environment без одной выбранной переменной. Raw source не копируется в argv или output. Standalone `profile-source --source-env` сохраняет совместимость с другими валидными именами environment variables, потому что не использует внутренний setup-only consume option.
+
 ```sh
+ROUTERKIT_PROFILE_SOURCE='...' \
 python3 scripts/routerkit.py setup \
   --source-env ROUTERKIT_PROFILE_SOURCE \
   --primary-index 1 \

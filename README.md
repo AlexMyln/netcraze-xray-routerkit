@@ -96,9 +96,12 @@ The planner records explicit command-to-Entware-package mappings; in particular,
 
 `setup` now uses the completed profile-source stack by default. It accepts a source through hidden input, a named environment variable, or a protected owner-only file; safely resolves HTTPS when needed; parses compatible nodes; and selects one primary plus up to two fallbacks. Setup writes the selected profiles only inside a unique private workspace, suppresses generator output, removes the temporary profiles immediately after generation, and then runs a strict plan. Generated config fragments remain local and secret-bearing. Without `--apply`, no router apply stage runs. With `--apply`, setup asks for confirmation unless `--yes` is supplied; `--yes` skips only that prompt, not preflight, backup, install, or healthcheck.
 
+For setup, `--source-env` accepts only a valid dedicated `ROUTERKIT_*` variable name. The raw value stays out of argv and output, is available only to the profile-source acquisition child, and is consumed there before URL classification, DNS resolver worker creation, parsing, or selection. Generator, strict-plan, preflight, backup, install, and healthcheck subprocesses receive a copy of the normal environment with that one selected variable removed. Standalone `profile-source --source-env` keeps its existing general environment-name compatibility unless its internal consume option is explicitly used by setup.
+
 Non-interactive source selection keeps raw source material out of argv:
 
 ```sh
+ROUTERKIT_PROFILE_SOURCE='...' \
 python3 scripts/routerkit.py setup --source-env ROUTERKIT_PROFILE_SOURCE --primary-index 1 --fallback-index 2
 python3 scripts/routerkit.py setup --source-file /protected/path/source.txt --primary-index 1
 ```

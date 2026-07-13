@@ -159,7 +159,10 @@ With no source option, setup reads the source through hidden input and prompts f
 
 For non-interactive input, pass only an environment-variable name or protected file path, never the raw source as an ordinary argument:
 
+Setup requires a valid dedicated `ROUTERKIT_*` name for `--source-env`. The profile-source child copies and removes that value before URL classification or DNS resolver worker creation; generator, strict plan, and every apply subprocess receive the normal environment with only that selected variable removed. The raw source is never copied to argv or output. Standalone `profile-source --source-env` retains compatibility with other valid environment names because it does not use setup's internal consume option.
+
 ```sh
+ROUTERKIT_PROFILE_SOURCE='...' \
 python3 scripts/routerkit.py setup \
   --source-env ROUTERKIT_PROFILE_SOURCE \
   --primary-index 1 \

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- Unified setup now consumes dedicated `ROUTERKIT_*` source variables and removes them from resolver workers and all later generator, plan, and apply subprocess environments.
+
 ### Added
 - Default setup integration for hidden/local/HTTPS profile sources and primary/fallback selection.
 - Private setup-owned profile workspace with post-generator cleanup.

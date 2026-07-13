@@ -18,13 +18,14 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from routerkit_private_io import (
     PrivateFileError,
     read_owner_only_text_file,
     write_private_text_exclusive,
 )
+from routerkit_profile_source import PayloadValidationError, validate_env_name
 
 INSTALL_PLAN_NOTICE = (
     "Install is running in plan-only mode.\n"
@@ -62,6 +63,7 @@ class CommandStep:
     rollback_relevant: bool = False
     suppress_output: bool = False
     cwd: Optional[Path] = None
+    remove_env_names: Tuple[str, ...] = ()
 
 
 class SetupCleanupError(Exception):
@@ -120,6 +122,9 @@ def validate_install_args(args: argparse.Namespace) -> None:
 
 
 def validate_setup_args(args: argparse.Namespace) -> None:
+    if args.source_env:
+        validate_setup_source_env_name(args.source_env)
+
     source_options = bool(args.source_env or args.source_file)
     indexes = ([] if args.primary_index is None else [args.primary_index]) + args.fallback_index
     reuse_requested = bool(args.reuse_profiles or args.deprecated_profiles)
@@ -147,6 +152,19 @@ def validate_setup_args(args: argparse.Namespace) -> None:
         raise RouterkitCliError(SETUP_YES_REQUIRES_APPLY_MESSAGE, exit_code=2)
     if args.apply and args.target_root != "/opt":
         raise RouterkitCliError(SETUP_APPLY_TARGET_ROOT_MESSAGE, exit_code=2)
+
+
+def validate_setup_source_env_name(name: str) -> None:
+    try:
+        validate_env_name(name)
+    except PayloadValidationError:
+        raise RouterkitCliError(
+            "setup --source-env requires a valid dedicated ROUTERKIT_* environment variable name."
+        ) from None
+    if not name.startswith("ROUTERKIT_") or len(name) == len("ROUTERKIT_"):
+        raise RouterkitCliError(
+            "setup --source-env requires a valid dedicated ROUTERKIT_* environment variable name."
+        )
 
 
 def setup_profile_mode(args: argparse.Namespace) -> str:
@@ -268,16 +286,42 @@ def build_router_apply_steps(
     include_preflight: bool = True,
     include_backup: bool = True,
     include_healthcheck: bool = True,
+    remove_env_names: Tuple[str, ...] = (),
 ) -> List[CommandStep]:
     repo_root = Path(repo_root)
     steps: List[CommandStep] = []
     if include_preflight:
-        steps.append(CommandStep("preflight", ["sh", _repo_script(repo_root, "preflight.sh")]))
+        steps.append(
+            CommandStep(
+                "preflight",
+                ["sh", _repo_script(repo_root, "preflight.sh")],
+                remove_env_names=remove_env_names,
+            )
+        )
     if include_backup:
-        steps.append(CommandStep("backup", ["sh", _repo_script(repo_root, "backup.sh")], rollback_relevant=True))
-    steps.append(CommandStep("install", ["sh", _repo_script(repo_root, "install-xray-direct.sh"), generated]))
+        steps.append(
+            CommandStep(
+                "backup",
+                ["sh", _repo_script(repo_root, "backup.sh")],
+                rollback_relevant=True,
+                remove_env_names=remove_env_names,
+            )
+        )
+    steps.append(
+        CommandStep(
+            "install",
+            ["sh", _repo_script(repo_root, "install-xray-direct.sh"), generated],
+            remove_env_names=remove_env_names,
+        )
+    )
     if include_healthcheck:
-        steps.append(CommandStep("healthcheck", ["sh", _repo_script(repo_root, "healthcheck.sh")]))
+        steps.append(
+            CommandStep(
+                "healthcheck",
+                ["sh", _repo_script(repo_root, "healthcheck.sh")],
+                remove_env_names=remove_env_names,
+            )
+        )
     return steps
 
 
@@ -350,7 +394,7 @@ def build_profile_source_step(
         "--yes",
     ]
     if args.source_env:
-        command.extend(["--source-env", args.source_env])
+        command.extend(["--source-env", args.source_env, "--consume-source-env"])
     if args.source_file:
         command.extend(["--source-file", args.source_file])
     if args.primary_index is not None:
@@ -378,6 +422,8 @@ def build_generator_step(
     repo_root: Path,
     private_profiles_path: Path,
     generated: str,
+    *,
+    remove_env_names: Tuple[str, ...] = (),
 ) -> CommandStep:
     return CommandStep(
         "generator",
@@ -390,10 +436,17 @@ def build_generator_step(
             generated,
         ],
         suppress_output=True,
+        remove_env_names=remove_env_names,
     )
 
 
-def build_strict_plan_step(repo_root: Path, generated: str, target_root: str) -> CommandStep:
+def build_strict_plan_step(
+    repo_root: Path,
+    generated: str,
+    target_root: str,
+    *,
+    remove_env_names: Tuple[str, ...] = (),
+) -> CommandStep:
     return CommandStep(
         "strict plan",
         [
@@ -405,6 +458,7 @@ def build_strict_plan_step(repo_root: Path, generated: str, target_root: str) ->
             target_root,
             "--strict",
         ],
+        remove_env_names=remove_env_names,
     )
 
 
@@ -436,6 +490,7 @@ def build_setup_steps(
 
     validate_setup_args(args)
     mode = setup_profile_mode(args)
+    remove_env_names = (args.source_env,) if args.source_env else ()
     steps: List[CommandStep] = []
     if mode == "source":
         steps.append(build_profile_source_step(args, repo_root, private_profiles_path))
@@ -443,8 +498,22 @@ def build_setup_steps(
         if workspace is None:
             raise ValueError("legacy setup steps require a private workspace")
         steps.append(build_legacy_wizard_step(repo_root, workspace))
-    steps.append(build_generator_step(repo_root, private_profiles_path, args.generated))
-    steps.append(build_strict_plan_step(repo_root, args.generated, args.target_root))
+    steps.append(
+        build_generator_step(
+            repo_root,
+            private_profiles_path,
+            args.generated,
+            remove_env_names=remove_env_names,
+        )
+    )
+    steps.append(
+        build_strict_plan_step(
+            repo_root,
+            args.generated,
+            args.target_root,
+            remove_env_names=remove_env_names,
+        )
+    )
     return steps
 
 
@@ -588,6 +657,7 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
     validate_setup_args(args)
     repo_root = Path(repo_root)
     mode = setup_profile_mode(args)
+    remove_env_names = (args.source_env,) if args.source_env else ()
 
     if args.dry_run:
         print(render_setup_pipeline(args))
@@ -603,7 +673,11 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
     cleanup_failed = False
     try:
         if mode == "source":
-            code = run_steps([build_profile_source_step(args, repo_root, workspace.profiles_path)])
+            try:
+                code = run_steps([build_profile_source_step(args, repo_root, workspace.profiles_path)])
+            finally:
+                if args.source_env:
+                    os.environ.pop(args.source_env, None)
         elif mode == "reuse":
             reuse_path = setup_reuse_path(args)
             if reuse_path is None:
@@ -624,7 +698,14 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
                 code = 1
         if code == 0:
             code = run_steps(
-                [build_generator_step(repo_root, workspace.profiles_path, args.generated)]
+                [
+                    build_generator_step(
+                        repo_root,
+                        workspace.profiles_path,
+                        args.generated,
+                        remove_env_names=remove_env_names,
+                    )
+                ]
             )
     finally:
         try:
@@ -642,7 +723,16 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
     if code != 0:
         return code
 
-    code = run_steps([build_strict_plan_step(repo_root, args.generated, args.target_root)])
+    code = run_steps(
+        [
+            build_strict_plan_step(
+                repo_root,
+                args.generated,
+                args.target_root,
+                remove_env_names=remove_env_names,
+            )
+        ]
+    )
     if code != 0:
         return code
 
@@ -655,7 +745,11 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         print("Generated local files may exist, but no router apply stages were started.")
         return 1
 
-    apply_steps = build_router_apply_steps(args.generated, repo_root)
+    apply_steps = build_router_apply_steps(
+        args.generated,
+        repo_root,
+        remove_env_names=remove_env_names,
+    )
     code = run_steps(apply_steps)
     if code == 0:
         print_setup_apply_summary(mode)
@@ -726,6 +820,11 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
 
     completed_names: List[str] = []
     for step in steps:
+        child_env = None
+        if step.remove_env_names:
+            child_env = os.environ.copy()
+            for name in step.remove_env_names:
+                child_env.pop(name, None)
         try:
             if step.suppress_output:
                 completed = subprocess.run(
@@ -735,12 +834,14 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
                     stderr=subprocess.PIPE,
                     text=True,
                     cwd=str(step.cwd) if step.cwd is not None else None,
+                    env=child_env,
                 )
             else:
                 completed = subprocess.run(
                     list(step.command),
                     check=False,
                     cwd=str(step.cwd) if step.cwd is not None else None,
+                    env=child_env,
                 )
         except OSError as exc:
             if step.suppress_output:
