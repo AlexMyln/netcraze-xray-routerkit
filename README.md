@@ -72,7 +72,7 @@ Router-side proxy setups often drift into hard-to-audit firewall modes, broad de
 
 ## Quick Start
 
-The v0.2-alpha guided installer foundation is in progress. For the new read-only preflight and local profiles wizard, see [Guided installer foundation](docs/guided-installer.md).
+The v0.2-alpha guided setup now integrates profile-source acquisition, private generation, strict planning, and explicitly confirmed apply stages. See the [guided installer documentation](docs/guided-installer.md).
 
 ### Unified CLI
 
@@ -94,7 +94,9 @@ python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap
 
 The planner records explicit command-to-Entware-package mappings; in particular, `sha256sum` is planned through `coreutils-sha256sum`, with `ca-bundle` as a base requirement. Package names are scoped to the documented initial Entware arm64/aarch64 environment and still require hardware validation. Planning remains read-only, and package installation remains a later #13 slice.
 
-`setup` now uses the completed profile-source stack by default. It accepts a source through hidden input, a named environment variable, or a protected owner-only file; safely resolves HTTPS when needed; parses compatible nodes; and selects one primary plus up to two fallbacks. Setup writes the selected profiles only inside a unique private workspace, suppresses generator output, removes the temporary profiles immediately after generation, and then runs a strict plan. Generated config fragments remain local and secret-bearing. Without `--apply`, no router apply stage runs. With `--apply`, setup asks for confirmation unless `--yes` is supplied; `--yes` skips only that prompt, not preflight, backup, install, or healthcheck.
+`setup` now uses the completed profile-source stack by default. It accepts a source through hidden input, a named environment variable, or a protected owner-only file; safely resolves HTTPS when needed; parses compatible nodes; and selects one primary plus up to two fallbacks. Setup writes the selected profiles only inside a unique private workspace, suppresses generator output, removes the temporary profiles immediately after generation, and then runs a strict plan. Generated config fragments persist locally and are secret-bearing. Without `--apply`, no router apply stage runs. With `--apply`, setup asks for confirmation unless `--yes` is supplied; `--yes` skips only that prompt, not preflight, backup, install, or healthcheck.
+
+While the private workspace exists, catchable `SIGTERM` and `SIGHUP` requests trigger coordinated source/generator process-group shutdown, child reaping, and workspace cleanup before setup exits. `SIGINT` keeps normal interactive cancellation behavior. `SIGKILL`, power loss, kernel failure, and host crashes cannot run in-process cleanup and may leave the owner-only workspace for manual removal.
 
 For setup, `--source-env` accepts only a valid dedicated `ROUTERKIT_*` variable name. The raw value stays out of argv and output, is available only to the profile-source acquisition child, and is consumed there before URL classification, DNS resolver worker creation, parsing, or selection. Generator, strict-plan, preflight, backup, install, and healthcheck subprocesses receive a copy of the normal environment with that one selected variable removed. Standalone `profile-source --source-env` keeps its existing general environment-name compatibility unless its internal consume option is explicitly used by setup.
 
@@ -115,7 +117,7 @@ python3 scripts/routerkit.py setup --legacy-wizard
 
 The old `--profiles` and `--force-wizard` spellings remain deprecated aliases for those explicit modes. Setup no longer notices or reuses `./profiles.json` accidentally. Reuse rejects symlinks, non-regular files, non-owner-only POSIX permissions, oversized content, invalid UTF-8, and path/descriptor identity changes; the validated input is copied into the setup workspace and the original is never modified or passed to the generator.
 
-`setup --dry-run` is abstract and secret-free: it performs no prompt, input/environment/file read, DNS or HTTPS request, subprocess, temporary-directory creation, file write, or router action. This is intentionally stricter than standalone `profile-source --dry-run`, which may still acquire an HTTPS source but never writes profiles.
+`setup --dry-run` is abstract and secret-free: it reads no source, reuse file, secret input, or environment value; performs no stdin prompt, DNS or HTTPS request, subprocess, private-workspace creation, file write, or router action. Python module loading and repository-path resolution are outside this secret-input contract. This is intentionally stricter than standalone `profile-source --dry-run`, which may still acquire an HTTPS source but never writes profiles.
 
 This milestone is not the final implementation of [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). The read-only planner/manifest slice closes [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), while bootstrap apply remains part of [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13), autostart is #14, Netcraze proxy/policy automation is #15, and hardware validation remains blocked on #16. `setup` does not invoke `bootstrap` yet.
 
@@ -314,8 +316,8 @@ examples/profiles.example.json     Secret-free profile template
 assets/social-preview.png          GitHub social preview image
 README.ru.md                       Russian README
 docs/install-from-zero.ru.md       Install from zero guide in Russian
-docs/guided-installer.md           Guided installer foundation
-docs/guided-installer.ru.md        Guided installer foundation in Russian
+docs/guided-installer.md           Guided installer workflow
+docs/guided-installer.ru.md        Guided installer workflow in Russian
 docs/installer-scope.md            Guided installer scope and prerequisites
 docs/installer-scope.ru.md         Guided installer scope and prerequisites in Russian
 docs/netcraze-ui.md                Web UI proxy and policy guide
@@ -332,8 +334,8 @@ docs/announcement.ru.md            Russian announcement draft
 
 - [Русская версия README](README.ru.md)
 - [Changelog](CHANGELOG.md)
-- [Guided installer foundation](docs/guided-installer.md)
-- [Guided installer foundation — RU](docs/guided-installer.ru.md)
+- [Guided installer](docs/guided-installer.md)
+- [Guided installer — RU](docs/guided-installer.ru.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
 - [Installer scope](docs/installer-scope.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)

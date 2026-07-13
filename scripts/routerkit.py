@@ -2,9 +2,9 @@
 """
 Unified routerkit CLI wrapper.
 
-This entrypoint only delegates to existing scripts. It does not implement
-router runtime changes, Netcraze Web UI automation, firewall automation, or
-hidden writes under /opt.
+This entrypoint delegates individual tools and owns setup workspace, child,
+cleanup, confirmation, and apply orchestration. It does not implement Netcraze
+Web UI automation, firewall automation, or hidden writes under /opt.
 """
 
 from __future__ import annotations
@@ -12,13 +12,16 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from types import FrameType
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from routerkit_private_io import (
     PrivateFileError,
@@ -68,6 +71,164 @@ class CommandStep:
 
 class SetupCleanupError(Exception):
     pass
+
+
+class SetupSignalRegistrationError(Exception):
+    pass
+
+
+class SetupTermination(BaseException):
+    def __init__(self, signum: int, prior_exit_code: Optional[int] = None) -> None:
+        super().__init__(signum)
+        self.signum = signum
+        self.prior_exit_code = prior_exit_code
+
+
+def setup_termination_exit_code(termination: SetupTermination) -> int:
+    if termination.prior_exit_code not in (None, 0):
+        return termination.prior_exit_code
+    return 128 + termination.signum
+
+
+class SetupSignalLifecycle:
+    """Own catchable setup signals and the active private-workspace child."""
+
+    graceful_timeout = 2.0
+    forced_timeout = 2.0
+
+    def __init__(self) -> None:
+        self.active_child: Optional[subprocess.Popen] = None
+        self.active_child_captures_output = False
+        self.requested_signum: Optional[int] = None
+        self._phase = "inactive"
+        self._previous_handlers: Dict[int, object] = {}
+        self._previous_signal_mask = None
+
+    @staticmethod
+    def handled_signals() -> Tuple[int, ...]:
+        result = []
+        for name in ("SIGTERM", "SIGHUP"):
+            signum = getattr(signal, name, None)
+            if signum is not None and signum not in result:
+                result.append(signum)
+        return tuple(result)
+
+    def install(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            raise SetupSignalRegistrationError(
+                "signal-aware setup must run in the main Python thread"
+            )
+        try:
+            for signum in self.handled_signals():
+                self._previous_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, self._handle_signal)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.restore()
+            raise SetupSignalRegistrationError(str(exc)) from None
+        self._phase = "active"
+
+    def block_during_workspace_creation(self) -> None:
+        if (
+            os.name == "posix"
+            and threading.current_thread() is threading.main_thread()
+            and hasattr(signal, "pthread_sigmask")
+        ):
+            self._previous_signal_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                self.handled_signals(),
+            )
+
+    def restore_signal_mask(self) -> None:
+        if self._previous_signal_mask is None:
+            return
+        previous = self._previous_signal_mask
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        finally:
+            self._previous_signal_mask = None
+
+    def restore(self) -> None:
+        self._phase = "restoring"
+        for signum, previous in self._previous_handlers.items():
+            signal.signal(signum, previous)
+        self._previous_handlers.clear()
+        self._phase = "inactive"
+
+    def _handle_signal(self, signum: int, _frame: Optional[FrameType]) -> None:
+        if self.requested_signum is None:
+            self.requested_signum = signum
+        if self._phase == "active":
+            self._phase = "terminating"
+            raise SetupTermination(signum)
+
+    def begin_spawn(self) -> None:
+        self._phase = "spawning"
+
+    def child_started(self, child: subprocess.Popen, *, captures_output: bool) -> None:
+        self.active_child = child
+        self.active_child_captures_output = captures_output
+        self._phase = "active"
+        self.raise_if_requested()
+
+    def child_reaped(self) -> None:
+        self.active_child = None
+        self.active_child_captures_output = False
+        self._phase = "active"
+
+    def begin_cleanup(self) -> None:
+        self._phase = "cleanup"
+
+    def raise_if_requested(self, prior_exit_code: Optional[int] = None) -> None:
+        if self.requested_signum is not None:
+            self._phase = "terminating"
+            raise SetupTermination(self.requested_signum, prior_exit_code)
+
+    def _signal_active_child(self, *, force: bool) -> None:
+        child = self.active_child
+        if child is None or child.poll() is not None:
+            return
+        if os.name == "posix":
+            child_group = child.pid
+            try:
+                if child_group != os.getpgrp():
+                    os.killpg(child_group, signal.SIGKILL if force else signal.SIGTERM)
+                    return
+            except ProcessLookupError:
+                return
+            except OSError:
+                pass
+        if force:
+            child.kill()
+        else:
+            child.terminate()
+
+    def _wait_active_child(self, timeout: float) -> None:
+        child = self.active_child
+        if child is None:
+            return
+        if self.active_child_captures_output:
+            child.communicate(timeout=timeout)
+        else:
+            child.wait(timeout=timeout)
+
+    def shutdown_active_child(self) -> None:
+        child = self.active_child
+        if child is None:
+            self._phase = "terminating"
+            return
+        self._phase = "shutdown"
+        try:
+            self._signal_active_child(force=False)
+            try:
+                self._wait_active_child(self.graceful_timeout)
+            except subprocess.TimeoutExpired:
+                self._signal_active_child(force=True)
+                self._wait_active_child(self.forced_timeout)
+        finally:
+            if child.poll() is not None:
+                self.active_child = None
+                self.active_child_captures_output = False
+            self._phase = "terminating"
 
 
 @dataclass
@@ -663,58 +824,107 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         print(render_setup_pipeline(args))
         return 0
 
+    lifecycle = SetupSignalLifecycle()
+    lifecycle.block_during_workspace_creation()
     try:
         workspace = create_setup_workspace()
     except OSError:
+        lifecycle.restore_signal_mask()
         print("routerkit: could not create the private setup workspace.", file=sys.stderr)
         return 1
+    except BaseException:
+        lifecycle.restore_signal_mask()
+        raise
 
     code = 0
     cleanup_failed = False
+    termination: Optional[SetupTermination] = None
+    registration_failed = False
     try:
-        if mode == "source":
-            try:
-                code = run_steps([build_profile_source_step(args, repo_root, workspace.profiles_path)])
-            finally:
-                if args.source_env:
-                    os.environ.pop(args.source_env, None)
-        elif mode == "reuse":
-            reuse_path = setup_reuse_path(args)
-            if reuse_path is None:
-                raise AssertionError("reuse mode requires an explicit path")
-            try:
-                secure_copy_reuse_profiles(Path(reuse_path), workspace.profiles_path)
-            except PrivateFileError as exc:
-                print(f"routerkit: explicit profiles reuse was rejected: {exc}", file=sys.stderr)
-                code = 2
-        else:
-            code = run_steps([build_legacy_wizard_step(repo_root, workspace)])
-
-        if code == 0:
-            try:
-                _ensure_private_setup_profiles(workspace.profiles_path)
-            except PrivateFileError as exc:
-                print(f"routerkit: {exc}", file=sys.stderr)
-                code = 1
-        if code == 0:
-            code = run_steps(
-                [
-                    build_generator_step(
-                        repo_root,
-                        workspace.profiles_path,
-                        args.generated,
-                        remove_env_names=remove_env_names,
-                    )
-                ]
-            )
-    finally:
         try:
-            workspace.cleanup()
-        except SetupCleanupError:
-            cleanup_failed = True
+            lifecycle.install()
+            lifecycle.restore_signal_mask()
+            lifecycle.raise_if_requested()
+            if mode == "source":
+                try:
+                    code = run_steps(
+                        [build_profile_source_step(args, repo_root, workspace.profiles_path)],
+                        setup_lifecycle=lifecycle,
+                    )
+                finally:
+                    if args.source_env:
+                        os.environ.pop(args.source_env, None)
+            elif mode == "reuse":
+                reuse_path = setup_reuse_path(args)
+                if reuse_path is None:
+                    raise AssertionError("reuse mode requires an explicit path")
+                try:
+                    secure_copy_reuse_profiles(Path(reuse_path), workspace.profiles_path)
+                except PrivateFileError as exc:
+                    print(f"routerkit: explicit profiles reuse was rejected: {exc}", file=sys.stderr)
+                    code = 2
+            else:
+                code = run_steps(
+                    [build_legacy_wizard_step(repo_root, workspace)],
+                    setup_lifecycle=lifecycle,
+                )
+
+            lifecycle.raise_if_requested(code if code != 0 else None)
+            if code == 0:
+                try:
+                    _ensure_private_setup_profiles(workspace.profiles_path)
+                except PrivateFileError as exc:
+                    print(f"routerkit: {exc}", file=sys.stderr)
+                    code = 1
+            lifecycle.raise_if_requested(code if code != 0 else None)
+            if code == 0:
+                code = run_steps(
+                    [
+                        build_generator_step(
+                            repo_root,
+                            workspace.profiles_path,
+                            args.generated,
+                            remove_env_names=remove_env_names,
+                        )
+                    ],
+                    setup_lifecycle=lifecycle,
+                )
+            lifecycle.raise_if_requested(code if code != 0 else None)
+        except SetupSignalRegistrationError as exc:
+            registration_failed = True
+            print(f"routerkit: could not install setup signal handlers: {exc}.", file=sys.stderr)
+        except SetupTermination as exc:
+            termination = exc
+    finally:
+        lifecycle.begin_cleanup()
+        try:
+            try:
+                workspace.cleanup()
+            except SetupCleanupError:
+                cleanup_failed = True
+                print(
+                    "Warning: private setup workspace cleanup failed. "
+                    f"Remove it manually: {workspace.directory}",
+                    file=sys.stderr,
+                )
+        finally:
+            lifecycle.restore()
+            lifecycle.restore_signal_mask()
+
+    if termination is None and lifecycle.requested_signum is not None:
+        termination = SetupTermination(
+            lifecycle.requested_signum,
+            code if code != 0 else None,
+        )
+    if registration_failed:
+        return 1
+    if termination is not None:
+        code = setup_termination_exit_code(termination)
+        if not cleanup_failed:
+            signal_name = signal.Signals(termination.signum).name
             print(
-                "Warning: private setup workspace cleanup failed. "
-                f"Remove it manually: {workspace.directory}",
+                f"routerkit: setup terminated by {signal_name}; "
+                "private setup workspace was removed.",
                 file=sys.stderr,
             )
 
@@ -813,7 +1023,51 @@ def print_apply_summary(steps: Sequence[CommandStep]) -> None:
     print("- xkeen -start was not called.")
 
 
-def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Optional[Path] = None) -> int:
+def _run_owned_setup_step(
+    step: CommandStep,
+    lifecycle: SetupSignalLifecycle,
+    child_env: Optional[Dict[str, str]],
+) -> subprocess.CompletedProcess:
+    lifecycle.begin_spawn()
+    try:
+        child = subprocess.Popen(
+            list(step.command),
+            stdout=subprocess.PIPE if step.suppress_output else None,
+            stderr=subprocess.PIPE if step.suppress_output else None,
+            text=True,
+            cwd=str(step.cwd) if step.cwd is not None else None,
+            env=child_env,
+            start_new_session=os.name == "posix",
+        )
+    except BaseException:
+        lifecycle._phase = "active"
+        lifecycle.raise_if_requested()
+        raise
+
+    try:
+        lifecycle.child_started(child, captures_output=step.suppress_output)
+        stdout, stderr = child.communicate()
+        returncode = child.returncode
+        lifecycle.child_reaped()
+        lifecycle.raise_if_requested(returncode if returncode != 0 else None)
+        return subprocess.CompletedProcess(step.command, returncode, stdout, stderr)
+    except SetupTermination as exc:
+        known_returncode = child.poll()
+        lifecycle.shutdown_active_child()
+        if exc.prior_exit_code is None and known_returncode not in (None, 0):
+            raise SetupTermination(exc.signum, known_returncode) from None
+        raise
+    except BaseException:
+        lifecycle.shutdown_active_child()
+        raise
+
+
+def run_steps(
+    steps: Sequence[CommandStep],
+    dry_run: bool = False,
+    repo_root: Optional[Path] = None,
+    setup_lifecycle: Optional[SetupSignalLifecycle] = None,
+) -> int:
     if dry_run:
         print(render_steps(steps, repo_root))
         return 0
@@ -826,7 +1080,9 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
             for name in step.remove_env_names:
                 child_env.pop(name, None)
         try:
-            if step.suppress_output:
+            if setup_lifecycle is not None:
+                completed = _run_owned_setup_step(step, setup_lifecycle, child_env)
+            elif step.suppress_output:
                 completed = subprocess.run(
                     list(step.command),
                     check=False,
@@ -1021,7 +1277,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         dest="dry_run",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Render an abstract no-prompt, no-read, no-network, no-write setup pipeline.",
+        help=(
+            "Render an abstract setup pipeline without secret-input reads, prompts, "
+            "network, subprocesses, private workspace, or writes."
+        ),
     )
 
     bootstrap = subparsers.add_parser(

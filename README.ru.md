@@ -76,7 +76,7 @@ Bootstrap design: [ADR модели выполнения](docs/architecture/boot
 
 > Это не образ флешки и не автоматический установщик. Entware/OPKG и Xray должны быть подготовлены отдельно.
 
-v0.2-alpha foundation для guided installer уже в работе. Новый read-only preflight и локальный wizard для `profiles.json` описаны в [документации guided installer](docs/guided-installer.ru.md).
+Guided setup версии v0.2-alpha теперь объединяет profile-source acquisition, приватную генерацию, strict planning и явно подтверждённые apply stages. Flow описан в [документации guided installer](docs/guided-installer.ru.md).
 
 ### Единый CLI
 
@@ -98,7 +98,9 @@ python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap
 
 Planner фиксирует явные соответствия команд пакетам Entware; в частности, `sha256sum` планируется через `coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена пакетов относятся к документированному начальному Entware-окружению arm64/aarch64 и всё ещё требуют hardware validation. Планирование остаётся read-only, а установка пакетов — более поздним slice #13.
 
-По умолчанию `setup` теперь использует завершённый стек profile-source. Источник передаётся через скрытый ввод, указанную environment variable или защищённый owner-only файл; HTTPS при необходимости безопасно разрешается; compatible nodes разбираются; выбирается один primary и до двух fallback. Setup сохраняет выбранные профили только в уникальном private workspace, подавляет вывод generator, сразу после генерации удаляет временные профили и запускает strict plan. Generated config fragments остаются локально и содержат secrets. Без `--apply` router apply stages не выполняются. С `--apply` setup запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не preflight, backup, install или healthcheck.
+По умолчанию `setup` теперь использует завершённый стек profile-source. Источник передаётся через скрытый ввод, указанную environment variable или защищённый owner-only файл; HTTPS при необходимости безопасно разрешается; compatible nodes разбираются; выбирается один primary и до двух fallback. Setup сохраняет выбранные профили только в уникальном private workspace, подавляет вывод generator, сразу после генерации удаляет временные профили и запускает strict plan. Generated config fragments сохраняются локально и содержат secrets. Без `--apply` router apply stages не выполняются. С `--apply` setup запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не preflight, backup, install или healthcheck.
+
+Пока существует private workspace, перехватываемые `SIGTERM` и `SIGHUP` запускают согласованную остановку process group source/generator, reaping дочернего процесса и cleanup workspace до выхода setup. `SIGINT` сохраняет обычное поведение интерактивной отмены. `SIGKILL`, потеря питания, сбой kernel и crash хоста не могут выполнить in-process cleanup и способны оставить owner-only workspace для ручного удаления.
 
 В setup параметр `--source-env` принимает только валидное имя выделенной переменной `ROUTERKIT_*`. Raw value не попадает в argv или output, доступно только дочернему процессу profile-source acquisition и удаляется там до классификации URL, создания DNS resolver worker, parsing или selection. Generator, strict-plan, preflight, backup, install и healthcheck получают копию обычного environment без одной выбранной переменной. Standalone `profile-source --source-env` сохраняет прежнюю совместимость с произвольными валидными именами environment variables, если внутренний consume option, используемый setup, не указан явно.
 
@@ -119,7 +121,7 @@ python3 scripts/routerkit.py setup --legacy-wizard
 
 Старые варианты `--profiles` и `--force-wizard` остаются deprecated aliases для этих явных режимов. Setup больше не обнаруживает и не переиспользует `./profiles.json` случайно. Reuse отклоняет symlink, не-regular file, не-owner-only POSIX permissions, слишком большой или не-UTF-8 content и изменения identity между path и descriptor; проверенный input копируется в setup workspace, а оригинал не изменяется и не передаётся generator.
 
-`setup --dry-run` абстрактный и secret-free: без prompt, чтения input/environment/file, DNS или HTTPS request, subprocess, temporary directory, file write или router action. Это намеренно строже standalone `profile-source --dry-run`, который может получить HTTPS source, но не записывает profiles.
+`setup --dry-run` абстрактный и secret-free: он не читает source, reuse file, secret input или значение environment, не выполняет stdin prompt, DNS или HTTPS request, subprocess, создание private workspace, file write или router action. Загрузка Python modules и определение repository path не входят в этот secret-input contract. Это намеренно строже standalone `profile-source --dry-run`, который может получить HTTPS source, но не записывает profiles.
 
 Это milestone, а не финальная реализация [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). Read-only planner/manifest закрывает [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), а bootstrap apply остаётся в [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13). Autostart — #14, Netcraze proxy/policy — #15, hardware validation всё ещё заблокирован #16. `setup` пока не вызывает `bootstrap`.
 
@@ -321,7 +323,7 @@ README.ru.md                       Русская версия README
 
 docs/netcraze-ui.md                Web UI guide для proxy/policy
 docs/install-from-zero.ru.md       Установка с нуля на русском
-docs/guided-installer.md           Guided installer foundation
+docs/guided-installer.md           Guided installer workflow
 docs/guided-installer.ru.md        Основа guided installer на русском
 docs/installer-scope.md            Installer scope и prerequisites
 docs/installer-scope.ru.md         Область работы установщика и prerequisites
@@ -337,7 +339,7 @@ docs/announcement.ru.md            Черновик анонса на русск
 ## Документация
 
 - [Changelog](CHANGELOG.md)
-- [Guided installer foundation](docs/guided-installer.md)
+- [Guided installer](docs/guided-installer.md)
 - [Основа guided installer](docs/guided-installer.ru.md)
 - [Область работы установщика](docs/installer-scope.ru.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)

@@ -1,6 +1,6 @@
-# Основа guided installer
+# Guided installer
 
-Это v0.2-alpha foundation для будущего guided one-click installer. На этом шаге добавлены безопасный локальный wizard и read-only preflight для роутера без автоматизации веб-интерфейса Netcraze и без изменений runtime-состояния роутера.
+Guided setup версии v0.2-alpha объединяет profile-source acquisition, приватную локальную генерацию, strict planning и явно подтверждённые router apply stages. Он не автоматизирует Netcraze Web UI, firewall, autostart или device policies.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@
 
 ## Единый CLI
 
-`scripts/routerkit.py` — единая Python-точка входа для foundation guided installer. Она только делегирует запуск существующим скриптам и возвращает exit code дочернего процесса.
+`scripts/routerkit.py` — единая Python-точка входа. Она делегирует отдельные tools, а для setup также управляет созданием workspace, безопасным reuse profiles, sanitation source environment, lifecycle дочерних source/generator процессов, cleanup, confirmation и apply orchestration. Обычные delegated commands сохраняют exit code дочернего процесса.
 
 ```sh
 python3 scripts/routerkit.py wizard
@@ -72,7 +72,7 @@ Compatibility намеренно узкая: VLESS с синтаксически
 
 HTTPS source может быть прямой subscription или стандартным redirect-based shortlink. Outer whitespace вокруг полного HTTPS value удаляется, включая LF/CRLF в конце защищённого файла, без изменения path/query или raw/offline payload; internal whitespace, control characters, multiple lines и empty values отклоняются. Допускается только HTTPS port 443, без userinfo и fragments. Каждый hop повторяет URL validation и проверку всех DNS addresses, требует полностью global set по fixed reviewed special-purpose CIDR tables и дополнительным defense-in-depth проверкам standard-library `ipaddress`, закрепляет TCP за validated address, проверяет TLS для original hostname и сверяет peer address. IPv4-mapped IPv6, стандартизованные NAT64, Teredo, 6to4 и ORCHID ranges запрещены. Обычная cancellation прекращает retries и redirects, после чего выполняются ограниченные best-effort попытки cleanup. Максимум — 5 redirects и 16 DNS addresses на hop; лимиты DNS, connection, operational, URL/Location и body равны 5 секундам, 10 секундам, 30 секундам плюс bounded cleanup grace, 8192 bytes и 1 MiB. Dedicated compatibility job выполняет destination/address-policy test class на Python 3.8.18 и primary `3.x`; полный multiprocessing, TLS, HTTP, deadline и cancellation suite запускается только на основном CI Python. Compressed responses отклоняются. RouterKit следует только поддерживаемым HTTP 3xx redirects с `Location`; он не выполняет JavaScript и не интерпретирует HTML meta refresh, поэтому эти browser-style механизмы навигации не поддерживаются и не выполняются. Финальный HTTP 200 body передаётся offline parser, который завершается generic error, если не находит совместимый profile payload. Подробнее: [security ADR](architecture/profile-source-network-security.ru.md).
 
-Для этой standalone-команды `--dry-run` означает no-write, а не no-network: HTTPS source загружается и разбирается для проверки selection, но output не записывается. Generator использует тот же resolver для `subscription_url` и `subscription_url_env`. Default integration `routerkit setup` теперь завершает #20/#24 и использует описанный ниже более строгий no-prompt, no-read, no-network, no-write dry-run contract.
+Для этой standalone-команды `--dry-run` означает no-write, а не no-network: HTTPS source загружается и разбирается для проверки selection, но output не записывается. Generator использует тот же resolver для `subscription_url` и `subscription_url_env`. Default integration `routerkit setup` теперь завершает #20/#24 и использует описанный ниже более строгий contract: без чтения source/reuse/secret/environment value, stdin prompt, network, subprocess, private workspace или write.
 
 После cancellation profile-source не делает безусловного no-write утверждения: узко попавший по времени interrupt может прийти после atomic publication. Secret не печатается; перед повтором проверьте, существует ли запрошенный output file. Setup обычно удаляет setup-owned output во время cleanup private workspace.
 
@@ -186,6 +186,8 @@ python3 scripts/routerkit.py setup --legacy-wizard
 
 В unified setup stdout и stderr generator подавляются и заменяются общими status messages, потому что могут содержать данные, производные от подписки или учётных данных. При прямом запуске generator сохраняет прежнюю диагностику.
 
+Пока setup владеет private workspace, перехватываемые `SIGTERM` и `SIGHUP` приводят к управляемой остановке process group source/generator, bounded escalation при необходимости, reaping дочернего процесса и cleanup workspace до выхода. `SIGINT` остаётся обычной интерактивной отменой. `SIGKILL`, потеря питания, сбой kernel и crash хоста не могут выполнить user-space cleanup и способны оставить owner-only workspace для ручного удаления. Generated fragments намеренно сохраняются как secret-bearing local artifacts; cleanup временного workspace их не удаляет.
+
 Чтобы продолжить через hardened apply pipeline, используйте:
 
 ```sh
@@ -198,14 +200,14 @@ python3 scripts/routerkit.py setup --apply
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
-Dry-run показывает абстрактный secret-free flow без prompt, чтения stdin/environment/file, DNS или HTTPS, subprocess, temporary directory, profiles, generated files или router actions:
+Dry-run показывает абстрактный secret-free flow без чтения source, reuse file, secret input или environment value; без stdin prompt; и без DNS/HTTPS request, subprocess, private workspace, profiles, generated files, write или router actions:
 
 ```sh
 python3 scripts/routerkit.py --dry-run setup
 python3 scripts/routerkit.py setup --apply --dry-run
 ```
 
-Этот setup dry-run contract отличается от standalone `profile-source --dry-run`: standalone profile-source может выполнить HTTPS network read для validation selection, а setup dry-run не выполняет input или network access вообще.
+Этот setup dry-run contract отличается от standalone `profile-source --dry-run`: standalone profile-source может выполнить HTTPS network read для validation selection, а setup dry-run не выполняет secret-input или network access. Загрузка Python modules и определение repository path не входят в secret-input contract.
 
 Эта integration закрывает #20 и #24, но не завершает epic #5. Bootstrap apply остаётся в #13, autostart — в #14, Netcraze proxy/policy — в #15, hardware validation — в #16. `setup` в этом release не вызывает `bootstrap`. Setup не скачивает и не устанавливает Xray, не включает autostart, не обнаруживает devices, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
 

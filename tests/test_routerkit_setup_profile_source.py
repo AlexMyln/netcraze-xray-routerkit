@@ -39,6 +39,42 @@ def completed(returncode, stdout=None, stderr=None):
     return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+class MockOwnedProcess:
+    """Adapt existing subprocess.run mocks to the setup-only Popen path."""
+
+    pid = 999999
+
+    def __init__(self, result):
+        self.returncode = result.returncode
+        self._stdout = result.stdout
+        self._stderr = result.stderr
+
+    def communicate(self, timeout=None):
+        del timeout
+        return self._stdout, self._stderr
+
+    def wait(self, timeout=None):
+        del timeout
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        return None
+
+    def kill(self):
+        return None
+
+
+def owned_popen_from_run_mock(command, **kwargs):
+    if not isinstance(cli.subprocess.run, mock.Mock):
+        raise AssertionError("owned Popen adapter requires a subprocess.run mock")
+    kwargs.pop("start_new_session", None)
+    result = cli.subprocess.run(command, check=False, **kwargs)
+    return MockOwnedProcess(result)
+
+
 def synthetic_link(label="Synthetic", key_character="A", short_id="00"):
     scheme = "vl" + "ess"
     user_id = str(uuid.UUID(int=12345))
@@ -289,6 +325,15 @@ class SetupDelegationTests(unittest.TestCase):
 
 
 class SetupPrivateWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        self.popen_patch = mock.patch.object(
+            cli.subprocess,
+            "Popen",
+            side_effect=owned_popen_from_run_mock,
+        )
+        self.popen_patch.start()
+        self.addCleanup(self.popen_patch.stop)
+
     def test_workspace_is_unique_private_and_cleanup_removes_it(self):
         first = cli.create_setup_workspace()
         second = cli.create_setup_workspace()
@@ -570,6 +615,15 @@ class SetupDryRunTests(unittest.TestCase):
 
 
 class SetupExecutionOrderTests(unittest.TestCase):
+    def setUp(self):
+        self.popen_patch = mock.patch.object(
+            cli.subprocess,
+            "Popen",
+            side_effect=owned_popen_from_run_mock,
+        )
+        self.popen_patch.start()
+        self.addCleanup(self.popen_patch.stop)
+
     def _successful_runner(self, workspace, calls):
         def runner(command, **kwargs):
             calls.append(command)

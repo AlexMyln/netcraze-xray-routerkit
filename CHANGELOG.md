@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 - Unified setup now consumes dedicated `ROUTERKIT_*` source variables and removes them from resolver workers and all later generator, plan, and apply subprocess environments.
+- Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
 - Default setup integration for hidden/local/HTTPS profile sources and primary/fallback selection.
