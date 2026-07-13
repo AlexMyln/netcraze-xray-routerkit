@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Initial `setup` orchestrator for wizard, generation, strict planning, explicit apply confirmation, and the hardened install pipeline.
+- Setup dry-run rendering and failure-propagation tests.
+- Wizard-only mode for orchestration without duplicate generator prompts.
 - Hardened `install --apply` pipeline with strict plan, preflight, backup, install, and healthcheck steps.
 - Apply summaries and rollback hints for failed install/healthcheck flows.
 - CLI tests for apply pipeline ordering, dry-run behavior, failure handling, and skip flags.

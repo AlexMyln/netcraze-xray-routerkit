@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -262,14 +262,19 @@ def build_profiles() -> List[Dict[str, Any]]:
             return profiles
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create a local ignored profiles.json interactively.")
     parser.add_argument("--profiles", default="profiles.json", help="Output profiles file; default: profiles.json")
-    return parser.parse_args()
+    parser.add_argument(
+        "--no-generator-prompt",
+        action="store_true",
+        help="Write the profiles file and return without offering to run the generator.",
+    )
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
     profiles_path = Path(args.profiles)
 
     print("netcraze-xray-routerkit local profiles wizard")
@@ -294,6 +299,9 @@ def main() -> int:
     print()
     print("Next local step:")
     print(f"  python3 scripts/generate-xray-profiles.py --profiles {profiles_path} --out generated")
+
+    if args.no_generator_prompt:
+        return 0
 
     if ask_yes_no("Run the local generator now?", default=False):
         return run_generator(profiles_path)

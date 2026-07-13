@@ -1,8 +1,10 @@
 import contextlib
 import importlib.util
 import io
+import os
 import shlex
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -44,6 +46,51 @@ def apply_commands():
         ["sh", str(ROOT / "scripts" / "preflight.sh")],
         ["sh", str(ROOT / "scripts" / "backup.sh")],
         ["sh", str(ROOT / "scripts" / "install-xray-direct.sh"), "generated"],
+        ["sh", str(ROOT / "scripts" / "healthcheck.sh")],
+    ]
+
+
+def setup_local_commands(profiles, generated, target_root="/opt", include_wizard=True):
+    commands = []
+    if include_wizard:
+        commands.append(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "routerkit-wizard.py"),
+                "--profiles",
+                profiles,
+                "--no-generator-prompt",
+            ]
+        )
+    commands.extend(
+        [
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "generate-xray-profiles.py"),
+                "--profiles",
+                profiles,
+                "--out",
+                generated,
+            ],
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "routerkit-plan.py"),
+                "--generated",
+                generated,
+                "--target-root",
+                target_root,
+                "--strict",
+            ],
+        ]
+    )
+    return commands
+
+
+def setup_apply_commands(generated):
+    return [
+        ["sh", str(ROOT / "scripts" / "preflight.sh")],
+        ["sh", str(ROOT / "scripts" / "backup.sh")],
+        ["sh", str(ROOT / "scripts" / "install-xray-direct.sh"), generated],
         ["sh", str(ROOT / "scripts" / "healthcheck.sh")],
     ]
 
@@ -427,6 +474,413 @@ class RouterkitCliCommandTests(unittest.TestCase):
 
         self.assertEqual(code, 2)
         self.assertIn("Autostart enabling will be added", stderr.getvalue())
+
+
+class RouterkitSetupTests(unittest.TestCase):
+    def test_missing_profiles_runs_wizard_generate_plan_in_exact_order(self):
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = str(Path(tmp) / "profiles.json")
+            generated = str(Path(tmp) / "generated")
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.main(
+                        [
+                            "--repo-root",
+                            str(ROOT),
+                            "setup",
+                            "--profiles",
+                            profiles,
+                            "--generated",
+                            generated,
+                        ]
+                    )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated),
+        )
+        output = stdout.getvalue()
+        self.assertIn("Setup plan completed.", output)
+        self.assertIn("No router apply steps were executed.", output)
+        self.assertIn("Use --apply to continue through preflight, backup, install, and healthcheck.", output)
+
+    def test_existing_profiles_skips_wizard_and_reuses_path_without_reading_contents(self):
+        synthetic_secret = "SYNTHETIC_PRIVATE_VALUE_123"
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text(synthetic_secret, encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.main(
+                        [
+                            "--repo-root",
+                            str(ROOT),
+                            "setup",
+                            "--profiles",
+                            profiles,
+                            "--generated",
+                            generated,
+                        ]
+                    )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated, include_wizard=False),
+        )
+        self.assertIn(f"Reusing existing profiles file: {profiles}", stdout.getvalue())
+        self.assertNotIn(synthetic_secret, stdout.getvalue())
+
+    def test_force_wizard_runs_wizard_for_existing_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            args = cli.parse_args(
+                [
+                    "setup",
+                    "--profiles",
+                    profiles,
+                    "--generated",
+                    generated,
+                    "--force-wizard",
+                ]
+            )
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                code = cli.run_setup(args, ROOT)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated),
+        )
+
+    def test_apply_refusal_stops_before_router_apply(self):
+        stdout = io.StringIO()
+        input_fn = mock.Mock(return_value="")
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            args = cli.parse_args(
+                ["setup", "--profiles", profiles, "--generated", generated, "--apply"]
+            )
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.run_setup(args, ROOT, input_fn=input_fn)
+
+        self.assertEqual(code, 1)
+        input_fn.assert_called_once_with("Proceed with router apply stages? [y/N]: ")
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated, include_wizard=False),
+        )
+        self.assertIn("Cancelled before router apply.", stdout.getvalue())
+        self.assertIn("no router apply stages were started", stdout.getvalue())
+
+    def test_apply_confirmation_runs_full_order_without_duplicate_plan(self):
+        stdout = io.StringIO()
+        input_fn = mock.Mock(return_value="yes")
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            args = cli.parse_args(
+                ["setup", "--profiles", profiles, "--generated", generated, "--apply"]
+            )
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.run_setup(args, ROOT, input_fn=input_fn)
+
+        expected = setup_local_commands(profiles, generated, include_wizard=False) + setup_apply_commands(generated)
+        self.assertEqual(code, 0)
+        self.assertEqual([call.args[0] for call in run.call_args_list], expected)
+        self.assertEqual(sum("routerkit-plan.py" in command[1] for command in expected), 1)
+        self.assertIn("Setup apply completed.", stdout.getvalue())
+
+    def test_apply_yes_skips_confirmation_but_runs_all_safety_steps(self):
+        input_fn = mock.Mock(side_effect=AssertionError("confirmation must not be requested"))
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            args = cli.parse_args(
+                ["setup", "--profiles", profiles, "--generated", generated, "--apply", "--yes"]
+            )
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                code = cli.run_setup(args, ROOT, input_fn=input_fn)
+
+        self.assertEqual(code, 0)
+        input_fn.assert_not_called()
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated, include_wizard=False) + setup_apply_commands(generated),
+        )
+
+    def test_yes_without_apply_returns_two_without_execution(self):
+        stderr = io.StringIO()
+        with mock.patch.object(cli.subprocess, "run") as run:
+            with contextlib.redirect_stderr(stderr):
+                code = cli.main(["--repo-root", str(ROOT), "setup", "--yes"])
+
+        self.assertEqual(code, 2)
+        run.assert_not_called()
+        self.assertIn("setup --yes requires --apply", stderr.getvalue())
+
+    def test_apply_rejects_custom_target_root_without_execution(self):
+        stderr = io.StringIO()
+        with mock.patch.object(cli.subprocess, "run") as run:
+            with contextlib.redirect_stderr(stderr):
+                code = cli.main(
+                    [
+                        "--repo-root",
+                        str(ROOT),
+                        "setup",
+                        "--target-root",
+                        "/tmp/routerkit-target",
+                        "--apply",
+                    ]
+                )
+
+        self.assertEqual(code, 2)
+        run.assert_not_called()
+        self.assertIn("setup --apply currently supports only --target-root /opt", stderr.getvalue())
+
+    def test_plan_only_allows_custom_target_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = str(Path(tmp) / "profiles.json")
+            generated = str(Path(tmp) / "generated")
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                code = cli.main(
+                    [
+                        "--repo-root",
+                        str(ROOT),
+                        "setup",
+                        "--profiles",
+                        profiles,
+                        "--generated",
+                        generated,
+                        "--target-root",
+                        "/tmp/routerkit-target",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated, target_root="/tmp/routerkit-target"),
+        )
+
+    def test_dry_run_missing_profiles_prints_pipeline_without_side_effects(self):
+        for dry_run_position in ("global", "subcommand"):
+            with self.subTest(dry_run_position=dry_run_position):
+                stdout = io.StringIO()
+                with tempfile.TemporaryDirectory() as tmp:
+                    profiles_path = Path(tmp) / "profiles.json"
+                    generated_path = Path(tmp) / "generated"
+                    base = [
+                        "--repo-root",
+                        str(ROOT),
+                        "setup",
+                        "--profiles",
+                        str(profiles_path),
+                        "--generated",
+                        str(generated_path),
+                        "--apply",
+                    ]
+                    if dry_run_position == "global":
+                        argv = ["--repo-root", str(ROOT), "--dry-run"] + base[2:]
+                    else:
+                        argv = base + ["--dry-run"]
+                    with mock.patch.object(cli.subprocess, "run") as run:
+                        with mock.patch.object(
+                            cli,
+                            "confirm_setup_apply",
+                            side_effect=AssertionError("input must not be requested"),
+                        ):
+                            with contextlib.redirect_stdout(stdout):
+                                code = cli.main(argv)
+
+                    self.assertEqual(code, 0)
+                    run.assert_not_called()
+                    self.assertFalse(profiles_path.exists())
+                    self.assertFalse(generated_path.exists())
+                    output = stdout.getvalue()
+                    self.assertIn("Would run setup pipeline:", output)
+                    self.assertIn("routerkit-wizard.py", output)
+                    self.assertIn("3. python3 scripts/routerkit-plan.py", output)
+                    self.assertIn("4. confirmation gate", output)
+                    self.assertIn("8. sh scripts/healthcheck.sh", output)
+
+    def test_dry_run_existing_profiles_reuses_without_wizard_or_secret_output(self):
+        synthetic_secret = "SYNTHETIC_PRIVATE_VALUE_456"
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text(synthetic_secret, encoding="utf-8")
+            generated_path = Path(tmp) / "generated"
+            with mock.patch.object(cli.subprocess, "run") as run:
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.main(
+                        [
+                            "--repo-root",
+                            str(ROOT),
+                            "setup",
+                            "--profiles",
+                            str(profiles_path),
+                            "--generated",
+                            str(generated_path),
+                            "--dry-run",
+                        ]
+                    )
+
+        self.assertEqual(code, 0)
+        run.assert_not_called()
+        self.assertFalse(generated_path.exists())
+        output = stdout.getvalue()
+        self.assertIn(f"Reusing existing profiles file: {profiles_path}", output)
+        self.assertNotIn("routerkit-wizard.py", output)
+        self.assertNotIn(synthetic_secret, output)
+
+    def test_default_apply_dry_run_renders_expected_pipeline(self):
+        stdout = io.StringIO()
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with mock.patch.object(cli.subprocess, "run") as run:
+                    with contextlib.redirect_stdout(stdout):
+                        code = cli.main(
+                            ["--repo-root", str(ROOT), "--dry-run", "setup", "--apply"]
+                        )
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(code, 0)
+        run.assert_not_called()
+        self.assertEqual(
+            stdout.getvalue(),
+            "\n".join(
+                [
+                    "Would run setup pipeline:",
+                    "1. python3 scripts/routerkit-wizard.py --profiles profiles.json --no-generator-prompt",
+                    "2. python3 scripts/generate-xray-profiles.py --profiles profiles.json --out generated",
+                    "3. python3 scripts/routerkit-plan.py --generated generated --target-root /opt --strict",
+                    "4. confirmation gate",
+                    "5. sh scripts/preflight.sh",
+                    "6. sh scripts/backup.sh",
+                    "7. sh scripts/install-xray-direct.sh generated",
+                    "8. sh scripts/healthcheck.sh",
+                ]
+            )
+            + "\n",
+        )
+
+    def test_wizard_failure_stops_setup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = str(Path(tmp) / "profiles.json")
+            generated = str(Path(tmp) / "generated")
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(17)) as run:
+                code = cli.main(
+                    [
+                        "--repo-root",
+                        str(ROOT),
+                        "setup",
+                        "--profiles",
+                        profiles,
+                        "--generated",
+                        generated,
+                    ]
+                )
+
+        self.assertEqual(code, 17)
+        self.assertEqual([call.args[0] for call in run.call_args_list], setup_local_commands(profiles, generated)[:1])
+
+    def test_generator_failure_stops_before_plan_and_apply(self):
+        input_fn = mock.Mock(side_effect=AssertionError("input must not be requested"))
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            args = cli.parse_args(
+                ["setup", "--profiles", profiles, "--generated", generated, "--apply"]
+            )
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(18)) as run:
+                code = cli.run_setup(args, ROOT, input_fn=input_fn)
+
+        self.assertEqual(code, 18)
+        input_fn.assert_not_called()
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated, include_wizard=False)[:1],
+        )
+
+    def test_plan_failure_stops_before_confirmation_and_apply(self):
+        input_fn = mock.Mock(side_effect=AssertionError("input must not be requested"))
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            args = cli.parse_args(
+                ["setup", "--profiles", profiles, "--generated", generated, "--apply"]
+            )
+            with mock.patch.object(
+                cli.subprocess,
+                "run",
+                side_effect=[completed(0), completed(19)],
+            ) as run:
+                code = cli.run_setup(args, ROOT, input_fn=input_fn)
+
+        self.assertEqual(code, 19)
+        input_fn.assert_not_called()
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            setup_local_commands(profiles, generated, include_wizard=False),
+        )
+
+    def test_successful_apply_summary_states_all_non_actions_without_secrets(self):
+        synthetic_secret = "SYNTHETIC_PRIVATE_VALUE_789"
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text(synthetic_secret, encoding="utf-8")
+            args = cli.parse_args(
+                [
+                    "setup",
+                    "--profiles",
+                    str(profiles_path),
+                    "--generated",
+                    str(Path(tmp) / "generated"),
+                    "--apply",
+                    "--yes",
+                ]
+            )
+            with mock.patch.object(cli.subprocess, "run", return_value=completed(0)):
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.run_setup(args, ROOT)
+
+        self.assertEqual(code, 0)
+        output = stdout.getvalue()
+        for expected in (
+            "Setup apply completed.",
+            "Autostart was not enabled.",
+            "Netcraze proxy connections and policies were not changed.",
+            "Firewall rules were not changed.",
+            "xkeen -start was not called.",
+        ):
+            self.assertIn(expected, output)
+        self.assertNotIn(synthetic_secret, output)
 
 
 class RouterkitCliParseTests(unittest.TestCase):
