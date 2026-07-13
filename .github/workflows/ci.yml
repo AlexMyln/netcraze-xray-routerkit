@@ -23,6 +23,8 @@ jobs:
 
       - name: Python syntax
         run: |
+          python3 -m py_compile scripts/routerkit_profile_source.py
+          python3 -m py_compile scripts/routerkit-profile-source.py
           python3 -m py_compile scripts/generate-xray-profiles.py
           python3 -m py_compile scripts/routerkit-wizard.py
           python3 -m py_compile scripts/routerkit-plan.py

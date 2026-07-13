@@ -1,0 +1,25 @@
+{
+  "nodes": [
+    {
+      "label": "Example Alpha",
+      "host": "alpha.example",
+      "port": 443,
+      "key_character": "A",
+      "short_id_pair": "00"
+    },
+    {
+      "label": "Example Beta",
+      "host": "beta.example",
+      "port": 8443,
+      "key_character": "B",
+      "short_id_pair": "11"
+    },
+    {
+      "label": "Example Gamma",
+      "host": "gamma.example",
+      "port": 9443,
+      "key_character": "C",
+      "short_id_pair": "22"
+    }
+  ]
+}

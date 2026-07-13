@@ -52,6 +52,26 @@ python3 scripts/routerkit.py --dry-run plan --generated generated --strict
 
 Wrapper не автоматизирует Netcraze Web UI, не создаёт firewall rules, не вызывает `xkeen -start` и не делает скрытых изменений в `/opt`. Команда `backup` делегирует запуск `scripts/backup.sh`; backup archives могут содержать secrets, их нельзя публиковать.
 
+## Offline profile-source core
+
+Команда `profile-source` проверяет локальный payload и создаёт совместимый с generator приватный `profiles.json`:
+
+```sh
+python3 scripts/routerkit.py profile-source
+python3 scripts/routerkit.py profile-source --source-env ROUTERKIT_PROFILE_SOURCE
+python3 scripts/routerkit.py profile-source --source-file /private/path/payload.txt --list
+python3 scripts/routerkit.py profile-source --source-file /private/path/payload.txt --list --json
+python3 scripts/routerkit.py profile-source --source-file /private/path/payload.txt --primary-index 1 --fallback-index 2 --yes
+```
+
+Источник принимается через hidden interactive input, имя environment variable или regular local UTF-8 file. Обычного CLI-аргумента для raw secret value намеренно нет. Parser поддерживает raw VLESS link, newline-separated links, Base64 subscription text, string values во вложенном JSON и Base64-decoded JSON. Размер payload/decoded data, глубина JSON и число candidates ограничены.
+
+Compatibility намеренно узкая: VLESS с синтаксически корректным UUID, endpoint и port; Reality security; TCP transport (`raw` нормализуется в `tcp`); структурно допустимый Base64URL-style Reality public key; пустой либо hexadecimal short ID чётной длины до 16 символов; пустой flow либо `xtls-rprx-vision`. SNI внутри parser по умолчанию берётся из endpoint host, а spider path нормализуется с начальным `/`. Совместимые nodes дедуплицируются детерминированно.
+
+Нумерованный список secret-safe и очищает недоверенные fragments. Он не печатает raw payload, link, UUID, host, SNI, public key, short ID или spider path. Нужно выбрать ровно один primary и ноль, один или два fallback. Профили получают имена `primary`, `fallback-1`, `fallback-2` и локальные SOCKS ports `1082`, `1083`, `1084`. Output атомарно заменяется только после явного разрешения и получает mode `0600` на POSIX. `--list` и `--dry-run` ничего не записывают; `--yes` не подразумевает `--force`.
+
+HTTPS source отклоняется без загрузки со ссылкой на #23; другие URL schemes также отклоняются. HTTPS/shortlink resolution остаётся в #23, автоматическая setup integration — в #24. Существующий путь `routerkit setup` этой offline-командой не изменён.
+
 ## Что делает wizard
 
 `scripts/routerkit-wizard.py` помогает создать локальный `profiles.json` без ручного редактирования JSON.

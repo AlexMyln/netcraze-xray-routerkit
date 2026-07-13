@@ -79,6 +79,30 @@ def validate_setup_args(args: argparse.Namespace) -> None:
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
     repo_root = Path(repo_root)
 
+    if args.command == "profile-source":
+        command = [sys.executable, _repo_script(repo_root, "routerkit-profile-source.py")]
+        if args.source_env:
+            command.extend(["--source-env", args.source_env])
+        if args.source_file:
+            command.extend(["--source-file", args.source_file])
+        if args.output != "profiles.json":
+            command.extend(["--output", args.output])
+        if args.list:
+            command.append("--list")
+        if args.json:
+            command.append("--json")
+        if args.primary_index is not None:
+            command.extend(["--primary-index", str(args.primary_index)])
+        for index in args.fallback_index:
+            command.extend(["--fallback-index", str(index)])
+        if args.dry_run:
+            command.append("--dry-run")
+        if args.yes:
+            command.append("--yes")
+        if args.force:
+            command.append("--force")
+        return command
+
     if args.command == "bootstrap":
         command = [sys.executable, _repo_script(repo_root, "routerkit-bootstrap.py")]
         if args.manifest:
@@ -527,6 +551,30 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     generate.add_argument("--profiles", required=True, help="Path to profiles JSON.")
     generate.add_argument("--out", required=True, help="Output directory.")
 
+    profile_source = subparsers.add_parser(
+        "profile-source",
+        help="Parse local VLESS payloads and select compatible nodes offline.",
+        description="Parse local VLESS payloads and select compatible nodes offline.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    profile_source_modes = profile_source.add_mutually_exclusive_group()
+    profile_source_modes.add_argument("--source-env", metavar="ENV_NAME")
+    profile_source_modes.add_argument("--source-file", metavar="PATH")
+    profile_source.add_argument("--output", default="profiles.json")
+    profile_source.add_argument("--list", action="store_true")
+    profile_source.add_argument("--json", action="store_true")
+    profile_source.add_argument("--primary-index", type=int)
+    profile_source.add_argument("--fallback-index", type=int, action="append", default=[])
+    profile_source.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Parse and select nodes without writing a profiles file.",
+    )
+    profile_source.add_argument("--yes", action="store_true")
+    profile_source.add_argument("--force", action="store_true")
+
     setup = subparsers.add_parser(
         "setup",
         help="Run the local setup plan; use --apply for confirmed router apply stages.",
@@ -703,10 +751,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return exc.exit_code
     if args.command == "install" and not args.apply and not args.dry_run:
         print(INSTALL_PLAN_NOTICE)
-    # Bootstrap owns its dry-run semantics: both default and --dry-run execute
-    # the same read-only inspection and plan rendering. Other commands retain
-    # the wrapper-level command-preview behavior.
-    wrapper_dry_run = args.dry_run and args.command != "bootstrap"
+    # Bootstrap and profile-source own their dry-run semantics. Profile-source
+    # must still parse and validate while guaranteeing that it writes nothing.
+    wrapper_dry_run = args.dry_run and args.command not in {"bootstrap", "profile-source"}
     code = run_steps(steps, dry_run=wrapper_dry_run, repo_root=repo_root)
     if code == 0 and args.command == "install" and args.apply and not args.dry_run:
         print_apply_summary(steps)

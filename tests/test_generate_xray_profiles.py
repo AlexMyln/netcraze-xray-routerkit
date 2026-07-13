@@ -1,7 +1,10 @@
 import base64
 import importlib.util
 import json
+import sys
+import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 
@@ -20,19 +23,20 @@ def load_module():
 generator = load_module()
 
 
-def fake_vless_link(name="Example", host="example.net", security="reality", network="tcp"):
+def fake_vless_link(name="Example", host="example.net", security="reality", network="tcp", user_id=None):
     scheme = "vl" + "ess"
+    user_id = user_id or str(uuid.uuid4())
     query_parts = [
         f"security={security}",
         f"type={network}",
         "fp=chrome",
-        ("pb" + "k") + "=example-public-key-for-tests",
+        ("pb" + "k") + "=" + "A" * 43,
         ("si" + "d") + "=00",
         f"sni={host}",
         "flow=xtls-rprx-vision",
     ]
     query = "&".join(query_parts)
-    return f"{scheme}://example-user@{host}:443?{query}#{name}"
+    return f"{scheme}://{user_id}@{host}:443?{query}#{name}"
 
 
 class ExtractVlessLinksTests(unittest.TestCase):
@@ -64,7 +68,7 @@ class ParseVlessTests(unittest.TestCase):
         self.assertEqual(node["network"], "tcp")
         self.assertEqual(node["sni"], "example.net")
         self.assertEqual(node["fp"], "chrome")
-        self.assertEqual(node["pbk"], "example-public-key-for-tests")
+        self.assertEqual(node["pbk"], "A" * 43)
         self.assertEqual(node["sid"], "00")
         self.assertEqual(node["flow"], "xtls-rprx-vision")
 
@@ -128,6 +132,32 @@ class BuildConfigTests(unittest.TestCase):
                 {"type": "field", "inboundTag": ["socks-beta"], "outboundTag": "vless-beta"},
             ],
         )
+
+    def test_profiles_document_from_shared_core_generates_three_fragments(self):
+        import routerkit_profile_source as core
+
+        nodes = [core.parse_vless(fake_vless_link(name=name, host=f"{name}.example")) for name in ("one", "two", "three")]
+        document = core.build_profiles_document(core.select_nodes(nodes, 1, [2, 3]))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profiles = root / "profiles-input.json"
+            output = root / "generated"
+            core.write_private_json(profiles, document)
+            old_argv = sys.argv
+            try:
+                sys.argv = ["generate-xray-profiles.py", "--profiles", str(profiles), "--out", str(output)]
+                self.assertEqual(generator.main(), 0)
+            finally:
+                sys.argv = old_argv
+            self.assertEqual(
+                sorted(path.name for path in output.iterdir()),
+                ["03_inbounds.json", "04_outbounds.json", "05_routing.json"],
+            )
+
+    def test_generator_reexports_shared_parser(self):
+        import routerkit_profile_source as core
+
+        self.assertIs(generator.parse_vless, core.parse_vless)
 
 
 if __name__ == "__main__":
