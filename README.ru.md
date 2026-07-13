@@ -98,9 +98,25 @@ python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap
 
 Planner фиксирует явные соответствия команд пакетам Entware; в частности, `sha256sum` планируется через `coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена пакетов относятся к документированному начальному Entware-окружению arm64/aarch64 и всё ещё требуют hardware validation. Планирование остаётся read-only, а установка пакетов — более поздним slice #13.
 
-`setup` — первый implementation slice дорожной карты one-command installer. Команда объединяет существующие стадии wizard, локальной генерации, strict plan, явного apply confirmation, preflight, backup, install и healthcheck. Без `--apply` она останавливается после локальной генерации и успешного strict plan. С `--apply` она запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не safety stages.
+По умолчанию `setup` теперь использует завершённый стек profile-source. Источник передаётся через скрытый ввод, указанную environment variable или защищённый owner-only файл; HTTPS при необходимости безопасно разрешается; compatible nodes разбираются; выбирается один primary и до двух fallback. Setup сохраняет выбранные профили только в уникальном private workspace, подавляет вывод generator, сразу после генерации удаляет временные профили и запускает strict plan. Generated config fragments остаются локально и содержат secrets. Без `--apply` router apply stages не выполняются. С `--apply` setup запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не preflight, backup, install или healthcheck.
 
-Unified setup перехватывает и подавляет вывод generator, потому что он может содержать данные, производные от подписки или учётных данных; standalone generation сохраняет прежнее диагностическое поведение.
+Неинтерактивный выбор не помещает raw source в argv:
+
+```sh
+python3 scripts/routerkit.py setup --source-env ROUTERKIT_PROFILE_SOURCE --primary-index 1 --fallback-index 2
+python3 scripts/routerkit.py setup --source-file /protected/path/source.txt --primary-index 1
+```
+
+Reuse готовых профилей и legacy wizard доступны только как явные advanced modes:
+
+```sh
+python3 scripts/routerkit.py setup --reuse-profiles /protected/path/profiles.json
+python3 scripts/routerkit.py setup --legacy-wizard
+```
+
+Старые варианты `--profiles` и `--force-wizard` остаются deprecated aliases для этих явных режимов. Setup больше не обнаруживает и не переиспользует `./profiles.json` случайно. Reuse отклоняет symlink, не-regular file, не-owner-only POSIX permissions, слишком большой или не-UTF-8 content и изменения identity между path и descriptor; проверенный input копируется в setup workspace, а оригинал не изменяется и не передаётся generator.
+
+`setup --dry-run` абстрактный и secret-free: без prompt, чтения input/environment/file, DNS или HTTPS request, subprocess, temporary directory, file write или router action. Это намеренно строже standalone `profile-source --dry-run`, который может получить HTTPS source, но не записывает profiles.
 
 Это milestone, а не финальная реализация [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). Read-only planner/manifest закрывает [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), а bootstrap apply остаётся в [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13). Autostart — #14, Netcraze proxy/policy — #15, hardware validation всё ещё заблокирован #16. `setup` пока не вызывает `bootstrap`.
 
@@ -119,7 +135,7 @@ python3 scripts/routerkit.py profile-source --source-file /private/path/payload.
 
 Network acquisition принимает только HTTPS на port 443, без URL userinfo и fragments. Outer whitespace вокруг одного полного HTTPS source одинаково удаляется для hidden input, environment, защищённого file и generator, поэтому окончания LF/CRLF работают; internal whitespace, control characters, multiple lines и empty values отклоняются, а raw/offline payload не меняется. Каждый HTTP `Location` redirect отдельно проходит URL validation и DNS resolution; все адреса в ответе должны пройти fixed reviewed special-purpose CIDR tables и дополнительные defense-in-depth проверки standard-library `ipaddress`, TCP connection закрепляется за validated address, TLS продолжает проверять original hostname, а connected peer сверяется. IPv4-mapped IPv6, стандартизованные NAT64, Teredo, 6to4 и ORCHID ranges консервативно запрещены. Обычная cancellation прекращает retries и redirects, после чего выполняются ограниченные best-effort попытки cleanup ресурсов. Лимиты: 5 redirects, 16 DNS addresses на hop, 5 секунд на DNS hop, 10 секунд на address connection, 30-секундный operational deadline плюс bounded cleanup grace, 8192 bytes на URL/redirect value и 1 MiB на response. Dedicated compatibility job на Python 3.8.18 и primary `3.x` выполняет destination/address-policy test class; полный suite запускается на основном CI Python. Compressed responses отклоняются. JavaScript не выполняется, а HTML meta refresh не интерпретируется, поэтому эти browser-style механизмы навигации не поддерживаются и не выполняются; финальный HTTP 200 body вместо этого передаётся offline parser. `profile-source --dry-run` может выполнить network read и parsing, но не записывает `profiles.json`. Существующие поля generator `subscription_url` и `subscription_url_env` используют тот же resolver. Подробнее: [ADR безопасности сети](docs/architecture/profile-source-network-security.ru.md).
 
-Автоматическая default-интеграция с `setup` остаётся в [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24), parent [#20](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/20) остаётся открытым, обычное поведение `routerkit setup` не изменено.
+Default setup integration завершает [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24) и parent [#20](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/20). Bootstrap apply, autostart, device discovery, policies и hardware validation остаются отдельной работой.
 
 Отдельные команды также доступны:
 

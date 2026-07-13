@@ -10,12 +10,21 @@ hidden writes under /opt.
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
+import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
+
+from routerkit_private_io import (
+    PrivateFileError,
+    read_owner_only_text_file,
+    write_private_text_exclusive,
+)
 
 INSTALL_PLAN_NOTICE = (
     "Install is running in plan-only mode.\n"
@@ -32,6 +41,8 @@ INSTALL_APPLY_TARGET_ROOT_MESSAGE = "install --apply currently supports only --t
 SETUP_APPLY_TARGET_ROOT_MESSAGE = "setup --apply currently supports only --target-root /opt."
 
 SETUP_YES_REQUIRES_APPLY_MESSAGE = "setup --yes requires --apply."
+
+MAX_REUSE_PROFILES_BYTES = 1024 * 1024
 
 SKIP_FLAGS_REQUIRE_APPLY_MESSAGE = (
     "--skip-preflight, --skip-backup, and --skip-healthcheck require --apply."
@@ -50,6 +61,45 @@ class CommandStep:
     command: List[str]
     rollback_relevant: bool = False
     suppress_output: bool = False
+    cwd: Optional[Path] = None
+
+
+class SetupCleanupError(Exception):
+    pass
+
+
+@dataclass
+class SetupSecretWorkspace:
+    directory: Path
+    profiles_path: Path
+
+    def cleanup(self) -> None:
+        errors: List[OSError] = []
+        try:
+            entries = list(self.directory.iterdir())
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            entries = []
+            errors.append(exc)
+        if len(entries) > 32:
+            entries = entries[:32]
+            errors.append(OSError("too many private workspace entries"))
+        for entry in entries:
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                errors.append(exc)
+        try:
+            self.directory.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            errors.append(exc)
+        if errors:
+            raise SetupCleanupError("private setup workspace cleanup failed")
 
 
 def repo_root_from_script() -> Path:
@@ -70,10 +120,45 @@ def validate_install_args(args: argparse.Namespace) -> None:
 
 
 def validate_setup_args(args: argparse.Namespace) -> None:
+    source_options = bool(args.source_env or args.source_file)
+    indexes = ([] if args.primary_index is None else [args.primary_index]) + args.fallback_index
+    reuse_requested = bool(args.reuse_profiles or args.deprecated_profiles)
+    legacy_requested = bool(args.legacy_wizard or args.deprecated_force_wizard)
+
+    if args.source_env and args.source_file:
+        raise RouterkitCliError("--source-env and --source-file are mutually exclusive.")
+    if args.reuse_profiles and args.deprecated_profiles:
+        raise RouterkitCliError("--profiles conflicts with --reuse-profiles.")
+    if args.legacy_wizard and args.deprecated_force_wizard:
+        raise RouterkitCliError("--force-wizard conflicts with --legacy-wizard.")
+    if reuse_requested and (source_options or indexes or legacy_requested):
+        raise RouterkitCliError(
+            "Existing-profiles reuse conflicts with source options, node indexes, and legacy wizard mode."
+        )
+    if legacy_requested and (source_options or indexes):
+        raise RouterkitCliError("Legacy wizard mode conflicts with source options and node indexes.")
+    if args.fallback_index and args.primary_index is None:
+        raise RouterkitCliError("--fallback-index requires --primary-index.")
+    if len(args.fallback_index) > 2:
+        raise RouterkitCliError("At most two --fallback-index values are allowed.")
+    if len(indexes) != len(set(indexes)):
+        raise RouterkitCliError("Primary and fallback indexes must be distinct.")
     if args.yes and not args.apply:
         raise RouterkitCliError(SETUP_YES_REQUIRES_APPLY_MESSAGE, exit_code=2)
     if args.apply and args.target_root != "/opt":
         raise RouterkitCliError(SETUP_APPLY_TARGET_ROOT_MESSAGE, exit_code=2)
+
+
+def setup_profile_mode(args: argparse.Namespace) -> str:
+    if args.reuse_profiles or args.deprecated_profiles:
+        return "reuse"
+    if args.legacy_wizard or args.deprecated_force_wizard:
+        return "legacy"
+    return "source"
+
+
+def setup_reuse_path(args: argparse.Namespace) -> Optional[str]:
+    return args.reuse_profiles or args.deprecated_profiles
 
 
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
@@ -226,55 +311,140 @@ def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List
     return steps
 
 
+def create_setup_workspace() -> SetupSecretWorkspace:
+    directory = Path(tempfile.mkdtemp(prefix="routerkit-setup-"))
+    try:
+        if os.name == "posix":
+            directory.chmod(0o700)
+            if stat.S_IMODE(directory.stat().st_mode) != 0o700:
+                raise OSError("private workspace permissions are not restrictive")
+        return SetupSecretWorkspace(directory=directory, profiles_path=directory / "profiles.json")
+    except OSError:
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+        raise
+
+
+def secure_copy_reuse_profiles(source: Path, destination: Path) -> None:
+    text = read_owner_only_text_file(
+        Path(source),
+        maximum_bytes=MAX_REUSE_PROFILES_BYTES,
+        description="Profiles file",
+    )
+    write_private_text_exclusive(Path(destination), text)
+
+
+def build_profile_source_step(
+    args: argparse.Namespace,
+    repo_root: Path,
+    private_profiles_path: Path,
+) -> CommandStep:
+    repo_root = Path(repo_root)
+    command = [
+        sys.executable,
+        _repo_script(repo_root, "routerkit-profile-source.py"),
+        "--output",
+        str(private_profiles_path),
+        "--yes",
+    ]
+    if args.source_env:
+        command.extend(["--source-env", args.source_env])
+    if args.source_file:
+        command.extend(["--source-file", args.source_file])
+    if args.primary_index is not None:
+        command.extend(["--primary-index", str(args.primary_index)])
+    for index in args.fallback_index:
+        command.extend(["--fallback-index", str(index)])
+    return CommandStep("profile source", command)
+
+
+def build_legacy_wizard_step(repo_root: Path, workspace: SetupSecretWorkspace) -> CommandStep:
+    return CommandStep(
+        "legacy wizard",
+        [
+            sys.executable,
+            _repo_script(Path(repo_root), "routerkit-wizard.py"),
+            "--profiles",
+            workspace.profiles_path.name,
+            "--no-generator-prompt",
+        ],
+        cwd=workspace.directory,
+    )
+
+
+def build_generator_step(
+    repo_root: Path,
+    private_profiles_path: Path,
+    generated: str,
+) -> CommandStep:
+    return CommandStep(
+        "generator",
+        [
+            sys.executable,
+            _repo_script(Path(repo_root), "generate-xray-profiles.py"),
+            "--profiles",
+            str(private_profiles_path),
+            "--out",
+            generated,
+        ],
+        suppress_output=True,
+    )
+
+
+def build_strict_plan_step(repo_root: Path, generated: str, target_root: str) -> CommandStep:
+    return CommandStep(
+        "strict plan",
+        [
+            sys.executable,
+            _repo_script(Path(repo_root), "routerkit-plan.py"),
+            "--generated",
+            generated,
+            "--target-root",
+            target_root,
+            "--strict",
+        ],
+    )
+
+
+def _ensure_private_setup_profiles(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise OSError("not a regular file")
+        if os.name == "posix":
+            path.chmod(0o600)
+            metadata = path.lstat()
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISREG(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ):
+                raise OSError("permissions are not private")
+    except OSError:
+        raise PrivateFileError("Private setup profiles were not created safely.") from None
+
+
 def build_setup_steps(
     args: argparse.Namespace,
     repo_root: Path,
-    profiles_exists: bool,
+    private_profiles_path: Path,
+    workspace: Optional[SetupSecretWorkspace] = None,
 ) -> List[CommandStep]:
+    """Build executable setup child steps; cleanup still separates generator and plan."""
+
     validate_setup_args(args)
-    repo_root = Path(repo_root)
+    mode = setup_profile_mode(args)
     steps: List[CommandStep] = []
-    if args.force_wizard or not profiles_exists:
-        steps.append(
-            CommandStep(
-                "wizard",
-                [
-                    sys.executable,
-                    _repo_script(repo_root, "routerkit-wizard.py"),
-                    "--profiles",
-                    args.profiles,
-                    "--no-generator-prompt",
-                ],
-            )
-        )
-    steps.extend(
-        [
-            CommandStep(
-                "generator",
-                [
-                    sys.executable,
-                    _repo_script(repo_root, "generate-xray-profiles.py"),
-                    "--profiles",
-                    args.profiles,
-                    "--out",
-                    args.generated,
-                ],
-                suppress_output=True,
-            ),
-            CommandStep(
-                "strict plan",
-                [
-                    sys.executable,
-                    _repo_script(repo_root, "routerkit-plan.py"),
-                    "--generated",
-                    args.generated,
-                    "--target-root",
-                    args.target_root,
-                    "--strict",
-                ],
-            ),
-        ]
-    )
+    if mode == "source":
+        steps.append(build_profile_source_step(args, repo_root, private_profiles_path))
+    elif mode == "legacy":
+        if workspace is None:
+            raise ValueError("legacy setup steps require a private workspace")
+        steps.append(build_legacy_wizard_step(repo_root, workspace))
+    steps.append(build_generator_step(repo_root, private_profiles_path, args.generated))
+    steps.append(build_strict_plan_step(repo_root, args.generated, args.target_root))
     return steps
 
 
@@ -307,6 +477,51 @@ def render_steps(steps: Sequence[CommandStep], repo_root: Optional[Path] = None)
     return "\n".join(lines)
 
 
+def render_setup_pipeline(args: argparse.Namespace) -> str:
+    mode = setup_profile_mode(args)
+    generator_stage = (
+        "run generator with secret-bearing output suppressed "
+        f"(generated output: {shlex.quote(args.generated)})"
+    )
+    plan_stage = f"run strict plan (target root: {shlex.quote(args.target_root)})"
+    lines = ["Would run setup pipeline:"]
+    if mode == "source":
+        stages = [
+            "acquire profile source (hidden/env/protected file)",
+            "resolve HTTPS source if needed",
+            "parse compatible nodes and select primary/fallback profiles",
+            "create private setup profiles",
+            generator_stage,
+            "remove private setup profiles",
+            plan_stage,
+        ]
+    elif mode == "reuse":
+        stages = [
+            "securely copy explicit private profiles file into setup workspace",
+            generator_stage,
+            "remove private setup profiles",
+            plan_stage,
+        ]
+    else:
+        stages = [
+            "run legacy profiles wizard in private setup workspace",
+            generator_stage,
+            "remove private setup profiles",
+            plan_stage,
+        ]
+    for index, stage in enumerate(stages, start=1):
+        lines.append(f"{index}. {stage}")
+    index = len(stages) + 1
+    if args.apply:
+        if not args.yes:
+            lines.append(f"{index}. confirmation gate")
+            index += 1
+        for stage in ("preflight", "backup", "install", "healthcheck"):
+            lines.append(f"{index}. {stage}")
+            index += 1
+    return "\n".join(lines)
+
+
 def render_setup_steps(
     steps: Sequence[CommandStep],
     repo_root: Path,
@@ -314,21 +529,20 @@ def render_setup_steps(
     include_apply: bool,
     include_confirmation: bool,
 ) -> str:
-    lines = ["Would run setup pipeline:"]
-    index = 1
-    for step in steps:
-        command = [_render_token(token, repo_root) for token in step.command]
-        lines.append(f"{index}. {shlex.join(command)}")
-        index += 1
-    if include_apply:
-        if include_confirmation:
-            lines.append(f"{index}. confirmation gate")
-            index += 1
-        for step in build_router_apply_steps(generated, repo_root):
-            command = [_render_token(token, repo_root) for token in step.command]
-            lines.append(f"{index}. {shlex.join(command)}")
-            index += 1
-    return "\n".join(lines)
+    """Deprecated compatibility wrapper for callers using the older renderer."""
+
+    del steps, repo_root
+    args = argparse.Namespace(
+        reuse_profiles=None,
+        deprecated_profiles=None,
+        legacy_wizard=False,
+        deprecated_force_wizard=False,
+        apply=include_apply,
+        yes=not include_confirmation,
+        generated=generated,
+        target_root="/opt",
+    )
+    return render_setup_pipeline(args)
 
 
 def confirm_setup_apply(input_fn=input) -> bool:
@@ -336,23 +550,36 @@ def confirm_setup_apply(input_fn=input) -> bool:
     return answer in {"y", "yes"}
 
 
-def print_setup_plan_summary() -> None:
+def _print_setup_source_summary(mode: str) -> None:
+    if mode == "reuse":
+        print("Explicit private profiles were securely reused.")
+    elif mode == "legacy":
+        print("Legacy wizard profile input completed.")
+    else:
+        print("Profile source acquisition, parsing, and selection completed.")
+    print("Profiles were generated through a private setup workspace.")
+    print("Private setup profiles were removed.")
+    print("Generated config fragments remain locally and may contain secrets; do not publish them.")
+
+
+def print_setup_plan_summary(mode: str = "source") -> None:
     print("Setup plan completed.")
+    _print_setup_source_summary(mode)
     print("No router apply steps were executed.")
     print("Use --apply to continue through preflight, backup, install, and healthcheck.")
-    print("Autostart and Netcraze policy automation are not implemented in this phase.")
+    print("Bootstrap apply, autostart, device discovery, and policy automation remain pending.")
 
 
-def print_setup_apply_summary() -> None:
+def print_setup_apply_summary(mode: str = "source") -> None:
     print("Setup apply completed.")
-    print("Profiles were generated locally.")
+    _print_setup_source_summary(mode)
     print("Strict plan passed.")
     print("Preflight passed.")
     print("Backup completed.")
     print("Install completed.")
     print("Healthcheck passed.")
-    print("Autostart was not enabled.")
-    print("Netcraze proxy connections and policies were not changed.")
+    print("Autostart and device discovery were not enabled.")
+    print("Netcraze proxy connections, policies, and default policy were not changed.")
     print("Firewall rules were not changed.")
     print("xkeen -start was not called.")
 
@@ -360,31 +587,67 @@ def print_setup_apply_summary() -> None:
 def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
     validate_setup_args(args)
     repo_root = Path(repo_root)
-    profiles_exists = Path(args.profiles).exists()
-    steps = build_setup_steps(args, repo_root, profiles_exists)
-    reusing_profiles = profiles_exists and not args.force_wizard
-
-    if reusing_profiles:
-        print(f"Reusing existing profiles file: {args.profiles}")
+    mode = setup_profile_mode(args)
 
     if args.dry_run:
-        print(
-            render_setup_steps(
-                steps,
-                repo_root,
-                args.generated,
-                include_apply=args.apply,
-                include_confirmation=args.apply and not args.yes,
-            )
-        )
+        print(render_setup_pipeline(args))
         return 0
 
-    code = run_steps(steps)
+    try:
+        workspace = create_setup_workspace()
+    except OSError:
+        print("routerkit: could not create the private setup workspace.", file=sys.stderr)
+        return 1
+
+    code = 0
+    cleanup_failed = False
+    try:
+        if mode == "source":
+            code = run_steps([build_profile_source_step(args, repo_root, workspace.profiles_path)])
+        elif mode == "reuse":
+            reuse_path = setup_reuse_path(args)
+            if reuse_path is None:
+                raise AssertionError("reuse mode requires an explicit path")
+            try:
+                secure_copy_reuse_profiles(Path(reuse_path), workspace.profiles_path)
+            except PrivateFileError as exc:
+                print(f"routerkit: explicit profiles reuse was rejected: {exc}", file=sys.stderr)
+                code = 2
+        else:
+            code = run_steps([build_legacy_wizard_step(repo_root, workspace)])
+
+        if code == 0:
+            try:
+                _ensure_private_setup_profiles(workspace.profiles_path)
+            except PrivateFileError as exc:
+                print(f"routerkit: {exc}", file=sys.stderr)
+                code = 1
+        if code == 0:
+            code = run_steps(
+                [build_generator_step(repo_root, workspace.profiles_path, args.generated)]
+            )
+    finally:
+        try:
+            workspace.cleanup()
+        except SetupCleanupError:
+            cleanup_failed = True
+            print(
+                "Warning: private setup workspace cleanup failed. "
+                f"Remove it manually: {workspace.directory}",
+                file=sys.stderr,
+            )
+
+    if cleanup_failed:
+        return code if code != 0 else 1
+    if code != 0:
+        return code
+
+    code = run_steps([build_strict_plan_step(repo_root, args.generated, args.target_root)])
     if code != 0:
         return code
 
     if not args.apply:
-        print_setup_plan_summary()
+        print_setup_plan_summary(mode)
         return 0
 
     if not args.yes and not confirm_setup_apply(input_fn=input_fn):
@@ -395,7 +658,7 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
     apply_steps = build_router_apply_steps(args.generated, repo_root)
     code = run_steps(apply_steps)
     if code == 0:
-        print_setup_apply_summary()
+        print_setup_apply_summary(mode)
     return code
 
 
@@ -471,9 +734,14 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    cwd=str(step.cwd) if step.cwd is not None else None,
                 )
             else:
-                completed = subprocess.run(list(step.command), check=False)
+                completed = subprocess.run(
+                    list(step.command),
+                    check=False,
+                    cwd=str(step.cwd) if step.cwd is not None else None,
+                )
         except OSError as exc:
             if step.suppress_output:
                 print(f"routerkit: could not run {step.name}.", file=sys.stderr)
@@ -481,6 +749,8 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
                     "Generator output was suppressed to avoid exposing subscription or profile details.",
                     file=sys.stderr,
                 )
+            elif step.name in {"profile source", "legacy wizard"}:
+                print(f"routerkit: could not run {step.name}.", file=sys.stderr)
             else:
                 print(f"routerkit: could not run {step.name}: {exc}", file=sys.stderr)
             if step.name == "install":
@@ -578,13 +848,46 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     setup = subparsers.add_parser(
         "setup",
         help="Run the local setup plan; use --apply for confirmed router apply stages.",
-        description="Run wizard/reuse, generation, and strict planning before any optional apply stages.",
+        description=(
+            "Acquire/select profiles into a private workspace, generate configs, and run strict "
+            "planning before any optional apply stages."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    setup_source = setup.add_mutually_exclusive_group()
+    setup_source.add_argument(
+        "--source-env",
+        metavar="ENV_NAME",
+        help="Read the raw profile source from the named environment variable.",
+    )
+    setup_source.add_argument(
+        "--source-file",
+        metavar="PATH",
+        help="Read the raw profile source from a protected owner-only file.",
+    )
+    setup.add_argument("--primary-index", type=int, help="Select this compatible node as primary.")
+    setup.add_argument(
+        "--fallback-index",
+        type=int,
+        action="append",
+        default=[],
+        help="Select a fallback node; repeat at most twice and use with --primary-index.",
+    )
+    setup.add_argument(
+        "--reuse-profiles",
+        metavar="PATH",
+        help="Advanced: securely copy an explicit owner-only profiles file into setup workspace.",
     )
     setup.add_argument(
         "--profiles",
-        default="profiles.json",
-        help="Profiles file path; default: profiles.json.",
+        dest="deprecated_profiles",
+        metavar="PATH",
+        help="Deprecated explicit alias for --reuse-profiles; there is no implicit profiles.json reuse.",
+    )
+    setup.add_argument(
+        "--legacy-wizard",
+        action="store_true",
+        help="Compatibility: run the legacy profiles wizard inside the private setup workspace.",
     )
     setup.add_argument(
         "--generated",
@@ -608,15 +911,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     setup.add_argument(
         "--force-wizard",
+        dest="deprecated_force_wizard",
         action="store_true",
-        help="Run the wizard even when the profiles file already exists.",
+        help="Deprecated alias for --legacy-wizard.",
     )
     setup.add_argument(
         "--dry-run",
         dest="dry_run",
         action="store_true",
         default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
+        help="Render an abstract no-prompt, no-read, no-network, no-write setup pipeline.",
     )
 
     bootstrap = subparsers.add_parser(

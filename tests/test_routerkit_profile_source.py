@@ -701,7 +701,8 @@ class CliSafetyTests(unittest.TestCase):
                     code, stdout, stderr = self.run_cli(["--output", str(output)])
             self.assertEqual(code, 1)
             self.assertFalse(output.exists())
-            self.assertIn("Cancelled; no profiles file was written.", stderr)
+            self.assertIn("Cancelled; no further actions were taken.", stderr)
+            self.assertIn("Check whether the requested output file exists before retrying.", stderr)
             self.assertNotIn(source, stdout + stderr)
 
     def test_write_and_force_rules(self):

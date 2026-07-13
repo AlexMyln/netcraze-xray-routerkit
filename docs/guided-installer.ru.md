@@ -72,9 +72,9 @@ Compatibility намеренно узкая: VLESS с синтаксически
 
 HTTPS source может быть прямой subscription или стандартным redirect-based shortlink. Outer whitespace вокруг полного HTTPS value удаляется, включая LF/CRLF в конце защищённого файла, без изменения path/query или raw/offline payload; internal whitespace, control characters, multiple lines и empty values отклоняются. Допускается только HTTPS port 443, без userinfo и fragments. Каждый hop повторяет URL validation и проверку всех DNS addresses, требует полностью global set по fixed reviewed special-purpose CIDR tables и дополнительным defense-in-depth проверкам standard-library `ipaddress`, закрепляет TCP за validated address, проверяет TLS для original hostname и сверяет peer address. IPv4-mapped IPv6, стандартизованные NAT64, Teredo, 6to4 и ORCHID ranges запрещены. Обычная cancellation прекращает retries и redirects, после чего выполняются ограниченные best-effort попытки cleanup. Максимум — 5 redirects и 16 DNS addresses на hop; лимиты DNS, connection, operational, URL/Location и body равны 5 секундам, 10 секундам, 30 секундам плюс bounded cleanup grace, 8192 bytes и 1 MiB. Dedicated compatibility job выполняет destination/address-policy test class на Python 3.8.18 и primary `3.x`; полный multiprocessing, TLS, HTTP, deadline и cancellation suite запускается только на основном CI Python. Compressed responses отклоняются. RouterKit следует только поддерживаемым HTTP 3xx redirects с `Location`; он не выполняет JavaScript и не интерпретирует HTML meta refresh, поэтому эти browser-style механизмы навигации не поддерживаются и не выполняются. Финальный HTTP 200 body передаётся offline parser, который завершается generic error, если не находит совместимый profile payload. Подробнее: [security ADR](architecture/profile-source-network-security.ru.md).
 
-Для этой команды `--dry-run` означает no-write, а не no-network: HTTPS source загружается и разбирается для проверки selection, но output не записывается. Generator использует тот же resolver для `subscription_url` и `subscription_url_env`. Автоматическая default setup integration остаётся в #24, #20 остаётся открытым, существующий путь `routerkit setup` не изменён.
+Для этой standalone-команды `--dry-run` означает no-write, а не no-network: HTTPS source загружается и разбирается для проверки selection, но output не записывается. Generator использует тот же resolver для `subscription_url` и `subscription_url_env`. Default integration `routerkit setup` теперь завершает #20/#24 и использует описанный ниже более строгий no-prompt, no-read, no-network, no-write dry-run contract.
 
-Известное correctness-поведение: очень узко попавший по времени локальный interrupt после atomic publication может вывести сообщение о cancellation/no-write, хотя приватный destination уже committed. В проверенных воспроизведениях на POSIX destination сохранял mode `0600`, secret не печатался. После interruption перед повтором проверьте, существует ли запрошенный output file.
+После cancellation profile-source не делает безусловного no-write утверждения: узко попавший по времени interrupt может прийти после atomic publication. Secret не печатается; перед повтором проверьте, существует ли запрошенный output file. Setup обычно удаляет setup-owned output во время cleanup private workspace.
 
 ## Что делает wizard
 
@@ -138,12 +138,16 @@ python3 scripts/routerkit-plan.py --generated generated --json
 
 ## Команда setup
 
-`scripts/routerkit.py setup` — первый implementation slice дорожной карты one-command setup. Команда оркестрирует существующие безопасные стадии, а не заменяет их:
+`scripts/routerkit.py setup` объединяет существующие profile-source, generator, strict-plan и apply tools в stop-on-first-failure pipeline:
 
-1. создаёт `profiles.json` через wizard или безопасно переиспользует существующий файл, не печатая его содержимое;
-2. генерирует локальные config fragments;
-3. запускает strict install plan;
-4. после явного разрешения на apply запускает preflight, backup, install и healthcheck.
+1. принимает source через hidden input, указанную environment variable или защищённый owner-only file;
+2. при необходимости использует reviewed profile-source resolver для HTTPS;
+3. разбирает compatible nodes и выбирает один primary плюс до двух fallback;
+4. публикует выбранные profiles только внутри уникального private setup workspace;
+5. генерирует local config fragments с подавленным выводом generator;
+6. сразу после завершения generator удаляет private setup profiles и workspace;
+7. запускает strict install plan;
+8. после явного разрешения на apply запускает preflight, backup, install и healthcheck.
 
 По умолчанию setup работает только в режиме плана:
 
@@ -151,7 +155,31 @@ python3 scripts/routerkit-plan.py --generated generated --json
 python3 scripts/routerkit.py setup
 ```
 
-Команда выполняет только локальный сбор или reuse профилей, генерацию и strict plan. Router apply stages не запускаются.
+Без source option setup читает source через hidden input и интерактивно предлагает выбрать nodes. Случайного reuse `profiles.json` из current directory больше нет. Команда выполняет source acquisition/selection, локальную генерацию, cleanup и strict plan. Router apply stages не запускаются.
+
+Для non-interactive input передавайте только имя environment variable или path защищённого file, но не raw source как обычный argument:
+
+```sh
+python3 scripts/routerkit.py setup \
+  --source-env ROUTERKIT_PROFILE_SOURCE \
+  --primary-index 1 \
+  --fallback-index 2
+
+python3 scripts/routerkit.py setup \
+  --source-file /protected/path/source.txt \
+  --primary-index 1
+```
+
+Reuse существующих private profiles и старый wizard доступны как явные advanced/compatibility modes:
+
+```sh
+python3 scripts/routerkit.py setup \
+  --reuse-profiles /protected/path/profiles.json
+
+python3 scripts/routerkit.py setup --legacy-wizard
+```
+
+`--profiles PATH` — deprecated explicit alias для `--reuse-profiles PATH` без default value. `--force-wizard` — deprecated alias для `--legacy-wizard`. Secure reuse отклоняет symlink и не-regular file, требует owner-only permissions на POSIX, выполняет bounded UTF-8 read, проверяет identity/metadata path и descriptor и копирует validated content с mode `0600` внутрь private `0700` setup workspace. Original file не изменяется, не удаляется, не копируется в backup, не печатается и не передаётся generator.
 
 В unified setup stdout и stderr generator подавляются и заменяются общими status messages, потому что могут содержать данные, производные от подписки или учётных данных. При прямом запуске generator сохраняет прежнюю диагностику.
 
@@ -167,14 +195,16 @@ python3 scripts/routerkit.py setup --apply
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
-Dry-run показывает предполагаемый flow, не запуская wizard, generator, plan, apply stages или confirmation prompt и не создавая локальные profile/generated files:
+Dry-run показывает абстрактный secret-free flow без prompt, чтения stdin/environment/file, DNS или HTTPS, subprocess, temporary directory, profiles, generated files или router actions:
 
 ```sh
 python3 scripts/routerkit.py --dry-run setup
 python3 scripts/routerkit.py setup --apply --dry-run
 ```
 
-Это milestone на пути к epic #5, а не финальная реализация. Bootstrap apply остаётся в #13, autostart — в #14, Netcraze proxy/policy — в #15, hardware validation — в #16. `setup` в этом release не вызывает `bootstrap`; интеграция отложена до review planner/manifest contract и hardware evidence. Setup не скачивает и не устанавливает Xray, не включает autostart, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`.
+Этот setup dry-run contract отличается от standalone `profile-source --dry-run`: standalone profile-source может выполнить HTTPS network read для validation selection, а setup dry-run не выполняет input или network access вообще.
+
+Эта integration закрывает #20 и #24, но не завершает epic #5. Bootstrap apply остаётся в #13, autostart — в #14, Netcraze proxy/policy — в #15, hardware validation — в #16. `setup` в этом release не вызывает `bootstrap`. Setup не скачивает и не устанавливает Xray, не включает autostart, не обнаруживает devices, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
 
 ## Команда install
 

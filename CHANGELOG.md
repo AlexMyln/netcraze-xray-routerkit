@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Default setup integration for hidden/local/HTTPS profile sources and primary/fallback selection.
+- Private setup-owned profile workspace with post-generator cleanup.
+- Explicit secure existing-profiles reuse and legacy-wizard compatibility modes.
+- Secret-free abstract setup dry-run rendering.
 - Bounded HTTPS subscription and redirect-based shortlink resolution.
 - Per-hop DNS/address validation with pinned-IP TLS connections.
 - Secret-safe network acquisition shared by profile-source and generator paths.
@@ -38,6 +42,8 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- `routerkit setup` no longer silently reuses a current-directory `profiles.json`.
+- Profile-source cancellation messaging no longer makes an unconditional no-write claim.
 - Clarified HTTPS resolver browser-redirect, cleanup, address-policy, compatibility-test, and local-file security boundaries after independent security review.
 - HTTPS source values now normalize only outer whitespace at the single-URL boundary; protected LF/CRLF files work while raw/offline payloads remain unchanged.
 - Bootstrap plans now record explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`, while remaining read-only; package installation stays in a later #13 slice and the initial arm64/aarch64 package names still require hardware validation.
