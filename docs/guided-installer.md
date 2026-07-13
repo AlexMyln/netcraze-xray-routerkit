@@ -21,21 +21,23 @@ python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 python3 scripts/routerkit.py plan --generated generated
 ```
 
-### Read-only bootstrap planner
+### Standalone bootstrap transaction
 
-The first [bootstrap #13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13) slice ([#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18)) validates prerequisites and the repository-owned pinned Xray manifest:
+The read-only planner (#18) and separately gated standalone apply (#28) live under [bootstrap #13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13):
 
 ```sh
 python3 scripts/routerkit.py bootstrap
-python3 scripts/routerkit.py bootstrap --json
 python3 scripts/routerkit.py bootstrap --dry-run
+python3 scripts/routerkit.py bootstrap --apply
+python3 scripts/routerkit.py bootstrap --apply --yes
+python3 scripts/routerkit.py bootstrap --apply --dry-run
 ```
 
-It initially supports only Linux `aarch64`/`arm64`. Default mode and `--dry-run` are both read-only. The planner does not install Entware or packages, download/replace Xray, write under `/opt`, control services/autostart, or touch firewall and Netcraze policies. Offline inventory files are supported for tests and development.
+Only Linux `aarch64`/`arm64` is supported. Default mode and standalone `--dry-run` perform no package command, network, staging, or write. Apply requires literal `/opt`, fresh live inventory, trusted fixed-path Entware `opkg`, and explicit confirmation; `--yes` skips only that prompt. Apply dry-run is a no-write preview and never prompts. Synthetic inventory is accepted only for read-only tests and development and conflicts with apply.
 
-The plan exposes an explicit command-to-Entware-package mapping, including `sha256sum -> coreutils-sha256sum`, with `ca-bundle` retained as a base requirement. The names are scoped to the documented initial Entware arm64/aarch64 environment and need hardware validation. This remains read-only; package installation belongs to a later #13 slice.
+Apply installs only missing names from the fixed set `ca-bundle`, `curl`, `unzip`, `coreutils-sha256sum`, and `python3`; it never upgrades or removes packages. Additions may remain after a later failure because automatic dependency removal is unsafe. It then streams the exact manifest URL through proxy-free HTTPS with per-hop destination/TLS validation and hard bounds, verifies SHA-256, safely extracts only one root `xray`, and requires the exact pinned version. An existing executable is hashed and copied to a verified deterministic backup before same-filesystem atomic replacement. Post-install hash/version failure restores that backup; failed clean installs remove the new candidate. A restrictive receipt records non-secret provenance and enables an idempotent no-network rerun only when every identity field still matches.
 
-The bootstrap design is recorded in the [execution-model ADR](architecture/bootstrap-execution-model.md); the official release/checksum and independent hash evidence are in [pinned Xray verification](xray-artifact-pin.md). Hardware validation remains blocked by [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), and the true one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) is incomplete.
+Manual Entware activation remains required. Bootstrap does not restart services, enable autostart, install configs, read profile secrets, call `xkeen -start`, or change firewall/Web UI/policies. Catchable termination cleans staging, while `SIGKILL`, power loss, kernel failure, and host crash remain residual risks. `routerkit setup` does not invoke bootstrap; that integration is #29. The [execution-model ADR](architecture/bootstrap-execution-model.md) and [pinned Xray verification](xray-artifact-pin.md) contain the full contract. Hardware validation remains [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), so the true one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) is incomplete.
 
 Router-side checks:
 
@@ -209,7 +211,7 @@ python3 scripts/routerkit.py setup --apply --dry-run
 
 This setup dry-run contract differs from standalone `profile-source --dry-run`: standalone profile-source may still perform an HTTPS network read to validate selection, while setup dry-run performs no secret input or network access. Python module loading and repository-path resolution are outside the secret-input contract.
 
-This integration closes #20 and #24 but is not the end of epic #5. Bootstrap apply remains tracked in #13, autostart in #14, Netcraze proxy/policy automation in #15, and hardware validation in #16. `setup` does not invoke `bootstrap` in this release. Setup does not download or install Xray, enable autostart, discover devices, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
+This integration closes #20 and #24 but is not the end of epic #5. Standalone bootstrap apply is #28 under #13; setup integration remains #29, autostart #14, Netcraze proxy/policy automation #15, and hardware validation #16. `setup` does not invoke `bootstrap` in this release. Setup does not download or install Xray, enable autostart, discover devices, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
 
 ## Install command
 

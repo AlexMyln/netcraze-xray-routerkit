@@ -86,17 +86,21 @@ python3 scripts/routerkit.py setup --apply
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
-Первый bootstrap slice доступен как read-only planner окружения и pinned artifact:
+Standalone bootstrap по умолчанию остаётся read-only и теперь имеет отдельно gated transactional apply:
 
 ```sh
 python3 scripts/routerkit.py bootstrap
-python3 scripts/routerkit.py bootstrap --json
-python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap/supported-aarch64.json --dry-run
+python3 scripts/routerkit.py bootstrap --dry-run
+python3 scripts/routerkit.py bootstrap --apply
+python3 scripts/routerkit.py bootstrap --apply --yes
+python3 scripts/routerkit.py bootstrap --apply --dry-run
 ```
 
-`bootstrap` строго проверяет manifest репозитория, поддерживает только Linux `aarch64`/`arm64` и показывает prerequisites/состояние Xray. Обычный запуск и `--dry-run` одинаково read-only. Команда не активирует Entware, не устанавливает packages, не скачивает и не заменяет Xray, не меняет `/opt`, services/autostart, firewall или policies. Подробнее: [ADR](docs/architecture/bootstrap-execution-model.ru.md) и [evidence для pin](docs/xray-artifact-pin.ru.md).
+Обычный запуск и standalone `--dry-run` строго проверяют manifest репозитория, поддерживают только Linux `aarch64`/`arm64` и остаются read-only: без package command, network, staging или записи. `--apply` требует свежий live inventory, буквальный `/opt`, фиксированный `/opt`-scoped `opkg` и подтверждение, если не передан `--yes`. `--apply --dry-run` показывает абстрактный no-write план транзакции без prompt.
 
-Planner фиксирует явные соответствия команд пакетам Entware; в частности, `sha256sum` планируется через `coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена пакетов относятся к документированному начальному Entware-окружению arm64/aarch64 и всё ещё требуют hardware validation. Планирование остаётся read-only, а установка пакетов — более поздним slice #13.
+Apply проверяет фиксированный набор `ca-bundle`, `curl`, `unzip`, `coreutils-sha256sum` и `python3`, затем устанавливает только отсутствующие имена в детерминированном порядке. Package install аддитивен: новые packages могут остаться после сбоя Xray-этапа, потому что автоматическое удаление dependencies небезопасно. Точный manifest-pinned archive загружается через bounded proxy-free HTTPS, проверяется SHA-256 и безопасно извлекается только один кандидат `xray`. Для существующего binary создаётся проверенная hash-addressed backup в `/opt/var/lib/routerkit/backups/`; замена выполняется атомарно на той же filesystem, проверяется после установки и автоматически откатывается при сбое. Restrictive provenance receipt разрешает полный no-op повтор только при совпадении release, archive hash, installed hash и точной версии.
+
+Bootstrap apply не активирует Entware, не перезапускает services, не включает autostart, не загружает configs, не вызывает `xkeen -start` и не меняет Web UI, firewall, proxy или policy. Перехватываемые `SIGTERM`/`SIGHUP` и обычная отмена `SIGINT` очищают private staging; `SIGKILL`, потеря питания, сбой kernel и crash хоста остаются residual risks. Profile inputs и generated secrets не относятся к bootstrap и не читаются им. Manual Entware activation всё ещё обязательна, `routerkit setup` не вызывает bootstrap до #29, а #16 должен завершиться до заявления о hardware-tested статусе. Подробнее: [ADR](docs/architecture/bootstrap-execution-model.ru.md) и [evidence для pin](docs/xray-artifact-pin.ru.md).
 
 По умолчанию `setup` теперь использует завершённый стек profile-source. Источник передаётся через скрытый ввод, указанную environment variable или защищённый owner-only файл; HTTPS при необходимости безопасно разрешается; compatible nodes разбираются; выбирается один primary и до двух fallback. Setup сохраняет выбранные профили только в уникальном private workspace, подавляет вывод generator, сразу после генерации удаляет временные профили и запускает strict plan. Generated config fragments сохраняются локально и содержат secrets. Без `--apply` router apply stages не выполняются. С `--apply` setup запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не preflight, backup, install или healthcheck.
 
@@ -123,7 +127,7 @@ python3 scripts/routerkit.py setup --legacy-wizard
 
 `setup --dry-run` абстрактный и secret-free: он не читает source, reuse file, secret input или значение environment, не выполняет stdin prompt, DNS или HTTPS request, subprocess, создание private workspace, file write или router action. Загрузка Python modules и определение repository path не входят в этот secret-input contract. Это намеренно строже standalone `profile-source --dry-run`, который может получить HTTPS source, но не записывает profiles.
 
-Это milestone, а не финальная реализация [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). Read-only planner/manifest закрывает [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), а bootstrap apply остаётся в [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13). Autostart — #14, Netcraze proxy/policy — #15, hardware validation всё ещё заблокирован #16. `setup` пока не вызывает `bootstrap`.
+Это milestone, а не финальная реализация [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). Read-only planner/manifest — #18, standalone transaction — #28 под parent #13. Setup integration остаётся #29, autostart — #14, Netcraze proxy/policy — #15, hardware validation — #16. `setup` пока не вызывает `bootstrap`.
 
 ### Безопасный выбор источника профилей
 
@@ -140,7 +144,7 @@ python3 scripts/routerkit.py profile-source --source-file /private/path/payload.
 
 Network acquisition принимает только HTTPS на port 443, без URL userinfo и fragments. Outer whitespace вокруг одного полного HTTPS source одинаково удаляется для hidden input, environment, защищённого file и generator, поэтому окончания LF/CRLF работают; internal whitespace, control characters, multiple lines и empty values отклоняются, а raw/offline payload не меняется. Каждый HTTP `Location` redirect отдельно проходит URL validation и DNS resolution; все адреса в ответе должны пройти fixed reviewed special-purpose CIDR tables и дополнительные defense-in-depth проверки standard-library `ipaddress`, TCP connection закрепляется за validated address, TLS продолжает проверять original hostname, а connected peer сверяется. IPv4-mapped IPv6, стандартизованные NAT64, Teredo, 6to4 и ORCHID ranges консервативно запрещены. Обычная cancellation прекращает retries и redirects, после чего выполняются ограниченные best-effort попытки cleanup ресурсов. Лимиты: 5 redirects, 16 DNS addresses на hop, 5 секунд на DNS hop, 10 секунд на address connection, 30-секундный operational deadline плюс bounded cleanup grace, 8192 bytes на URL/redirect value и 1 MiB на response. Dedicated compatibility job на Python 3.8.18 и primary `3.x` выполняет destination/address-policy test class; полный suite запускается на основном CI Python. Compressed responses отклоняются. JavaScript не выполняется, а HTML meta refresh не интерпретируется, поэтому эти browser-style механизмы навигации не поддерживаются и не выполняются; финальный HTTP 200 body вместо этого передаётся offline parser. `profile-source --dry-run` может выполнить network read и parsing, но не записывает `profiles.json`. Существующие поля generator `subscription_url` и `subscription_url_env` используют тот же resolver. Подробнее: [ADR безопасности сети](docs/architecture/profile-source-network-security.ru.md).
 
-Default setup integration завершает [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24) и parent [#20](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/20). Bootstrap apply, autostart, device discovery, policies и hardware validation остаются отдельной работой.
+Default setup integration завершает [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24) и parent [#20](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/20). Standalone bootstrap apply отделён от setup; setup integration, autostart, device discovery, policies и hardware validation остаются отдельной работой.
 
 Отдельные команды также доступны:
 

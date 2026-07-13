@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a strict, secret-safe bootstrap plan without changing the system."""
+"""Build a read-only bootstrap plan or run the explicit standalone transaction."""
 
 from __future__ import annotations
 
@@ -15,15 +15,20 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 
+SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, SCRIPT_DIRECTORY)
+
+
 MANIFEST_SCHEMA_VERSION = 1
 INVENTORY_SCHEMA_VERSION = 1
 REPOSITORY = "XTLS/Xray-core"
 GITHUB_HOST = "github.com"
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[1] / "manifests" / "xray-artifacts.json"
 DEFAULT_TARGET_ROOT = "/opt"
-APPLY_NOT_IMPLEMENTED = (
-    "bootstrap apply is not implemented in this release; read-only planning only."
-)
+YES_REQUIRES_APPLY = "bootstrap --yes requires --apply."
+INVENTORY_APPLY_CONFLICT = "bootstrap --inventory-file conflicts with --apply."
+APPLY_TARGET_ROOT = "bootstrap --apply supports only literal --target-root /opt."
 
 SHELL_COMMANDS = ("sh", "uname")
 LATER_TOOL_PACKAGES = {
@@ -277,7 +282,6 @@ def collect_inventory(target_root: Path = Path(DEFAULT_TARGET_ROOT)) -> Dict[str
     target_root = Path(target_root)
     uname = os.uname()
     commands = {name: _command_record(name) for name in KNOWN_COMMANDS}
-    opkg_path = commands["opkg"]["path"]
     xray_path = target_root / "sbin" / "xray"
     xray_exists = xray_path.exists()
     xray_executable = xray_exists and os.access(str(xray_path), os.X_OK)
@@ -297,8 +301,12 @@ def collect_inventory(target_root: Path = Path(DEFAULT_TARGET_ROOT)) -> Dict[str
             "writable": target_root.is_dir() and os.access(str(target_root), os.W_OK),
         },
         "commands": commands,
+        # Default planning and pre-confirmation apply inventory never invoke
+        # the package manager. Exact package state is queried only after apply
+        # confirmation through the fixed /opt-scoped opkg policy.
         "packages": {
-            package: _package_status(opkg_path, package) for package in LATER_PACKAGES
+            package: {"installed": False, "query": "not queried"}
+            for package in LATER_PACKAGES
         },
         "xray": {
             "path": str(xray_path),
@@ -544,9 +552,79 @@ def render_text_plan(plan: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_apply_preview(plan: Mapping[str, Any]) -> str:
+    artifact = plan["pinned_artifact"]
+    return "\n".join(
+        [
+            "RouterKit bootstrap apply plan",
+            "",
+            "Mode:",
+            "- no-write apply preview",
+            "",
+            "After explicit apply confirmation the transaction would:",
+            "- query only the fixed required Entware packages",
+            "- install only missing packages: " + ", ".join(LATER_PACKAGES),
+            "- acquire and checksum the manifest-pinned {} archive".format(
+                artifact["release"]
+            ),
+            "- extract and validate only the root xray candidate",
+            "- verify or create a rollback backup of an existing Xray binary",
+            "- atomically replace, validate, and roll back on failure",
+            "- retain a restrictive provenance receipt and verified backup",
+            "",
+            "This preview performs no package command, network request, staging, or write.",
+        ]
+    ) + "\n"
+
+
+def render_transaction_summary(plan: Mapping[str, Any]) -> str:
+    artifact = plan["pinned_artifact"]
+    return "\n".join(
+        [
+            "RouterKit bootstrap apply",
+            "- target: /opt/sbin/xray",
+            "- fixed packages: " + ", ".join(LATER_PACKAGES),
+            "- pinned release: {}".format(artifact["release"]),
+            "- archive SHA-256: {}".format(artifact["sha256"]),
+            "- package additions are not automatically removed on later failure",
+            "- Xray replacement uses verified backup, atomic replace, and rollback",
+            "- no service, autostart, firewall, policy, or setup action is performed",
+        ]
+    )
+
+
+def render_apply_result(result: Mapping[str, Any]) -> str:
+    lines = [
+        "RouterKit bootstrap apply completed",
+        "- pinned release: {}".format(result["artifact_release"]),
+        "- packages already installed: {}".format(
+            ", ".join(result["packages_already_installed"]) or "none"
+        ),
+        "- packages installed now: {}".format(
+            ", ".join(result["packages_installed"]) or "none"
+        ),
+        "- idempotent no-op: {}".format(str(result["idempotent_noop"]).lower()),
+        "- replacement performed: {}".format(
+            str(result["replacement_performed"]).lower()
+        ),
+        "- post-install verified: {}".format(
+            str(result["post_install_verified"]).lower()
+        ),
+    ]
+    if result.get("backup_path"):
+        lines.append("- rollback backup: {}".format(result["backup_path"]))
+    lines.extend(
+        [
+            "- package installs are additive and are not automatically rolled back",
+            "- no service restart or autostart action was performed",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Inspect the environment and print a read-only RouterKit bootstrap plan."
+        description="Plan or explicitly apply the standalone RouterKit bootstrap transaction."
     )
     parser.add_argument(
         "--manifest",
@@ -571,15 +649,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Reserved; always rejected because apply is not implemented.",
+        help="Run the standalone package and pinned-Xray transaction after confirmation.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip only the bootstrap apply confirmation; requires --apply.",
     )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.apply:
-        print(APPLY_NOT_IMPLEMENTED, file=sys.stderr)
+    if args.yes and not args.apply:
+        print(YES_REQUIRES_APPLY, file=sys.stderr)
+        return 2
+    if args.apply and args.inventory_file:
+        print(INVENTORY_APPLY_CONFLICT, file=sys.stderr)
+        return 2
+    if args.apply and args.target_root != DEFAULT_TARGET_ROOT:
+        print(APPLY_TARGET_ROOT, file=sys.stderr)
         return 2
 
     try:
@@ -589,6 +678,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             inventory = collect_inventory(Path(args.target_root))
         plan = build_bootstrap_plan(inventory, manifest, Path(args.target_root))
+        if args.apply:
+            from routerkit_bootstrap_apply import (
+                BootstrapApplyError,
+                BootstrapTermination,
+                apply_bootstrap_transaction,
+                resolve_opkg,
+                termination_exit_code,
+                validate_apply_environment,
+                validate_existing_target_metadata,
+            )
+
+            try:
+                validate_apply_environment(Path(args.target_root), create=False)
+                validate_existing_target_metadata(Path(args.target_root))
+                resolve_opkg(Path(args.target_root))
+            except BootstrapApplyError as exc:
+                print("bootstrap: {}".format(exc), file=sys.stderr)
+                return exc.exit_code
     except UnsupportedEnvironmentError as exc:
         print(f"bootstrap: {exc}", file=sys.stderr)
         return 1
@@ -600,6 +707,55 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     plan["dry_run_requested"] = bool(args.dry_run)
+    if args.apply and args.dry_run:
+        if args.json:
+            preview = {
+                "mode": "apply-preview",
+                "environment": plan["environment"],
+                "artifact_release": plan["pinned_artifact"]["release"],
+                "archive_sha256": plan["pinned_artifact"]["sha256"],
+                "required_packages": list(LATER_PACKAGES),
+                "side_effects_performed": False,
+            }
+            print(json.dumps(preview, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(render_apply_preview(plan), end="")
+        return 0
+    if args.apply:
+        summary = render_transaction_summary(plan)
+        print(summary, file=sys.stderr if args.json else sys.stdout)
+        if not args.yes:
+            try:
+                if args.json:
+                    print("Proceed with bootstrap apply? [y/N]: ", end="", file=sys.stderr)
+                    response = sys.stdin.readline()
+                else:
+                    response = input("Proceed with bootstrap apply? [y/N]: ")
+            except (EOFError, KeyboardInterrupt):
+                print("bootstrap: apply cancelled; no package or artifact action was started.", file=sys.stderr)
+                return 1
+            if response.strip().lower() not in ("y", "yes"):
+                print("bootstrap: apply declined; no package or artifact action was started.", file=sys.stderr)
+                return 1
+        try:
+            transaction = apply_bootstrap_transaction(
+                manifest, target_root=Path(args.target_root)
+            )
+        except BootstrapTermination as exc:
+            print(
+                "bootstrap: terminated after bounded child shutdown and staging cleanup.",
+                file=sys.stderr,
+            )
+            return termination_exit_code(exc)
+        except BootstrapApplyError as exc:
+            print("bootstrap: {}".format(exc), file=sys.stderr)
+            return exc.exit_code
+        result = transaction.as_dict()
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(render_apply_result(result), end="")
+        return 0
     if args.json:
         print(json.dumps(plan, indent=2, sort_keys=True, ensure_ascii=False))
     else:

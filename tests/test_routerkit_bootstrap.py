@@ -272,18 +272,72 @@ class PlannerTests(unittest.TestCase):
                 self.assertEqual(output, "")
                 self.assertIn("unsupported environment", errors)
 
-    def test_apply_returns_two_before_manifest_or_subprocess_access(self):
+    def test_yes_without_apply_returns_two_before_manifest_or_subprocess_access(self):
         with mock.patch.object(
             bootstrap, "load_manifest", side_effect=AssertionError("must not load")
         ) as load_manifest, mock.patch.object(
             bootstrap.subprocess, "run", side_effect=AssertionError("must not execute")
         ) as run:
-            code, output, errors = run_main("--apply")
+            code, output, errors = run_main("--yes")
         self.assertEqual(code, 2)
         self.assertEqual(output, "")
-        self.assertEqual(errors, bootstrap.APPLY_NOT_IMPLEMENTED + "\n")
+        self.assertEqual(errors, bootstrap.YES_REQUIRES_APPLY + "\n")
         load_manifest.assert_not_called()
         run.assert_not_called()
+
+    def test_inventory_file_apply_is_rejected_before_inventory_access(self):
+        with mock.patch.object(
+            bootstrap, "load_inventory_file", side_effect=AssertionError("must not load")
+        ) as load_inventory:
+            code, output, errors = run_main(
+                "--apply",
+                "--inventory-file",
+                str(FIXTURES / "supported-aarch64.json"),
+            )
+        self.assertEqual(code, 2)
+        self.assertEqual(output, "")
+        self.assertEqual(errors, bootstrap.INVENTORY_APPLY_CONFLICT + "\n")
+        load_inventory.assert_not_called()
+
+    def test_apply_refusal_starts_no_package_network_or_transaction_action(self):
+        inventory = json.loads(
+            (FIXTURES / "supported-aarch64.json").read_text(encoding="utf-8")
+        )
+        import routerkit_bootstrap_apply as apply_module
+
+        with mock.patch.object(bootstrap, "collect_inventory", return_value=inventory), mock.patch.object(
+            apply_module, "validate_apply_environment"
+        ), mock.patch.object(apply_module, "resolve_opkg"), mock.patch.object(
+            apply_module,
+            "apply_bootstrap_transaction",
+            side_effect=AssertionError("must not apply"),
+        ) as transaction, mock.patch("builtins.input", return_value=""):
+            code, output, errors = run_main("--apply")
+        self.assertEqual(code, 1)
+        self.assertIn("RouterKit bootstrap apply", output)
+        self.assertIn("apply declined", errors)
+        transaction.assert_not_called()
+
+    def test_apply_dry_run_has_no_confirmation_or_transaction(self):
+        inventory = json.loads(
+            (FIXTURES / "supported-aarch64.json").read_text(encoding="utf-8")
+        )
+        import routerkit_bootstrap_apply as apply_module
+
+        with mock.patch.object(bootstrap, "collect_inventory", return_value=inventory), mock.patch.object(
+            apply_module, "validate_apply_environment"
+        ), mock.patch.object(apply_module, "resolve_opkg"), mock.patch.object(
+            apply_module,
+            "apply_bootstrap_transaction",
+            side_effect=AssertionError("must not apply"),
+        ) as transaction, mock.patch(
+            "builtins.input", side_effect=AssertionError("must not prompt")
+        ):
+            code, output, errors = run_main("--apply", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertEqual(errors, "")
+        self.assertIn("no-write apply preview", output)
+        transaction.assert_not_called()
 
     def test_dry_run_is_explicitly_read_only(self):
         code, output, _ = run_main(
