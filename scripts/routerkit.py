@@ -553,8 +553,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     profile_source = subparsers.add_parser(
         "profile-source",
-        help="Parse local VLESS payloads and select compatible nodes offline.",
-        description="Parse local VLESS payloads and select compatible nodes offline.",
+        help="Safely acquire or parse VLESS payloads and select compatible nodes.",
+        description="Safely acquire HTTPS sources or parse local VLESS payloads and select compatible nodes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     profile_source_modes = profile_source.add_mutually_exclusive_group()
@@ -570,7 +570,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         dest="dry_run",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Parse and select nodes without writing a profiles file.",
+        help="Acquire if needed, parse, and select nodes without writing a profiles file.",
     )
     profile_source.add_argument("--yes", action="store_true")
     profile_source.add_argument("--force", action="store_true")
