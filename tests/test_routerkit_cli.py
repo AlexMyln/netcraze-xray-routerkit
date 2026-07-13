@@ -96,6 +96,56 @@ def setup_apply_commands(generated):
 
 
 class RouterkitCliCommandTests(unittest.TestCase):
+    def test_bootstrap_builds_expected_delegated_command(self):
+        inventory = str(ROOT / "tests" / "fixtures" / "bootstrap" / "supported-aarch64.json")
+        args = cli.parse_args(
+            ["bootstrap", "--inventory-file", inventory, "--json", "--dry-run"]
+        )
+
+        command = cli.build_command(args, ROOT)
+
+        self.assertEqual(
+            command,
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "routerkit-bootstrap.py"),
+                "--json",
+                "--dry-run",
+                "--inventory-file",
+                inventory,
+            ],
+        )
+
+    def test_bootstrap_propagates_delegated_exit_code(self):
+        with mock.patch.object(cli.subprocess, "run", return_value=completed(17)) as run:
+            code = cli.main(["--repo-root", str(ROOT), "bootstrap"])
+
+        self.assertEqual(code, 17)
+        self.assertEqual(
+            run.call_args.args[0],
+            [sys.executable, str(ROOT / "scripts" / "routerkit-bootstrap.py")],
+        )
+
+    def test_bootstrap_global_and_subcommand_dry_run_are_forwarded_consistently(self):
+        forms = (
+            ["--repo-root", str(ROOT), "--dry-run", "bootstrap"],
+            ["--repo-root", str(ROOT), "bootstrap", "--dry-run"],
+        )
+        for argv in forms:
+            with self.subTest(argv=argv):
+                with mock.patch.object(cli.subprocess, "run", return_value=completed(0)) as run:
+                    code = cli.main(argv)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(
+                    run.call_args.args[0],
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts" / "routerkit-bootstrap.py"),
+                        "--dry-run",
+                    ],
+                )
+
     def test_wizard_builds_expected_command(self):
         args = cli.parse_args(["wizard"])
 

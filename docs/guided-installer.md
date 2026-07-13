@@ -21,6 +21,22 @@ python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 python3 scripts/routerkit.py plan --generated generated
 ```
 
+### Read-only bootstrap planner
+
+The first [bootstrap #13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13) slice ([#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18)) validates prerequisites and the repository-owned pinned Xray manifest:
+
+```sh
+python3 scripts/routerkit.py bootstrap
+python3 scripts/routerkit.py bootstrap --json
+python3 scripts/routerkit.py bootstrap --dry-run
+```
+
+It initially supports only Linux `aarch64`/`arm64`. Default mode and `--dry-run` are both read-only. The planner does not install Entware or packages, download/replace Xray, write under `/opt`, control services/autostart, or touch firewall and Netcraze policies. Offline inventory files are supported for tests and development.
+
+The plan exposes an explicit command-to-Entware-package mapping, including `sha256sum -> coreutils-sha256sum`, with `ca-bundle` retained as a base requirement. The names are scoped to the documented initial Entware arm64/aarch64 environment and need hardware validation. This remains read-only; package installation belongs to a later #13 slice.
+
+The bootstrap design is recorded in the [execution-model ADR](architecture/bootstrap-execution-model.md); the official release/checksum and independent hash evidence are in [pinned Xray verification](xray-artifact-pin.md). Hardware validation remains blocked by [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), and the true one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) is incomplete.
+
 Router-side checks:
 
 ```sh
@@ -134,7 +150,7 @@ python3 scripts/routerkit.py --dry-run setup
 python3 scripts/routerkit.py setup --apply --dry-run
 ```
 
-This is a milestone toward epic #5, not its final implementation. Entware/OPKG and Xray prerequisite bootstrap is tracked in #13, autostart in #14, Netcraze proxy/policy automation in #15, and hardware validation in #16. Setup does not download or install Xray, enable autostart, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`.
+This is a milestone toward epic #5, not its final implementation. Bootstrap apply remains tracked in #13, autostart in #14, Netcraze proxy/policy automation in #15, and hardware validation in #16. `setup` does not invoke `bootstrap` in this release; that integration is deferred until the planner/manifest contract and hardware evidence are reviewed. Setup does not download or install Xray, enable autostart, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`.
 
 ## Install command
 

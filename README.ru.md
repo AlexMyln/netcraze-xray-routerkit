@@ -13,6 +13,8 @@ Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 Документация guided installer: [docs/guided-installer.ru.md](docs/guided-installer.ru.md)
 
+Bootstrap design: [ADR модели выполнения](docs/architecture/bootstrap-execution-model.ru.md) · [проверка Xray pin](docs/xray-artifact-pin.ru.md)
+
 ## Медиа репозитория
 
 - Asset для GitHub Social preview: [assets/social-preview.png](assets/social-preview.png)
@@ -84,11 +86,23 @@ python3 scripts/routerkit.py setup --apply
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
+Первый bootstrap slice доступен как read-only planner окружения и pinned artifact:
+
+```sh
+python3 scripts/routerkit.py bootstrap
+python3 scripts/routerkit.py bootstrap --json
+python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap/supported-aarch64.json --dry-run
+```
+
+`bootstrap` строго проверяет manifest репозитория, поддерживает только Linux `aarch64`/`arm64` и показывает prerequisites/состояние Xray. Обычный запуск и `--dry-run` одинаково read-only. Команда не активирует Entware, не устанавливает packages, не скачивает и не заменяет Xray, не меняет `/opt`, services/autostart, firewall или policies. Подробнее: [ADR](docs/architecture/bootstrap-execution-model.ru.md) и [evidence для pin](docs/xray-artifact-pin.ru.md).
+
+Planner фиксирует явные соответствия команд пакетам Entware; в частности, `sha256sum` планируется через `coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена пакетов относятся к документированному начальному Entware-окружению arm64/aarch64 и всё ещё требуют hardware validation. Планирование остаётся read-only, а установка пакетов — более поздним slice #13.
+
 `setup` — первый implementation slice дорожной карты one-command installer. Команда объединяет существующие стадии wizard, локальной генерации, strict plan, явного apply confirmation, preflight, backup, install и healthcheck. Без `--apply` она останавливается после локальной генерации и успешного strict plan. С `--apply` она запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не safety stages.
 
 Unified setup перехватывает и подавляет вывод generator, потому что он может содержать данные, производные от подписки или учётных данных; standalone generation сохраняет прежнее диагностическое поведение.
 
-Это milestone, а не финальная реализация epic #5. Bootstrap prerequisites Entware/OPKG и Xray остаётся в #13, autostart — в #14, автоматизация Netcraze proxy/policy — в #15, hardware validation — в #16.
+Это milestone, а не финальная реализация [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). Read-only planner/manifest закрывает [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), а bootstrap apply остаётся в [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13). Autostart — #14, Netcraze proxy/policy — #15, hardware validation всё ещё заблокирован #16. `setup` пока не вызывает `bootstrap`.
 
 Отдельные команды также доступны:
 

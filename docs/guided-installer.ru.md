@@ -21,6 +21,22 @@ python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 python3 scripts/routerkit.py plan --generated generated
 ```
 
+### Read-only bootstrap planner
+
+Первый slice [bootstrap #13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13) ([#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18)) проверяет prerequisites и repository-owned pinned Xray manifest:
+
+```sh
+python3 scripts/routerkit.py bootstrap
+python3 scripts/routerkit.py bootstrap --json
+python3 scripts/routerkit.py bootstrap --dry-run
+```
+
+Начальный scope — только Linux `aarch64`/`arm64`. Обычный режим и `--dry-run` одинаково read-only. Planner не устанавливает Entware/packages, не скачивает и не заменяет Xray, не пишет в `/opt`, не управляет services/autostart, firewall или Netcraze policies. Для tests/development доступны offline inventory files.
+
+Plan показывает явное соответствие команд пакетам Entware, включая `sha256sum -> coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена относятся к документированному начальному Entware-окружению arm64/aarch64 и требуют hardware validation. Режим остаётся read-only; установка пакетов относится к более позднему slice #13.
+
+Решение описано в [ADR модели выполнения](architecture/bootstrap-execution-model.ru.md), а evidence официального release/checksum и независимого hash — в [проверке Xray pin](xray-artifact-pin.ru.md). Hardware validation остаётся заблокирован [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), настоящий one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) не завершён.
+
 Проверки на стороне роутера:
 
 ```sh
@@ -134,7 +150,7 @@ python3 scripts/routerkit.py --dry-run setup
 python3 scripts/routerkit.py setup --apply --dry-run
 ```
 
-Это milestone на пути к epic #5, а не финальная реализация. Bootstrap prerequisites Entware/OPKG и Xray отслеживается в #13, autostart — в #14, автоматизация Netcraze proxy/policy — в #15, hardware validation — в #16. Setup не скачивает и не устанавливает Xray, не включает autostart, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`.
+Это milestone на пути к epic #5, а не финальная реализация. Bootstrap apply остаётся в #13, autostart — в #14, Netcraze proxy/policy — в #15, hardware validation — в #16. `setup` в этом release не вызывает `bootstrap`; интеграция отложена до review planner/manifest contract и hardware evidence. Setup не скачивает и не устанавливает Xray, не включает autostart, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`.
 
 ## Команда install
 
