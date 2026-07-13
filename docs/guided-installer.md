@@ -96,6 +96,46 @@ For machine-readable output:
 python3 scripts/routerkit-plan.py --generated generated --json
 ```
 
+## Setup command
+
+`scripts/routerkit.py setup` is the first implementation slice of the one-command setup roadmap. It orchestrates the existing safe stages instead of replacing them:
+
+1. create `profiles.json` with the wizard, or safely reuse an existing file without printing its contents;
+2. generate local config fragments;
+3. run a strict install plan;
+4. after explicit apply permission, run preflight, backup, install, and healthcheck.
+
+Plan-only setup is the default:
+
+```sh
+python3 scripts/routerkit.py setup
+```
+
+This performs only local profile collection or reuse, generation, and strict planning. No router apply stage is started.
+
+Within unified setup, generator stdout and stderr are suppressed and replaced with generic status messages because they may contain subscription-derived or credential-derived details. Running the generator directly retains its existing diagnostics.
+
+To continue through the hardened apply pipeline, use:
+
+```sh
+python3 scripts/routerkit.py setup --apply
+```
+
+After the strict plan passes, setup asks `Proceed with router apply stages? [y/N]:`. Supplying `--yes` skips only this confirmation prompt; preflight, backup, install, and healthcheck still run:
+
+```sh
+python3 scripts/routerkit.py setup --apply --yes
+```
+
+Use dry-run to render the intended flow without running the wizard, generator, plan, apply stages, or confirmation prompt, and without creating local profile/generated files:
+
+```sh
+python3 scripts/routerkit.py --dry-run setup
+python3 scripts/routerkit.py setup --apply --dry-run
+```
+
+This is a milestone toward epic #5, not its final implementation. Entware/OPKG and Xray prerequisite bootstrap is tracked in #13, autostart in #14, Netcraze proxy/policy automation in #15, and hardware validation in #16. Setup does not download or install Xray, enable autostart, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`.
+
 ## Install command
 
 `scripts/routerkit.py install` is safe by default. Without `--apply`, it runs the same strict plan mode and does not change files:

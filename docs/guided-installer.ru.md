@@ -96,6 +96,46 @@ python3 scripts/routerkit-plan.py --generated generated
 python3 scripts/routerkit-plan.py --generated generated --json
 ```
 
+## Команда setup
+
+`scripts/routerkit.py setup` — первый implementation slice дорожной карты one-command setup. Команда оркестрирует существующие безопасные стадии, а не заменяет их:
+
+1. создаёт `profiles.json` через wizard или безопасно переиспользует существующий файл, не печатая его содержимое;
+2. генерирует локальные config fragments;
+3. запускает strict install plan;
+4. после явного разрешения на apply запускает preflight, backup, install и healthcheck.
+
+По умолчанию setup работает только в режиме плана:
+
+```sh
+python3 scripts/routerkit.py setup
+```
+
+Команда выполняет только локальный сбор или reuse профилей, генерацию и strict plan. Router apply stages не запускаются.
+
+В unified setup stdout и stderr generator подавляются и заменяются общими status messages, потому что могут содержать данные, производные от подписки или учётных данных. При прямом запуске generator сохраняет прежнюю диагностику.
+
+Чтобы продолжить через hardened apply pipeline, используйте:
+
+```sh
+python3 scripts/routerkit.py setup --apply
+```
+
+После успешного strict plan setup спрашивает `Proceed with router apply stages? [y/N]:`. Флаг `--yes` пропускает только этот confirmation prompt; preflight, backup, install и healthcheck всё равно выполняются:
+
+```sh
+python3 scripts/routerkit.py setup --apply --yes
+```
+
+Dry-run показывает предполагаемый flow, не запуская wizard, generator, plan, apply stages или confirmation prompt и не создавая локальные profile/generated files:
+
+```sh
+python3 scripts/routerkit.py --dry-run setup
+python3 scripts/routerkit.py setup --apply --dry-run
+```
+
+Это milestone на пути к epic #5, а не финальная реализация. Bootstrap prerequisites Entware/OPKG и Xray отслеживается в #13, autostart — в #14, автоматизация Netcraze proxy/policy — в #15, hardware validation — в #16. Setup не скачивает и не устанавливает Xray, не включает autostart, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`.
+
 ## Команда install
 
 `scripts/routerkit.py install` безопасна по умолчанию. Без `--apply` она запускает такой же strict plan mode и не меняет файлы:

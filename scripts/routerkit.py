@@ -29,6 +29,10 @@ AUTOSTART_RESERVED_MESSAGE = (
 
 INSTALL_APPLY_TARGET_ROOT_MESSAGE = "install --apply currently supports only --target-root /opt."
 
+SETUP_APPLY_TARGET_ROOT_MESSAGE = "setup --apply currently supports only --target-root /opt."
+
+SETUP_YES_REQUIRES_APPLY_MESSAGE = "setup --yes requires --apply."
+
 SKIP_FLAGS_REQUIRE_APPLY_MESSAGE = (
     "--skip-preflight, --skip-backup, and --skip-healthcheck require --apply."
 )
@@ -45,6 +49,7 @@ class CommandStep:
     name: str
     command: List[str]
     rollback_relevant: bool = False
+    suppress_output: bool = False
 
 
 def repo_root_from_script() -> Path:
@@ -62,6 +67,13 @@ def validate_install_args(args: argparse.Namespace) -> None:
         raise RouterkitCliError(SKIP_FLAGS_REQUIRE_APPLY_MESSAGE, exit_code=2)
     if args.apply and args.target_root != "/opt":
         raise RouterkitCliError(INSTALL_APPLY_TARGET_ROOT_MESSAGE, exit_code=2)
+
+
+def validate_setup_args(args: argparse.Namespace) -> None:
+    if args.yes and not args.apply:
+        raise RouterkitCliError(SETUP_YES_REQUIRES_APPLY_MESSAGE, exit_code=2)
+    if args.apply and args.target_root != "/opt":
+        raise RouterkitCliError(SETUP_APPLY_TARGET_ROOT_MESSAGE, exit_code=2)
 
 
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
@@ -124,6 +136,26 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
     raise ValueError(f"unsupported command: {args.command}")
 
 
+def build_router_apply_steps(
+    generated: str,
+    repo_root: Path,
+    *,
+    include_preflight: bool = True,
+    include_backup: bool = True,
+    include_healthcheck: bool = True,
+) -> List[CommandStep]:
+    repo_root = Path(repo_root)
+    steps: List[CommandStep] = []
+    if include_preflight:
+        steps.append(CommandStep("preflight", ["sh", _repo_script(repo_root, "preflight.sh")]))
+    if include_backup:
+        steps.append(CommandStep("backup", ["sh", _repo_script(repo_root, "backup.sh")], rollback_relevant=True))
+    steps.append(CommandStep("install", ["sh", _repo_script(repo_root, "install-xray-direct.sh"), generated]))
+    if include_healthcheck:
+        steps.append(CommandStep("healthcheck", ["sh", _repo_script(repo_root, "healthcheck.sh")]))
+    return steps
+
+
 def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List[CommandStep]:
     validate_install_args(args)
 
@@ -142,13 +174,67 @@ def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List
             ],
         )
     ]
-    if not args.skip_preflight:
-        steps.append(CommandStep("preflight", ["sh", _repo_script(repo_root, "preflight.sh")]))
-    if not args.skip_backup:
-        steps.append(CommandStep("backup", ["sh", _repo_script(repo_root, "backup.sh")], rollback_relevant=True))
-    steps.append(CommandStep("install", ["sh", _repo_script(repo_root, "install-xray-direct.sh"), args.generated]))
-    if not args.skip_healthcheck:
-        steps.append(CommandStep("healthcheck", ["sh", _repo_script(repo_root, "healthcheck.sh")]))
+    steps.extend(
+        build_router_apply_steps(
+            args.generated,
+            repo_root,
+            include_preflight=not args.skip_preflight,
+            include_backup=not args.skip_backup,
+            include_healthcheck=not args.skip_healthcheck,
+        )
+    )
+    return steps
+
+
+def build_setup_steps(
+    args: argparse.Namespace,
+    repo_root: Path,
+    profiles_exists: bool,
+) -> List[CommandStep]:
+    validate_setup_args(args)
+    repo_root = Path(repo_root)
+    steps: List[CommandStep] = []
+    if args.force_wizard or not profiles_exists:
+        steps.append(
+            CommandStep(
+                "wizard",
+                [
+                    sys.executable,
+                    _repo_script(repo_root, "routerkit-wizard.py"),
+                    "--profiles",
+                    args.profiles,
+                    "--no-generator-prompt",
+                ],
+            )
+        )
+    steps.extend(
+        [
+            CommandStep(
+                "generator",
+                [
+                    sys.executable,
+                    _repo_script(repo_root, "generate-xray-profiles.py"),
+                    "--profiles",
+                    args.profiles,
+                    "--out",
+                    args.generated,
+                ],
+                suppress_output=True,
+            ),
+            CommandStep(
+                "strict plan",
+                [
+                    sys.executable,
+                    _repo_script(repo_root, "routerkit-plan.py"),
+                    "--generated",
+                    args.generated,
+                    "--target-root",
+                    args.target_root,
+                    "--strict",
+                ],
+            ),
+        ]
+    )
     return steps
 
 
@@ -179,6 +265,98 @@ def render_steps(steps: Sequence[CommandStep], repo_root: Optional[Path] = None)
         command = [_render_token(token, repo_root) for token in step.command]
         lines.append(f"{index}. {shlex.join(command)}")
     return "\n".join(lines)
+
+
+def render_setup_steps(
+    steps: Sequence[CommandStep],
+    repo_root: Path,
+    generated: str,
+    include_apply: bool,
+    include_confirmation: bool,
+) -> str:
+    lines = ["Would run setup pipeline:"]
+    index = 1
+    for step in steps:
+        command = [_render_token(token, repo_root) for token in step.command]
+        lines.append(f"{index}. {shlex.join(command)}")
+        index += 1
+    if include_apply:
+        if include_confirmation:
+            lines.append(f"{index}. confirmation gate")
+            index += 1
+        for step in build_router_apply_steps(generated, repo_root):
+            command = [_render_token(token, repo_root) for token in step.command]
+            lines.append(f"{index}. {shlex.join(command)}")
+            index += 1
+    return "\n".join(lines)
+
+
+def confirm_setup_apply(input_fn=input) -> bool:
+    answer = input_fn("Proceed with router apply stages? [y/N]: ").strip().lower()
+    return answer in {"y", "yes"}
+
+
+def print_setup_plan_summary() -> None:
+    print("Setup plan completed.")
+    print("No router apply steps were executed.")
+    print("Use --apply to continue through preflight, backup, install, and healthcheck.")
+    print("Autostart and Netcraze policy automation are not implemented in this phase.")
+
+
+def print_setup_apply_summary() -> None:
+    print("Setup apply completed.")
+    print("Profiles were generated locally.")
+    print("Strict plan passed.")
+    print("Preflight passed.")
+    print("Backup completed.")
+    print("Install completed.")
+    print("Healthcheck passed.")
+    print("Autostart was not enabled.")
+    print("Netcraze proxy connections and policies were not changed.")
+    print("Firewall rules were not changed.")
+    print("xkeen -start was not called.")
+
+
+def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
+    validate_setup_args(args)
+    repo_root = Path(repo_root)
+    profiles_exists = Path(args.profiles).exists()
+    steps = build_setup_steps(args, repo_root, profiles_exists)
+    reusing_profiles = profiles_exists and not args.force_wizard
+
+    if reusing_profiles:
+        print(f"Reusing existing profiles file: {args.profiles}")
+
+    if args.dry_run:
+        print(
+            render_setup_steps(
+                steps,
+                repo_root,
+                args.generated,
+                include_apply=args.apply,
+                include_confirmation=args.apply and not args.yes,
+            )
+        )
+        return 0
+
+    code = run_steps(steps)
+    if code != 0:
+        return code
+
+    if not args.apply:
+        print_setup_plan_summary()
+        return 0
+
+    if not args.yes and not confirm_setup_apply(input_fn=input_fn):
+        print("Cancelled before router apply.")
+        print("Generated local files may exist, but no router apply stages were started.")
+        return 1
+
+    apply_steps = build_router_apply_steps(args.generated, repo_root)
+    code = run_steps(apply_steps)
+    if code == 0:
+        print_setup_apply_summary()
+    return code
 
 
 def _backup_completed(steps: Sequence[CommandStep], completed_names: Sequence[str]) -> bool:
@@ -246,9 +424,25 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
     completed_names: List[str] = []
     for step in steps:
         try:
-            completed = subprocess.run(list(step.command), check=False)
+            if step.suppress_output:
+                completed = subprocess.run(
+                    list(step.command),
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            else:
+                completed = subprocess.run(list(step.command), check=False)
         except OSError as exc:
-            print(f"routerkit: could not run {step.name}: {exc}", file=sys.stderr)
+            if step.suppress_output:
+                print(f"routerkit: could not run {step.name}.", file=sys.stderr)
+                print(
+                    "Generator output was suppressed to avoid exposing subscription or profile details.",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"routerkit: could not run {step.name}: {exc}", file=sys.stderr)
             if step.name == "install":
                 _print_install_rollback_hint(steps, completed_names)
             elif step.name == "healthcheck":
@@ -257,6 +451,11 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
 
         if completed.returncode != 0:
             print(f"routerkit: {step.name} failed with exit code {completed.returncode}.", file=sys.stderr)
+            if step.suppress_output:
+                print(
+                    "Generator output was suppressed to avoid exposing subscription or profile details.",
+                    file=sys.stderr,
+                )
             if step.name == "install":
                 _print_install_rollback_hint(steps, completed_names)
             elif step.name == "healthcheck":
@@ -264,6 +463,8 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
             return completed.returncode
 
         completed_names.append(step.name)
+        if step.suppress_output:
+            print("Generator completed. Secret-bearing output was suppressed.")
 
     return 0
 
@@ -309,6 +510,50 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     generate.add_argument("--profiles", required=True, help="Path to profiles JSON.")
     generate.add_argument("--out", required=True, help="Output directory.")
+
+    setup = subparsers.add_parser(
+        "setup",
+        help="Run the local setup plan; use --apply for confirmed router apply stages.",
+        description="Run wizard/reuse, generation, and strict planning before any optional apply stages.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    setup.add_argument(
+        "--profiles",
+        default="profiles.json",
+        help="Profiles file path; default: profiles.json.",
+    )
+    setup.add_argument(
+        "--generated",
+        default="generated",
+        help="Generated config directory; default: generated.",
+    )
+    setup.add_argument(
+        "--target-root",
+        default="/opt",
+        help="Install target root for strict plan mode; default: /opt.",
+    )
+    setup.add_argument(
+        "--apply",
+        action="store_true",
+        help="Continue through confirmed preflight, backup, install, and healthcheck stages.",
+    )
+    setup.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip only the apply confirmation prompt; requires --apply.",
+    )
+    setup.add_argument(
+        "--force-wizard",
+        action="store_true",
+        help="Run the wizard even when the profiles file already exists.",
+    )
+    setup.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
 
     plan = subparsers.add_parser(
         "plan",
@@ -401,6 +646,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     repo_root = Path(args.repo_root).resolve() if args.repo_root else repo_root_from_script()
     try:
+        if args.command == "setup":
+            return run_setup(args, repo_root)
         steps = build_steps(args, repo_root)
     except RouterkitCliError as exc:
         print(f"routerkit: {exc}", file=sys.stderr)
