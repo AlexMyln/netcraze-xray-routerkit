@@ -72,7 +72,7 @@ Router-side proxy setups often drift into hard-to-audit firewall modes, broad de
 
 ## Quick Start
 
-The v0.2-alpha guided installer foundation is in progress. For the new read-only preflight and local profiles wizard, see [Guided installer foundation](docs/guided-installer.md).
+The v0.2-alpha guided setup now integrates profile-source acquisition, private generation, strict planning, and explicitly confirmed apply stages. See the [guided installer documentation](docs/guided-installer.md).
 
 ### Unified CLI
 
@@ -94,9 +94,30 @@ python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap
 
 The planner records explicit command-to-Entware-package mappings; in particular, `sha256sum` is planned through `coreutils-sha256sum`, with `ca-bundle` as a base requirement. Package names are scoped to the documented initial Entware arm64/aarch64 environment and still require hardware validation. Planning remains read-only, and package installation remains a later #13 slice.
 
-`setup` is the first implementation slice of the one-command installer roadmap. It combines the existing wizard, local generation, strict plan, explicit apply confirmation, preflight, backup, install, and healthcheck stages. Without `--apply`, it stops after local generation and a successful strict plan. With `--apply`, it asks for confirmation unless `--yes` is supplied; `--yes` skips only that prompt, not the safety stages.
+`setup` now uses the completed profile-source stack by default. It accepts a source through hidden input, a named environment variable, or a protected owner-only file; safely resolves HTTPS when needed; parses compatible nodes; and selects one primary plus up to two fallbacks. Setup writes the selected profiles only inside a unique private workspace, suppresses generator output, removes the temporary profiles immediately after generation, and then runs a strict plan. Generated config fragments persist locally and are secret-bearing. Without `--apply`, no router apply stage runs. With `--apply`, setup asks for confirmation unless `--yes` is supplied; `--yes` skips only that prompt, not preflight, backup, install, or healthcheck.
 
-The unified setup captures and suppresses generator output because it may contain subscription-derived or credential-derived details; standalone generation keeps its existing diagnostic behavior.
+While the private workspace exists, catchable `SIGTERM` and `SIGHUP` requests trigger coordinated source/generator process-group shutdown, child reaping, and workspace cleanup before setup exits. `SIGINT` keeps normal interactive cancellation behavior. `SIGKILL`, power loss, kernel failure, and host crashes cannot run in-process cleanup and may leave the owner-only workspace for manual removal.
+
+For setup, `--source-env` accepts only a valid dedicated `ROUTERKIT_*` variable name. The raw value stays out of argv and output, is available only to the profile-source acquisition child, and is consumed there before URL classification, DNS resolver worker creation, parsing, or selection. Generator, strict-plan, preflight, backup, install, and healthcheck subprocesses receive a copy of the normal environment with that one selected variable removed. Standalone `profile-source --source-env` keeps its existing general environment-name compatibility unless its internal consume option is explicitly used by setup.
+
+Non-interactive source selection keeps raw source material out of argv:
+
+```sh
+ROUTERKIT_PROFILE_SOURCE='...' \
+python3 scripts/routerkit.py setup --source-env ROUTERKIT_PROFILE_SOURCE --primary-index 1 --fallback-index 2
+python3 scripts/routerkit.py setup --source-file /protected/path/source.txt --primary-index 1
+```
+
+Existing profiles reuse and the legacy wizard are explicit advanced modes:
+
+```sh
+python3 scripts/routerkit.py setup --reuse-profiles /protected/path/profiles.json
+python3 scripts/routerkit.py setup --legacy-wizard
+```
+
+The old `--profiles` and `--force-wizard` spellings remain deprecated aliases for those explicit modes. Setup no longer notices or reuses `./profiles.json` accidentally. Reuse rejects symlinks, non-regular files, non-owner-only POSIX permissions, oversized content, invalid UTF-8, and path/descriptor identity changes; the validated input is copied into the setup workspace and the original is never modified or passed to the generator.
+
+`setup --dry-run` is abstract and secret-free: it reads no source, reuse file, secret input, or environment value; performs no stdin prompt, DNS or HTTPS request, subprocess, private-workspace creation, file write, or router action. Python module loading and repository-path resolution are outside this secret-input contract. This is intentionally stricter than standalone `profile-source --dry-run`, which may still acquire an HTTPS source but never writes profiles.
 
 This milestone is not the final implementation of [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). The read-only planner/manifest slice closes [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), while bootstrap apply remains part of [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13), autostart is #14, Netcraze proxy/policy automation is #15, and hardware validation remains blocked on #16. `setup` does not invoke `bootstrap` yet.
 
@@ -115,7 +136,7 @@ Only VLESS Reality nodes using TCP (including the normalized Xray `raw` alias), 
 
 Network acquisition accepts only HTTPS on port 443, with no URL userinfo or fragments. Outer whitespace around one complete HTTPS source is removed consistently for hidden, environment, protected-file, and generator input, so LF/CRLF file endings work; internal whitespace, control characters, multiple lines, and empty values are rejected, while raw/offline payloads are unchanged. Every HTTP `Location` redirect is independently URL-validated and DNS-resolved; every returned address must pass fixed reviewed special-purpose CIDR tables plus standard-library `ipaddress` defense-in-depth checks, the TCP connection is pinned to a validated address, TLS still verifies the original hostname, and the connected peer is checked. IPv4-mapped IPv6, standardized NAT64, Teredo, 6to4, and ORCHID ranges are conservatively rejected. Ordinary cancellation stops retries and redirects while bounded best-effort resource cleanup is attempted. The limits are 5 redirects, 16 DNS addresses per hop, 5 seconds per DNS hop, 10 seconds per address connection, a 30-second operational deadline plus bounded cleanup grace, an 8192-byte URL/redirect value, and a 1 MiB response. The dedicated Python 3.8.18 and primary `3.x` compatibility job exercises the destination/address-policy test class; the full suite runs on the primary CI Python. Compressed responses are rejected. JavaScript is not executed and HTML meta refresh is not interpreted, so those browser-style navigation mechanisms are not followed or supported; a final HTTP 200 body is instead passed to the offline parser. `profile-source --dry-run` may perform this network read and parsing but never writes `profiles.json`. The generator's existing `subscription_url` and `subscription_url_env` fields use the same resolver. See the [network security ADR](docs/architecture/profile-source-network-security.md).
 
-Automatic default `setup` integration remains [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24), parent [#20](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/20) remains open, and normal `routerkit setup` behavior is unchanged.
+Default setup integration completes [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24) and parent [#20](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/20). Bootstrap apply, autostart, device discovery, policies, and hardware validation remain separate work.
 
 The individual commands remain available:
 
@@ -295,8 +316,8 @@ examples/profiles.example.json     Secret-free profile template
 assets/social-preview.png          GitHub social preview image
 README.ru.md                       Russian README
 docs/install-from-zero.ru.md       Install from zero guide in Russian
-docs/guided-installer.md           Guided installer foundation
-docs/guided-installer.ru.md        Guided installer foundation in Russian
+docs/guided-installer.md           Guided installer workflow
+docs/guided-installer.ru.md        Guided installer workflow in Russian
 docs/installer-scope.md            Guided installer scope and prerequisites
 docs/installer-scope.ru.md         Guided installer scope and prerequisites in Russian
 docs/netcraze-ui.md                Web UI proxy and policy guide
@@ -313,8 +334,8 @@ docs/announcement.ru.md            Russian announcement draft
 
 - [Русская версия README](README.ru.md)
 - [Changelog](CHANGELOG.md)
-- [Guided installer foundation](docs/guided-installer.md)
-- [Guided installer foundation — RU](docs/guided-installer.ru.md)
+- [Guided installer](docs/guided-installer.md)
+- [Guided installer — RU](docs/guided-installer.ru.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
 - [Installer scope](docs/installer-scope.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)

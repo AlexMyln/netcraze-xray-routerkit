@@ -1,6 +1,6 @@
-# Guided installer foundation
+# Guided installer
 
-This is the v0.2-alpha foundation for a guided one-click installer. It adds safe local guidance and read-only router preflight checks without automating the Netcraze Web UI or changing router runtime state.
+The v0.2-alpha guided setup integrates profile-source acquisition, private local generation, strict planning, and explicitly confirmed router apply stages. It does not automate the Netcraze Web UI, firewall, autostart, or device policies.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ Before using this flow, prepare the router manually:
 
 ## Unified CLI
 
-`scripts/routerkit.py` is the unified Python entrypoint for the guided installer foundation. It only delegates to existing scripts and returns the delegated process exit code.
+`scripts/routerkit.py` is the unified Python entrypoint. It delegates individual tools and also owns setup workspace creation, secure profile reuse, source-environment sanitation, source/generator child lifecycle, cleanup, confirmation, and apply orchestration. Ordinary delegated commands preserve their child exit codes.
 
 ```sh
 python3 scripts/routerkit.py wizard
@@ -72,9 +72,9 @@ The numbered list is secret-safe and sanitizes untrusted fragments. It does not 
 
 An HTTPS source may be a direct subscription or a standard redirect-based shortlink. Outer whitespace around the complete HTTPS value is removed, including a protected file's LF/CRLF ending, without modifying path/query content or raw/offline payloads; internal whitespace, control characters, multiple lines, and empty values are rejected. Only HTTPS port 443 is accepted, without userinfo or fragments. Every hop revalidates the URL and all DNS addresses, requires an entirely global set under fixed reviewed special-purpose CIDR tables plus standard-library `ipaddress` defense-in-depth checks, pins TCP to one validated address, verifies TLS for the original hostname, and verifies the peer address. IPv4-mapped IPv6, standardized NAT64, Teredo, 6to4, and ORCHID ranges are rejected. Ordinary cancellation stops retries and redirects while bounded best-effort cleanup is attempted. There are at most 5 redirects and 16 DNS addresses per hop; DNS, connection, operational, URL/Location, and body limits are 5 seconds, 10 seconds, 30 seconds plus bounded cleanup grace, 8192 bytes, and 1 MiB respectively. The dedicated compatibility job runs the destination/address-policy test class on Python 3.8.18 and primary `3.x`; the full multiprocessing, TLS, HTTP, deadline, and cancellation suite runs only on the primary CI Python. Compressed responses are rejected. RouterKit follows only supported HTTP 3xx `Location` redirects; it does not execute JavaScript or interpret HTML meta refresh, so those browser-style navigation mechanisms are not followed or supported. A final HTTP 200 body is passed to the offline parser, which fails generically if it contains no compatible profile payload. See the [security ADR](architecture/profile-source-network-security.md).
 
-For this command, `--dry-run` is no-write rather than no-network: an HTTPS source is acquired and parsed before selection, but no output is written. The generator shares the resolver for `subscription_url` and `subscription_url_env`. Automatic default setup integration remains #24, #20 remains open, and the existing `routerkit setup` path is unchanged.
+For this standalone command, `--dry-run` is no-write rather than no-network: an HTTPS source is acquired and parsed before selection, but no output is written. The generator shares the resolver for `subscription_url` and `subscription_url_env`. Default `routerkit setup` integration now completes #20/#24 and has the stricter no-source/reuse/secret/environment-value read, no-stdin-prompt, no-network, no-subprocess, no-private-workspace, and no-write dry-run contract described below.
 
-Known correctness behavior: a very narrowly timed local interrupt after atomic publication can produce the cancellation/no-write message even though the private destination was already committed. In validated POSIX reproductions the destination remained mode `0600`, and no secret was printed. After an interruption, check whether the requested output file exists before retrying.
+After cancellation, profile-source makes no unconditional no-write claim: a narrowly timed interrupt can arrive after atomic publication. No secret is printed; check whether the requested output file exists before retrying. Setup normally removes any setup-owned output during private-workspace cleanup.
 
 ## What the wizard does
 
@@ -138,12 +138,16 @@ python3 scripts/routerkit-plan.py --generated generated --json
 
 ## Setup command
 
-`scripts/routerkit.py setup` is the first implementation slice of the one-command setup roadmap. It orchestrates the existing safe stages instead of replacing them:
+`scripts/routerkit.py setup` uses the existing profile-source, generator, strict-plan, and apply tools as one stop-on-first-failure pipeline:
 
-1. create `profiles.json` with the wizard, or safely reuse an existing file without printing its contents;
-2. generate local config fragments;
-3. run a strict install plan;
-4. after explicit apply permission, run preflight, backup, install, and healthcheck.
+1. accept a source through hidden input, a named environment variable, or a protected owner-only file;
+2. use the reviewed profile-source resolver for HTTPS when needed;
+3. parse compatible nodes and select one primary plus up to two fallbacks;
+4. publish selected profiles only inside a unique private setup workspace;
+5. generate local config fragments with generator output suppressed;
+6. remove the private setup profiles and workspace immediately after generator termination;
+7. run a strict install plan;
+8. after explicit apply permission, run preflight, backup, install, and healthcheck.
 
 Plan-only setup is the default:
 
@@ -151,9 +155,38 @@ Plan-only setup is the default:
 python3 scripts/routerkit.py setup
 ```
 
-This performs only local profile collection or reuse, generation, and strict planning. No router apply stage is started.
+With no source option, setup reads the source through hidden input and prompts for node selection. No accidental current-directory `profiles.json` reuse occurs. This performs source acquisition/selection, local generation, cleanup, and strict planning; no router apply stage is started.
+
+For non-interactive input, pass only an environment-variable name or protected file path, never the raw source as an ordinary argument:
+
+Setup requires a valid dedicated `ROUTERKIT_*` name for `--source-env`. The profile-source child copies and removes that value before URL classification or DNS resolver worker creation; generator, strict plan, and every apply subprocess receive the normal environment with only that selected variable removed. The raw source is never copied to argv or output. Standalone `profile-source --source-env` retains compatibility with other valid environment names because it does not use setup's internal consume option.
+
+```sh
+ROUTERKIT_PROFILE_SOURCE='...' \
+python3 scripts/routerkit.py setup \
+  --source-env ROUTERKIT_PROFILE_SOURCE \
+  --primary-index 1 \
+  --fallback-index 2
+
+python3 scripts/routerkit.py setup \
+  --source-file /protected/path/source.txt \
+  --primary-index 1
+```
+
+Existing private profiles reuse and the old wizard are explicit advanced/compatibility modes:
+
+```sh
+python3 scripts/routerkit.py setup \
+  --reuse-profiles /protected/path/profiles.json
+
+python3 scripts/routerkit.py setup --legacy-wizard
+```
+
+`--profiles PATH` is a deprecated explicit alias for `--reuse-profiles PATH`; it has no default. `--force-wizard` is a deprecated alias for `--legacy-wizard`. Secure reuse rejects symlinks and non-regular files, requires owner-only permissions on POSIX, enforces a bounded UTF-8 read, checks path/descriptor identity and metadata, and copies validated content to mode `0600` inside setup's private `0700` workspace. The original file is never modified, deleted, backed up, printed, or passed to the generator.
 
 Within unified setup, generator stdout and stderr are suppressed and replaced with generic status messages because they may contain subscription-derived or credential-derived details. Running the generator directly retains its existing diagnostics.
+
+While setup owns the private workspace, catchable `SIGTERM` and `SIGHUP` requests cause controlled source/generator process-group shutdown, bounded escalation when needed, child reaping, and workspace cleanup before exit. `SIGINT` remains ordinary interactive cancellation. `SIGKILL`, power loss, kernel failure, and host crashes cannot execute user-space cleanup and may leave the owner-only workspace for manual removal. Generated fragments are intentionally persistent, secret-bearing local artifacts; temporary-workspace cleanup does not remove them.
 
 To continue through the hardened apply pipeline, use:
 
@@ -167,14 +200,16 @@ After the strict plan passes, setup asks `Proceed with router apply stages? [y/N
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
-Use dry-run to render the intended flow without running the wizard, generator, plan, apply stages, or confirmation prompt, and without creating local profile/generated files:
+Use dry-run to render an abstract secret-free flow with no source, reuse-file, secret-input, or environment-value read; no stdin prompt; and no DNS/HTTPS request, subprocess, private workspace, profile, generated file, write, or router action:
 
 ```sh
 python3 scripts/routerkit.py --dry-run setup
 python3 scripts/routerkit.py setup --apply --dry-run
 ```
 
-This is a milestone toward epic #5, not its final implementation. Bootstrap apply remains tracked in #13, autostart in #14, Netcraze proxy/policy automation in #15, and hardware validation in #16. `setup` does not invoke `bootstrap` in this release; that integration is deferred until the planner/manifest contract and hardware evidence are reviewed. Setup does not download or install Xray, enable autostart, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`.
+This setup dry-run contract differs from standalone `profile-source --dry-run`: standalone profile-source may still perform an HTTPS network read to validate selection, while setup dry-run performs no secret input or network access. Python module loading and repository-path resolution are outside the secret-input contract.
+
+This integration closes #20 and #24 but is not the end of epic #5. Bootstrap apply remains tracked in #13, autostart in #14, Netcraze proxy/policy automation in #15, and hardware validation in #16. `setup` does not invoke `bootstrap` in this release. Setup does not download or install Xray, enable autostart, discover devices, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
 
 ## Install command
 

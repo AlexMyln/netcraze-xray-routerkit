@@ -8,7 +8,6 @@ import getpass
 import json
 import os
 import re
-import stat
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -33,6 +32,12 @@ from routerkit_profile_source import (
     validate_env_name,
     write_private_json,
 )
+from routerkit_private_io import (
+    PrivateFileEncodingError,
+    PrivateFileError,
+    PrivateFileTooLargeError,
+    read_owner_only_text_file,
+)
 
 
 UNSUPPORTED_URL_MESSAGE = "This source scheme is not supported."
@@ -54,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--source-env", metavar="ENV_NAME")
     source.add_argument("--source-file", metavar="PATH")
+    parser.add_argument("--consume-source-env", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--output", default="profiles.json")
     parser.add_argument("--list", action="store_true", help="List compatible nodes without writing.")
     parser.add_argument("--json", action="store_true", help="Use secret-safe JSON with --list.")
@@ -66,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    if args.consume_source_env and not args.source_env:
+        raise CliConfigurationError("--consume-source-env requires --source-env.")
     if args.json and not args.list:
         raise CliConfigurationError("--json is valid only with --list.")
     if args.fallback_index and args.primary_index is None:
@@ -82,60 +90,32 @@ def validate_args(args: argparse.Namespace) -> None:
             raise CliConfigurationError(str(exc)) from None
 
 
-def _validate_source_file_metadata(metadata: os.stat_result) -> None:
-    if not stat.S_ISREG(metadata.st_mode):
-        raise CliConfigurationError("Source file must be a regular, non-symlink file.")
-    if os.name == "posix" and stat.S_IMODE(metadata.st_mode) & 0o077:
-        raise CliConfigurationError("Source file permissions must be owner-only on POSIX.")
-    if metadata.st_size > MAX_PAYLOAD_BYTES:
-        raise PayloadValidationError("Payload is too large.")
-
-
 def _read_source_file(path_text: str) -> str:
-    path = Path(path_text)
-    fd = -1
     try:
-        path_metadata = path.lstat()
-        if stat.S_ISLNK(path_metadata.st_mode):
-            raise CliConfigurationError("Source file must be a regular, non-symlink file.")
-        _validate_source_file_metadata(path_metadata)
-
-        flags = os.O_RDONLY
-        flags |= getattr(os, "O_CLOEXEC", 0)
-        flags |= getattr(os, "O_BINARY", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
-        opened_metadata = os.fstat(fd)
-        _validate_source_file_metadata(opened_metadata)
-        if (path_metadata.st_dev, path_metadata.st_ino) != (
-            opened_metadata.st_dev,
-            opened_metadata.st_ino,
-        ):
-            raise CliConfigurationError("Source file changed before it could be read safely.")
-
-        data = bytearray()
-        while len(data) <= MAX_PAYLOAD_BYTES:
-            chunk = os.read(fd, min(65536, MAX_PAYLOAD_BYTES + 1 - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
-    except (CliConfigurationError, PayloadValidationError):
-        raise
-    except OSError:
-        raise CliConfigurationError("Could not read the source file.") from None
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    if len(data) > MAX_PAYLOAD_BYTES:
-        raise PayloadValidationError("Payload is too large.")
-    try:
-        return bytes(data).decode("utf-8")
-    except UnicodeDecodeError:
+        return read_owner_only_text_file(
+            Path(path_text),
+            maximum_bytes=MAX_PAYLOAD_BYTES,
+            description="Source file",
+        )
+    except PrivateFileTooLargeError:
+        raise PayloadValidationError("Payload is too large.") from None
+    except PrivateFileEncodingError:
         raise PayloadValidationError("Source file must contain UTF-8 text.") from None
+    except PrivateFileError as exc:
+        raise CliConfigurationError(str(exc)) from None
+
+
+def consume_environment_payload(name: str) -> str:
+    value = os.environ.pop(name, None)
+    if value is None:
+        raise CliConfigurationError("Source environment variable is not set.")
+    return value
 
 
 def read_payload(args: argparse.Namespace) -> str:
     if args.source_env:
+        if args.consume_source_env:
+            return consume_environment_payload(args.source_env)
         value = os.environ.get(args.source_env)
         if value is None:
             raise CliConfigurationError("Source environment variable is not set.")
@@ -274,7 +254,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"routerkit-profile-source: {exc}", file=sys.stderr)
         return 2
     except (UserCancelled, KeyboardInterrupt):
-        print("Cancelled; no profiles file was written.", file=sys.stderr)
+        print(
+            "Cancelled; no further actions were taken. "
+            "Check whether the requested output file exists before retrying.",
+            file=sys.stderr,
+        )
         return 1
     except OutputExistsError as exc:
         print(f"routerkit-profile-source: {exc}", file=sys.stderr)
