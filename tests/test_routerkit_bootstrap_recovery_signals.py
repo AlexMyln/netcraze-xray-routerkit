@@ -41,17 +41,36 @@ def _write_opkg(path):
     )
 
 
-def _candidate_body(target, ready, release, child_pid):
+def _candidate_body(
+    target,
+    ready,
+    release,
+    child_pid,
+    *,
+    pre_ready=None,
+    pre_release=None,
+    pre_child_pid=None,
+):
+    pre_replacement = ""
+    if pre_ready is not None:
+        pre_replacement = (
+            "if [ \"$0\" != '{}' ]; then\n"
+            "  printf '%s\\n' \"$$\" > '{}'\n"
+            "  : > '{}'\n"
+            "  while [ ! -f '{}' ]; do /bin/sleep 0.05; done\n"
+            "fi\n"
+        ).format(target, pre_child_pid, pre_ready, pre_release)
     return (
         "#!/bin/sh\n"
         "# {} must never reach process output.\n"
+        "{}"
         "if [ \"$0\" = '{}' ]; then\n"
         "  printf '%s\\n' \"$$\" > '{}'\n"
         "  : > '{}'\n"
         "  while [ ! -f '{}' ]; do /bin/sleep 0.05; done\n"
         "fi\n"
         "printf '%s\\n' 'Xray 26.3.27'\n"
-    ).format(SECRET_MARKER, target, child_pid, ready, release)
+    ).format(SECRET_MARKER, pre_replacement, target, child_pid, ready, release)
 
 
 def _old_body(counter, recovery_ready, recovery_release, recovery_pid, mode):
@@ -101,6 +120,20 @@ def _worker(config_path):
             raise apply.BootstrapRollbackError("synthetic rollback failure")
 
         apply._rollback = fail_rollback
+    if config.get("pause_after_replace"):
+        real_install = apply._install_candidate
+        install_calls = [0]
+
+        def pause_after_replace(candidate, candidate_hash, target):
+            real_install(candidate, candidate_hash, target)
+            install_calls[0] += 1
+            if install_calls[0] == 1:
+                Path(config["replace_ready"]).touch()
+                while True:
+                    time.sleep(0.05)
+
+        apply._install_candidate = pause_after_replace
+
     def runner(command, **kwargs):
         if config.get("version_timeout") and kwargs["lifecycle"]._recovery_active:
             kwargs["timeout"] = float(config["version_timeout"])
@@ -160,6 +193,9 @@ class BootstrapRecoveryProcessTests(unittest.TestCase):
         existing=True,
         recovery_mode="normal",
         rollback_fail=False,
+        pause_after_replace=False,
+        pre_replacement=False,
+        repeated_signum=None,
     ):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -171,6 +207,10 @@ class BootstrapRecoveryProcessTests(unittest.TestCase):
             recovery_release = root / "recovery-release"
             recovery_pid = root / "recovery-child-pid"
             counter = root / "old-version-count"
+            replace_ready = root / "replace-ready"
+            pre_ready = root / "pre-replacement-ready"
+            pre_release = root / "pre-replacement-release"
+            pre_child_pid = root / "pre-replacement-child-pid"
             _write_opkg(root / "bin/opkg")
 
             old_bytes = None
@@ -185,7 +225,15 @@ class BootstrapRecoveryProcessTests(unittest.TestCase):
                 _write_executable(target, old_body)
                 old_bytes = target.read_bytes()
 
-            candidate = _candidate_body(target, ready, release, child_pid)
+            candidate = _candidate_body(
+                target,
+                ready,
+                release,
+                child_pid,
+                pre_ready=pre_ready if pre_replacement else None,
+                pre_release=pre_release if pre_replacement else None,
+                pre_child_pid=pre_child_pid if pre_replacement else None,
+            )
             archive = root / "synthetic-source.zip"
             with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
                 bundle.writestr("xray", candidate.encode("utf-8"))
@@ -195,6 +243,8 @@ class BootstrapRecoveryProcessTests(unittest.TestCase):
                 "archive": str(archive),
                 "rollback_fail": rollback_fail,
                 "version_timeout": 0.25 if recovery_mode == "timeout" else None,
+                "pause_after_replace": pause_after_replace,
+                "replace_ready": str(replace_ready),
             }
             config_path = root / "worker.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -205,27 +255,48 @@ class BootstrapRecoveryProcessTests(unittest.TestCase):
                 text=True,
                 env=dict(os.environ, PYTHONPYCACHEPREFIX="/tmp/routerkit-pycache"),
             )
-            self._wait_for(ready, process)
-            self.assertIn(b"Xray 26.3.27", target.read_bytes())
+            readiness = (
+                pre_ready
+                if pre_replacement
+                else replace_ready if pause_after_replace else ready
+            )
+            self._wait_for(readiness, process)
+            if pre_replacement:
+                if existing:
+                    self.assertEqual(target.read_bytes(), old_bytes)
+                else:
+                    self.assertFalse(target.exists())
+            else:
+                self.assertIn(b"Xray 26.3.27", target.read_bytes())
             os.kill(process.pid, signum)
 
             if recovery_mode == "repeat":
                 self._wait_for(recovery_ready, process)
-                repeated = getattr(signal, "SIGHUP", signum)
+                repeated = repeated_signum or getattr(signal, "SIGHUP", signum)
                 os.kill(process.pid, repeated)
                 recovery_release.touch()
 
             stdout, stderr = process.communicate(timeout=15.0)
             self._assert_pid_gone(child_pid)
             self._assert_pid_gone(recovery_pid)
+            self._assert_pid_gone(pre_child_pid)
             self.assertNotIn(SECRET_MARKER, stdout + stderr)
+            self.assertNotIn("Bootstrap apply result", stdout + stderr)
             self.assertFalse((root / apply.STATE_RELATIVE_PATH).exists())
             staging_parent = root / apply.STAGING_RELATIVE_DIR
             self.assertTrue(staging_parent.exists())
             self.assertEqual(list(staging_parent.iterdir()), [])
 
             backup_paths = list((root / apply.BACKUP_RELATIVE_DIR).glob("xray-*")) if existing else []
-            if rollback_fail:
+            if pre_replacement:
+                self.assertEqual(process.returncode, 128 + signum)
+                self.assertIn("no signal-time binary recovery was required", stderr)
+                self.assertFalse(backup_paths)
+                if existing:
+                    self.assertEqual(target.read_bytes(), old_bytes)
+                else:
+                    self.assertFalse(target.exists())
+            elif rollback_fail:
                 self.assertEqual(process.returncode, 3)
                 self.assertIn("Signal-time replacement recovery could not be proven", stderr)
                 self.assertNotIn("verified binary recovery", stderr)
@@ -241,6 +312,7 @@ class BootstrapRecoveryProcessTests(unittest.TestCase):
                 if existing:
                     self.assertEqual(target.read_bytes(), old_bytes)
                     self.assertTrue(os.access(str(target), os.X_OK))
+                    self.assertEqual(backup_paths[0].read_bytes(), old_bytes)
                 else:
                     self.assertFalse(target.exists())
 
@@ -258,13 +330,74 @@ class BootstrapRecoveryProcessTests(unittest.TestCase):
     def test_clean_install_signal_after_replacement_removes_candidate(self):
         self._run_signal_case(signal.SIGTERM, existing=False)
 
+    @unittest.skipUnless(hasattr(signal, "SIGINT"), "SIGINT unavailable")
+    def test_existing_install_sigint_after_replacement(self):
+        self._run_signal_case(signal.SIGINT)
+
+    @unittest.skipUnless(hasattr(signal, "SIGINT"), "SIGINT unavailable")
+    def test_clean_install_sigint_after_replacement_removes_candidate(self):
+        self._run_signal_case(signal.SIGINT, existing=False)
+
+    @unittest.skipUnless(hasattr(signal, "SIGINT"), "SIGINT unavailable")
+    def test_sigint_inside_install_boundary_recovers_before_exit(self):
+        self._run_signal_case(signal.SIGINT, pause_after_replace=True)
+
+    @unittest.skipUnless(hasattr(signal, "SIGINT"), "SIGINT unavailable")
+    def test_sigint_before_replacement_stops_child_without_rollback_claim(self):
+        self._run_signal_case(signal.SIGINT, pre_replacement=True)
+
     @unittest.skipUnless(hasattr(signal, "SIGTERM"), "SIGTERM unavailable")
     def test_signal_time_rollback_failure_is_visible(self):
         self._run_signal_case(signal.SIGTERM, rollback_fail=True)
 
+    @unittest.skipUnless(hasattr(signal, "SIGINT"), "SIGINT unavailable")
+    def test_sigint_rollback_failure_is_visible(self):
+        self._run_signal_case(signal.SIGINT, rollback_fail=True)
+
     @unittest.skipUnless(hasattr(signal, "SIGTERM"), "SIGTERM unavailable")
     def test_repeated_signal_is_deferred_during_recovery(self):
         self._run_signal_case(signal.SIGTERM, recovery_mode="repeat")
+
+    @unittest.skipUnless(hasattr(signal, "SIGINT"), "SIGINT unavailable")
+    def test_repeated_sigint_is_deferred_during_recovery(self):
+        self._run_signal_case(
+            signal.SIGINT,
+            recovery_mode="repeat",
+            repeated_signum=signal.SIGINT,
+        )
+
+    @unittest.skipUnless(
+        hasattr(signal, "SIGINT") and hasattr(signal, "SIGTERM"),
+        "SIGINT/SIGTERM unavailable",
+    )
+    def test_sigint_then_sigterm_keeps_original_signal_exit(self):
+        self._run_signal_case(
+            signal.SIGINT,
+            recovery_mode="repeat",
+            repeated_signum=signal.SIGTERM,
+        )
+
+    @unittest.skipUnless(
+        hasattr(signal, "SIGINT") and hasattr(signal, "SIGTERM"),
+        "SIGINT/SIGTERM unavailable",
+    )
+    def test_sigterm_then_sigint_keeps_original_signal_exit(self):
+        self._run_signal_case(
+            signal.SIGTERM,
+            recovery_mode="repeat",
+            repeated_signum=signal.SIGINT,
+        )
+
+    @unittest.skipUnless(
+        hasattr(signal, "SIGINT") and hasattr(signal, "SIGHUP"),
+        "SIGINT/SIGHUP unavailable",
+    )
+    def test_sighup_then_sigint_keeps_original_signal_exit(self):
+        self._run_signal_case(
+            signal.SIGHUP,
+            recovery_mode="repeat",
+            repeated_signum=signal.SIGINT,
+        )
 
     @unittest.skipUnless(hasattr(signal, "SIGTERM"), "SIGTERM unavailable")
     def test_rollback_validation_child_timeout_is_failure_and_is_reaped(self):

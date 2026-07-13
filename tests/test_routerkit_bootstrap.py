@@ -319,6 +319,30 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("apply declined", errors)
         transaction.assert_not_called()
 
+    def test_apply_confirmation_ctrl_c_starts_no_transaction_action(self):
+        inventory = json.loads(
+            (FIXTURES / "supported-aarch64.json").read_text(encoding="utf-8")
+        )
+        import routerkit_bootstrap_apply as apply_module
+
+        with mock.patch.object(
+            bootstrap, "collect_inventory", return_value=inventory
+        ), mock.patch.object(
+            apply_module, "validate_apply_environment"
+        ), mock.patch.object(
+            apply_module, "resolve_opkg"
+        ), mock.patch.object(
+            apply_module,
+            "apply_bootstrap_transaction",
+            side_effect=AssertionError("must not apply"),
+        ) as transaction, mock.patch("builtins.input", side_effect=KeyboardInterrupt):
+            code, output, errors = run_main("--apply")
+
+        self.assertEqual(code, 1)
+        self.assertIn("RouterKit bootstrap apply", output)
+        self.assertIn("apply cancelled", errors)
+        transaction.assert_not_called()
+
     def test_apply_dry_run_has_no_confirmation_or_transaction(self):
         inventory = json.loads(
             (FIXTURES / "supported-aarch64.json").read_text(encoding="utf-8")

@@ -33,8 +33,18 @@ class BootstrapSignalTests(unittest.TestCase):
         current = {value: signal.getsignal(value) for value in previous}
         self.assertEqual(current, previous)
 
-    def test_sigint_remains_normal_interactive_cancellation(self):
-        self.assertNotIn(signal.SIGINT, apply.BootstrapSignalLifecycle.handled_signals())
+    def test_sigint_is_managed_inside_mutable_transaction_scope(self):
+        self.assertIn(signal.SIGINT, apply.BootstrapSignalLifecycle.handled_signals())
+
+    def test_sigint_handler_is_restored_after_transaction_scope(self):
+        lifecycle = apply.BootstrapSignalLifecycle()
+        previous = signal.getsignal(signal.SIGINT)
+        lifecycle.install()
+        try:
+            self.assertEqual(signal.getsignal(signal.SIGINT), lifecycle._handle_signal)
+        finally:
+            lifecycle.restore()
+        self.assertEqual(signal.getsignal(signal.SIGINT), previous)
 
     def test_recovery_defers_recorded_and_repeated_signals_until_recovery_ends(self):
         lifecycle = apply.BootstrapSignalLifecycle()

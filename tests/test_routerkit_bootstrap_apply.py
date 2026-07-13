@@ -226,6 +226,12 @@ class VersionAndReceiptTests(unittest.TestCase):
             apply.validate_version_output(b"Xray 26.3.27\n", "Xray 26.3.27"),
             "Xray 26.3.27",
         )
+        self.assertEqual(
+            apply.validate_version_output(
+                b"\nXray 26.3.27\nadditional diagnostics\n", "Xray 26.3.27"
+            ),
+            "Xray 26.3.27",
+        )
         for value in (b"Xray 26.3.28\n", b"Xray 26.3.27 extra\n", b"not xray\n"):
             with self.subTest(value=value), self.assertRaises(apply.BootstrapApplyError):
                 apply.validate_version_output(value, "Xray 26.3.27")
@@ -411,6 +417,49 @@ class TransactionIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(restored, original)
         self.assertFalse(receipt_exists)
+
+    def test_keyboard_interrupt_inside_install_is_recovered_as_sigint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous_sigint_handler = signal.getsignal(signal.SIGINT)
+            root = self.make_target(tmp)
+            original = (root / "sbin/xray").read_bytes()
+            manifest, archive = self.make_manifest_and_archive(tmp)
+            downloader = lambda *args, **kwargs: local_downloader(
+                *args, **kwargs, archive_path=archive
+            )
+            real_install = apply._install_candidate
+            install_calls = 0
+
+            def interrupt_after_install(candidate, candidate_hash, target):
+                nonlocal install_calls
+                real_install(candidate, candidate_hash, target)
+                install_calls += 1
+                if install_calls == 1:
+                    raise KeyboardInterrupt()
+
+            with mock.patch.object(
+                apply, "_install_candidate", side_effect=interrupt_after_install
+            ):
+                with self.assertRaises(apply.BootstrapTermination) as raised:
+                    apply.apply_bootstrap_transaction(
+                        manifest, target_root=root, downloader=downloader
+                    )
+            restored = (root / "sbin/xray").read_bytes()
+            receipt_exists = (root / apply.STATE_RELATIVE_PATH).exists()
+            staging_entries = list((root / apply.STAGING_RELATIVE_DIR).iterdir())
+            restored_sigint_handler = signal.getsignal(signal.SIGINT)
+            later_result = apply.apply_bootstrap_transaction(
+                manifest, target_root=root, downloader=downloader
+            )
+
+        self.assertEqual(raised.exception.signum, signal.SIGINT)
+        self.assertEqual(apply.termination_exit_code(raised.exception), 130)
+        self.assertTrue(raised.exception.recovery_verified)
+        self.assertEqual(restored, original)
+        self.assertFalse(receipt_exists)
+        self.assertEqual(staging_entries, [])
+        self.assertEqual(restored_sigint_handler, previous_sigint_handler)
+        self.assertTrue(later_result.post_install_verified)
 
     def test_signal_rollback_failure_is_never_swallowed_or_downgraded(self):
         with tempfile.TemporaryDirectory() as tmp:

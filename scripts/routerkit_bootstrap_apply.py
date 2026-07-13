@@ -160,7 +160,7 @@ class BootstrapSignalLifecycle:
     @staticmethod
     def handled_signals() -> Tuple[int, ...]:
         values = []
-        for name in ("SIGTERM", "SIGHUP"):
+        for name in ("SIGINT", "SIGTERM", "SIGHUP"):
             value = getattr(signal, name, None)
             if value is not None and value not in values:
                 values.append(value)
@@ -1280,10 +1280,10 @@ def _execute_bootstrap_transaction(
             result.backup_path = str(backup)
             result.backup_created_or_reused = disposition
 
-        replacement_started = True
-        _install_candidate(candidate, candidate_hash, target)
-        result.replacement_performed = True
         try:
+            replacement_started = True
+            _install_candidate(candidate, candidate_hash, target)
+            result.replacement_performed = True
             installed_version = probe_exact_version(
                 target,
                 expected_version,
@@ -1339,6 +1339,10 @@ def _execute_bootstrap_transaction(
                 lifecycle.end_recovery()
             if isinstance(original, BootstrapApplyError):
                 raise original
+            if isinstance(original, KeyboardInterrupt):
+                termination = BootstrapTermination(getattr(signal, "SIGINT", 2))
+                termination.recovery_verified = True
+                raise termination
             raise BootstrapApplyError("Post-install validation failed; rollback was verified.") from None
         return result
     except BootstrapApplyError as exc:
@@ -1351,7 +1355,11 @@ def _execute_bootstrap_transaction(
             ) from None
         raise
     except BootstrapTermination as termination:
-        if replacement_started and not result.post_install_verified:
+        if (
+            replacement_started
+            and not result.post_install_verified
+            and not termination.recovery_verified
+        ):
             result.rollback_attempted = True
             lifecycle.begin_recovery()
             try:
