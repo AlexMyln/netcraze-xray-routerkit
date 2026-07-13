@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "os": "Linux",
+  "machine": "aarch64",
+  "target_root": {"path": "/opt", "exists": true, "is_directory": true, "writable": true},
+  "commands": {
+    "sh": {"available": true, "path": "/bin/sh"},
+    "uname": {"available": true, "path": "/bin/uname"},
+    "curl": {"available": true, "path": "/opt/bin/curl"},
+    "unzip": {"available": true, "path": "/opt/bin/unzip"},
+    "sha256sum": {"available": true, "path": "/opt/bin/sha256sum"},
+    "python3": {"available": true, "path": "/opt/bin/python3"},
+    "jq": {"available": true, "path": "/opt/bin/jq"},
+    "opkg": {"available": true, "path": "/opt/bin/opkg"}
+  },
+  "packages": {
+    "ca-bundle": {"installed": true},
+    "curl": {"installed": true},
+    "unzip": {"installed": true},
+    "coreutils-sha256sum": {"installed": true},
+    "python3": {"installed": true}
+  },
+  "xray": {"path": "/opt/sbin/xray", "exists": true, "executable": true, "version": "Xray 25.1.30 (Xray, Penetrates Everything.)"},
+  "configs": {"path": "/opt/etc/xray/configs", "exists": true},
+  "init_scripts": {
+    "/opt/etc/init.d/S23xray-direct": {"exists": true},
+    "/opt/etc/init.d/S24xray": {"exists": false}
+  }
+}

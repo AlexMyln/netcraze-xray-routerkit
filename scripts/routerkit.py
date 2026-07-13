@@ -79,6 +79,22 @@ def validate_setup_args(args: argparse.Namespace) -> None:
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
     repo_root = Path(repo_root)
 
+    if args.command == "bootstrap":
+        command = [sys.executable, _repo_script(repo_root, "routerkit-bootstrap.py")]
+        if args.manifest:
+            command.extend(["--manifest", args.manifest])
+        if args.json:
+            command.append("--json")
+        if args.dry_run:
+            command.append("--dry-run")
+        if args.inventory_file:
+            command.extend(["--inventory-file", args.inventory_file])
+        if args.target_root != "/opt":
+            command.extend(["--target-root", args.target_root])
+        if args.apply:
+            command.append("--apply")
+        return command
+
     if args.command == "wizard":
         return [
             sys.executable,
@@ -555,6 +571,39 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help=argparse.SUPPRESS,
     )
 
+    bootstrap = subparsers.add_parser(
+        "bootstrap",
+        help="Inspect prerequisites and print a read-only pinned-Xray bootstrap plan.",
+        description="Validate the pinned Xray manifest and inspect prerequisites without changing the system.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bootstrap.add_argument(
+        "--manifest",
+        help="Pinned Xray manifest path; default: repository manifest.",
+    )
+    bootstrap.add_argument("--json", action="store_true", help="Render deterministic JSON output.")
+    bootstrap.add_argument(
+        "--inventory-file",
+        help="Load synthetic inventory JSON instead of inspecting the environment.",
+    )
+    bootstrap.add_argument(
+        "--target-root",
+        default="/opt",
+        help="Target root to inspect; default: /opt.",
+    )
+    bootstrap.add_argument(
+        "--apply",
+        action="store_true",
+        help="Reserved; delegated bootstrap will reject it without changes.",
+    )
+    bootstrap.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Explicit read-only planning; normal bootstrap mode is also read-only.",
+    )
+
     plan = subparsers.add_parser(
         "plan",
         help="Preview install operations without changing router state.",
@@ -654,7 +703,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return exc.exit_code
     if args.command == "install" and not args.apply and not args.dry_run:
         print(INSTALL_PLAN_NOTICE)
-    code = run_steps(steps, dry_run=args.dry_run, repo_root=repo_root)
+    # Bootstrap owns its dry-run semantics: both default and --dry-run execute
+    # the same read-only inspection and plan rendering. Other commands retain
+    # the wrapper-level command-preview behavior.
+    wrapper_dry_run = args.dry_run and args.command != "bootstrap"
+    code = run_steps(steps, dry_run=wrapper_dry_run, repo_root=repo_root)
     if code == 0 and args.command == "install" and args.apply and not args.dry_run:
         print_apply_summary(steps)
     return code

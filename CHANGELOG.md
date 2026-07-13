@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Read-only bootstrap environment planner with text and JSON output.
+- Strict pinned-Xray artifact manifest and validation.
+- Bootstrap execution-model ADR and artifact-pin verification documentation.
+- Offline synthetic bootstrap fixtures and unit tests.
 - Initial `setup` orchestrator for wizard, generation, strict planning, explicit apply confirmation, and the hardened install pipeline.
 - Setup dry-run rendering and failure-propagation tests.
 - Wizard-only mode for orchestration without duplicate generator prompts.
@@ -22,6 +26,9 @@ All notable changes to this project will be documented in this file.
 - CI test discovery for the Python test suite.
 - Guided installer foundation: preflight script and interactive local profiles wizard.
 - Guided installer documentation in English and Russian.
+
+### Changed
+- Bootstrap plans now record explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`, while remaining read-only; package installation stays in a later #13 slice and the initial arm64/aarch64 package names still require hardware validation.
 
 ### Security
 - Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
