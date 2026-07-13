@@ -92,6 +92,8 @@ python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap
 
 `bootstrap` validates the repository manifest, maps only Linux `aarch64`/`arm64` to the verified official `linux-arm64` asset, and reports prerequisite/Xray state. Default execution and `--dry-run` are both read-only. It does not install or activate Entware, update/install packages, download or replace Xray, modify `/opt`, change services/autostart, or touch router firewall and policy state. See the [execution-model ADR](docs/architecture/bootstrap-execution-model.md) and [artifact-pin evidence](docs/xray-artifact-pin.md).
 
+The planner records explicit command-to-Entware-package mappings; in particular, `sha256sum` is planned through `coreutils-sha256sum`, with `ca-bundle` as a base requirement. Package names are scoped to the documented initial Entware arm64/aarch64 environment and still require hardware validation. Planning remains read-only, and package installation remains a later #13 slice.
+
 `setup` is the first implementation slice of the one-command installer roadmap. It combines the existing wizard, local generation, strict plan, explicit apply confirmation, preflight, backup, install, and healthcheck stages. Without `--apply`, it stops after local generation and a successful strict plan. With `--apply`, it asks for confirmation unless `--yes` is supplied; `--yes` skips only that prompt, not the safety stages.
 
 The unified setup captures and suppresses generator output because it may contain subscription-derived or credential-derived details; standalone generation keeps its existing diagnostic behavior.

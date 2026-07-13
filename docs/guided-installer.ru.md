@@ -33,6 +33,8 @@ python3 scripts/routerkit.py bootstrap --dry-run
 
 Начальный scope — только Linux `aarch64`/`arm64`. Обычный режим и `--dry-run` одинаково read-only. Planner не устанавливает Entware/packages, не скачивает и не заменяет Xray, не пишет в `/opt`, не управляет services/autostart, firewall или Netcraze policies. Для tests/development доступны offline inventory files.
 
+Plan показывает явное соответствие команд пакетам Entware, включая `sha256sum -> coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена относятся к документированному начальному Entware-окружению arm64/aarch64 и требуют hardware validation. Режим остаётся read-only; установка пакетов относится к более позднему slice #13.
+
 Решение описано в [ADR модели выполнения](architecture/bootstrap-execution-model.ru.md), а evidence официального release/checksum и независимого hash — в [проверке Xray pin](xray-artifact-pin.ru.md). Hardware validation остаётся заблокирован [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), настоящий one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) не завершён.
 
 Проверки на стороне роутера:

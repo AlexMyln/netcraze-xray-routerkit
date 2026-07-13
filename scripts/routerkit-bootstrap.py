@@ -26,8 +26,15 @@ APPLY_NOT_IMPLEMENTED = (
 )
 
 SHELL_COMMANDS = ("sh", "uname")
-LATER_COMMANDS = ("curl", "unzip", "sha256sum", "python3")
-LATER_PACKAGES = ("ca-bundle", "curl", "unzip", "python3")
+LATER_TOOL_PACKAGES = {
+    "curl": "curl",
+    "unzip": "unzip",
+    "sha256sum": "coreutils-sha256sum",
+    "python3": "python3",
+}
+BASE_PACKAGES = ("ca-bundle",)
+LATER_COMMANDS = tuple(LATER_TOOL_PACKAGES)
+LATER_PACKAGES = BASE_PACKAGES + tuple(dict.fromkeys(LATER_TOOL_PACKAGES.values()))
 OPTIONAL_DIAGNOSTICS = ("jq",)
 KNOWN_COMMANDS = SHELL_COMMANDS + LATER_COMMANDS + OPTIONAL_DIAGNOSTICS + ("opkg",)
 INIT_SCRIPT_NAMES = ("S23xray-direct", "S24xray")
@@ -465,6 +472,9 @@ def build_bootstrap_plan(
         },
         "requirements": {
             "shell_commands_required_before_bootstrap": list(SHELL_COMMANDS),
+            "later_commands_required_by_later_stages": list(LATER_COMMANDS),
+            "later_command_packages": dict(LATER_TOOL_PACKAGES),
+            "base_entware_packages": list(BASE_PACKAGES),
             "entware_packages_required_by_later_stages": list(LATER_PACKAGES),
             "optional_diagnostics": list(OPTIONAL_DIAGNOSTICS),
             "missing_shell_commands": missing_shell,
@@ -514,9 +524,16 @@ def render_text_plan(plan: Mapping[str, Any]) -> str:
         "Required before later apply:",
         "- shell commands: "
         + ", ".join(plan["requirements"]["shell_commands_required_before_bootstrap"]),
-        "- Entware packages: "
-        + ", ".join(plan["requirements"]["entware_packages_required_by_later_stages"]),
+        "- later command packages:",
     ]
+    lines.extend(
+        f"  {command} -> {package}"
+        for command, package in plan["requirements"]["later_command_packages"].items()
+    )
+    lines.append(
+        "- base packages: "
+        + ", ".join(plan["requirements"]["base_entware_packages"])
+    )
     if plan["warnings"]:
         lines.extend(["", "Warnings:"])
         lines.extend(f"- {warning}" for warning in plan["warnings"])

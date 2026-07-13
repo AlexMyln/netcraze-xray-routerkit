@@ -63,6 +63,8 @@ The current official materials show supported UI and CLI building blocks, but th
 
 After activation, the read-only planner records whether `opkg`, `python3`, `curl`, `unzip`, and checksum tooling are available. A later reviewed apply slice may install pinned prerequisites only after model validation. Until then, absence is reported as a warning, not repaired.
 
+The plan records one deterministic command-to-Entware-package contract: `curl -> curl`, `unzip -> unzip`, `sha256sum -> coreutils-sha256sum`, and `python3 -> python3`, plus the base package `ca-bundle`. These package names are scoped to the documented initial Entware arm64/aarch64 environment and still require hardware validation. Package installation remains a later #13 slice.
+
 ## Hardware-validation unknowns
 
 Spare-hardware work in #16 must establish:

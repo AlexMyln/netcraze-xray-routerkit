@@ -96,6 +96,8 @@ python3 scripts/routerkit.py bootstrap --inventory-file tests/fixtures/bootstrap
 
 `bootstrap` строго проверяет manifest репозитория, поддерживает только Linux `aarch64`/`arm64` и показывает prerequisites/состояние Xray. Обычный запуск и `--dry-run` одинаково read-only. Команда не активирует Entware, не устанавливает packages, не скачивает и не заменяет Xray, не меняет `/opt`, services/autostart, firewall или policies. Подробнее: [ADR](docs/architecture/bootstrap-execution-model.ru.md) и [evidence для pin](docs/xray-artifact-pin.ru.md).
 
+Planner фиксирует явные соответствия команд пакетам Entware; в частности, `sha256sum` планируется через `coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена пакетов относятся к документированному начальному Entware-окружению arm64/aarch64 и всё ещё требуют hardware validation. Планирование остаётся read-only, а установка пакетов — более поздним slice #13.
+
 `setup` — первый implementation slice дорожной карты one-command installer. Команда объединяет существующие стадии wizard, локальной генерации, strict plan, явного apply confirmation, preflight, backup, install и healthcheck. Без `--apply` она останавливается после локальной генерации и успешного strict plan. С `--apply` она запрашивает подтверждение, если не передан `--yes`; `--yes` пропускает только prompt, но не safety stages.
 
 Unified setup перехватывает и подавляет вывод generator, потому что он может содержать данные, производные от подписки или учётных данных; standalone generation сохраняет прежнее диагностическое поведение.

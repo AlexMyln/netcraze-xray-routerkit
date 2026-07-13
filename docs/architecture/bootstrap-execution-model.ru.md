@@ -63,6 +63,8 @@
 
 После activation planner только сообщает о наличии `opkg`, `python3`, `curl`, `unzip` и checksum tooling. Отсутствие даёт warning и не исправляется в этом PR.
 
+Read-only plan фиксирует единый детерминированный контракт command-to-Entware-package: `curl -> curl`, `unzip -> unzip`, `sha256sum -> coreutils-sha256sum` и `python3 -> python3`, а также базовый пакет `ca-bundle`. Эти имена пакетов относятся к документированному начальному Entware-окружению arm64/aarch64 и всё ещё требуют hardware validation. Установка пакетов остаётся более поздним slice #13.
+
 ## Что требует hardware validation
 
 - фактическое значение architecture на целевой модели/firmware;

@@ -17,6 +17,7 @@
     "ca-bundle": {"installed": true},
     "curl": {"installed": true},
     "unzip": {"installed": true},
+    "coreutils-sha256sum": {"installed": true},
     "python3": {"installed": true}
   },
   "xray": {"path": "/opt/sbin/xray", "exists": false, "executable": false, "version": null},

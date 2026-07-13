@@ -27,6 +27,9 @@ All notable changes to this project will be documented in this file.
 - Guided installer foundation: preflight script and interactive local profiles wizard.
 - Guided installer documentation in English and Russian.
 
+### Changed
+- Bootstrap plans now record explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`, while remaining read-only; package installation stays in a later #13 slice and the initial arm64/aarch64 package names still require hardware validation.
+
 ### Security
 - Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
 
