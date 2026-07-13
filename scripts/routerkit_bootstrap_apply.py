@@ -1315,24 +1315,28 @@ def _execute_bootstrap_transaction(
             raise
         except BaseException as original:
             result.rollback_attempted = True
+            lifecycle.begin_recovery()
             try:
-                _rollback(
-                    target,
-                    existing,
-                    backup,
-                    target_root=target_root,
-                    lifecycle=lifecycle,
-                    runner=runner,
-                )
-                result.rollback_verified = True
-                _remove_receipt(receipt_path)
-            except BootstrapRollbackError:
-                raise
-            except BaseException:
-                message = "Replacement failed and automatic rollback could not be proven."
-                if backup is not None:
-                    message += " Backup: {}".format(backup)
-                raise BootstrapRollbackError(message) from None
+                try:
+                    _rollback(
+                        target,
+                        existing,
+                        backup,
+                        target_root=target_root,
+                        lifecycle=lifecycle,
+                        runner=runner,
+                    )
+                    result.rollback_verified = True
+                    _remove_receipt(receipt_path)
+                except BootstrapRollbackError:
+                    raise
+                except BaseException:
+                    message = "Replacement failed and automatic rollback could not be proven."
+                    if backup is not None:
+                        message += " Backup: {}".format(backup)
+                    raise BootstrapRollbackError(message) from None
+            finally:
+                lifecycle.end_recovery()
             if isinstance(original, BootstrapApplyError):
                 raise original
             raise BootstrapApplyError("Post-install validation failed; rollback was verified.") from None

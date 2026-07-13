@@ -535,6 +535,40 @@ class TransactionIntegrationTests(unittest.TestCase):
         self.assertEqual(combined.exit_code, 7)
         self.assertTrue(str(combined).startswith("original validation failure"))
 
+    def test_signal_during_validation_failure_rollback_is_deferred(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_target(tmp)
+            original = (root / "sbin/xray").read_bytes()
+            manifest, archive = self.make_manifest_and_archive(tmp)
+            target_calls = 0
+
+            def runner(command, **kwargs):
+                nonlocal target_calls
+                if Path(command[0]) == root / "sbin/xray":
+                    target_calls += 1
+                    if target_calls == 3:
+                        return apply.ProcessResult(0, b"Xray wrong\n", b"")
+                    if target_calls == 4:
+                        kwargs["lifecycle"]._handle_signal(
+                            getattr(signal, "SIGTERM", 15), None
+                        )
+                return apply.run_bounded_process(command, **kwargs)
+
+            with self.assertRaises(apply.BootstrapApplyError) as raised:
+                apply.apply_bootstrap_transaction(
+                    manifest,
+                    target_root=root,
+                    downloader=lambda *args, **kwargs: local_downloader(
+                        *args, **kwargs, archive_path=archive
+                    ),
+                    runner=runner,
+                )
+            restored = (root / "sbin/xray").read_bytes()
+
+        self.assertNotIsInstance(raised.exception, apply.BootstrapRollbackError)
+        self.assertIn("version does not match", str(raised.exception))
+        self.assertEqual(restored, original)
+
     def test_clean_install_removal_failure_is_a_rollback_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
