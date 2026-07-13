@@ -1,0 +1,8 @@
+{
+  "normal": "Example Region",
+  "empty": "",
+  "credential_like": "user@example.invalid",
+  "uri_like": "see https://example.invalid/path",
+  "control_template": "Region\\u0007 Name",
+  "ansi_template": "\\u001b[31mRegion\\u001b[0m"
+}

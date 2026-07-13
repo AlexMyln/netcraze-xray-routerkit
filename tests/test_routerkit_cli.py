@@ -96,6 +96,31 @@ def setup_apply_commands(generated):
 
 
 class RouterkitCliCommandTests(unittest.TestCase):
+    def test_profile_source_builds_expected_delegated_command(self):
+        args = cli.parse_args([
+            "profile-source", "--source-file", "payload.txt", "--output", "private.json",
+            "--list", "--json", "--primary-index", "1", "--fallback-index", "2",
+            "--dry-run", "--yes", "--force",
+        ])
+
+        command = cli.build_command(args, ROOT)
+
+        self.assertEqual(command, [
+            sys.executable, str(ROOT / "scripts" / "routerkit-profile-source.py"),
+            "--source-file", "payload.txt", "--output", "private.json", "--list", "--json",
+            "--primary-index", "1", "--fallback-index", "2", "--dry-run", "--yes", "--force",
+        ])
+
+    def test_profile_source_propagates_exit_code_and_global_dry_run(self):
+        with mock.patch.object(cli.subprocess, "run", return_value=completed(19)) as run:
+            code = cli.main(["--repo-root", str(ROOT), "--dry-run", "profile-source", "--source-env", "SAFE_ENV"])
+
+        self.assertEqual(code, 19)
+        self.assertEqual(run.call_args.args[0], [
+            sys.executable, str(ROOT / "scripts" / "routerkit-profile-source.py"),
+            "--source-env", "SAFE_ENV", "--dry-run",
+        ])
+
     def test_bootstrap_builds_expected_delegated_command(self):
         inventory = str(ROOT / "tests" / "fixtures" / "bootstrap" / "supported-aarch64.json")
         args = cli.parse_args(

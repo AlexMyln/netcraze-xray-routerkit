@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Offline secret-safe profile-source parser for raw, newline, Base64, and JSON VLESS payloads.
+- Interactive primary/fallback node selection with private profiles output.
+- Reusable parser shared by the profile-source tool and Xray config generator.
+- Offline profile-source fixtures and security-focused tests.
+- Hardened local source-file validation, generic URI-scheme rejection, and atomic no-clobber private output publication.
 - Read-only bootstrap environment planner with text and JSON output.
 - Strict pinned-Xray artifact manifest and validation.
 - Bootstrap execution-model ADR and artifact-pin verification documentation.

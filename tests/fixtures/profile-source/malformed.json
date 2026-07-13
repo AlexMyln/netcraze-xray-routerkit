@@ -1,0 +1,7 @@
+{
+  "payloads": [
+    "plain text without a supported node",
+    "not-base64%%%",
+    "{malformed-json"
+  ]
+}

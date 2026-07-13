@@ -14,19 +14,25 @@ No external Python dependencies.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import re
 import sys
-import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List
 
 
-VLESS_SCHEME = "vless" + "://"
-VLESS_RE = re.compile(re.escape(VLESS_SCHEME) + r"[^\s\"'<>]+")
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from routerkit_profile_source import (  # noqa: E402
+    NodeRecord,
+    NodeValidationError,
+    extract_vless_links,
+    parse_vless,
+)
 
 
 def eprint(*args: Any) -> None:
@@ -44,123 +50,12 @@ def fetch_url(url: str, user_agent: str = "netcraze-xray-routerkit/0.1") -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def maybe_b64_decode(text: str) -> Optional[str]:
-    compact = "".join(text.split())
-    if not compact:
-        return None
-    padded = compact + "=" * (-len(compact) % 4)
-    try:
-        decoded = base64.b64decode(padded, validate=False)
-        return decoded.decode("utf-8", errors="replace")
-    except Exception:
-        return None
-
-
-def iter_strings(obj: Any) -> Iterable[str]:
-    if isinstance(obj, str):
-        yield obj
-    elif isinstance(obj, dict):
-        for value in obj.values():
-            yield from iter_strings(value)
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from iter_strings(item)
-
-
-def extract_vless_links(text: str) -> List[str]:
-    found: List[str] = []
-
-    def add_from(s: str) -> None:
-        for match in VLESS_RE.findall(s):
-            # Strip common delimiters that may trail URLs in JSON/text.
-            found.append(match.rstrip(",;"))
-
-    add_from(text)
-
-    try:
-        parsed = json.loads(text)
-        for s in iter_strings(parsed):
-            add_from(s)
-    except Exception:
-        pass
-
-    decoded = maybe_b64_decode(text)
-    if decoded:
-        add_from(decoded)
-        try:
-            parsed = json.loads(decoded)
-            for s in iter_strings(parsed):
-                add_from(s)
-        except Exception:
-            pass
-
-    # Preserve order, dedupe.
-    seen = set()
-    result = []
-    for link in found:
-        if link not in seen:
-            seen.add(link)
-            result.append(link)
-    return result
-
-
-def qget(query: Dict[str, List[str]], *names: str, default: str = "") -> str:
-    for name in names:
-        values = query.get(name)
-        if values:
-            return values[0]
-    return default
-
-
-def parse_vless(link: str) -> Dict[str, Any]:
-    u = urllib.parse.urlparse(link)
-    if u.scheme != "vless":
-        raise ValueError("not a VLESS URL")
-
-    query = urllib.parse.parse_qs(u.query)
-    name = urllib.parse.unquote(u.fragment or "")
-
-    host = u.hostname
-    port = u.port
-    uuid = urllib.parse.unquote(u.username or "")
-
-    if not host or not port or not uuid:
-        raise ValueError("VLESS URL must include uuid, host, and port")
-
-    network = qget(query, "type", "network", default="tcp") or "tcp"
-    security = qget(query, "security", default="")
-    flow = qget(query, "flow", default="")
-
-    parsed = {
-        "name": name,
-        "uuid": uuid,
-        "host": host,
-        "port": port,
-        "network": network,
-        "security": security,
-        "flow": flow,
-        "sni": qget(query, "sni", "serverName", default=""),
-        "fp": qget(query, "fp", "fingerprint", default="chrome"),
-        "pbk": qget(query, "pbk", "publicKey", default=""),
-        "sid": qget(query, "sid", "shortId", default=""),
-        "spx": qget(query, "spx", "spiderX", default="/"),
-    }
-    return parsed
-
-
-def masked(s: str, keep: int = 4) -> str:
-    if not s:
-        return ""
-    return s[:keep] + "..."
-
-
-def select_node(links: List[str], selector: Dict[str, Any]) -> Dict[str, Any]:
+def select_node(links: List[str], selector: Dict[str, Any]) -> NodeRecord:
     parsed_nodes = []
     for link in links:
         try:
             node = parse_vless(link)
-        except Exception as exc:
-            eprint(f"Skipping non-parseable link: {exc}")
+        except NodeValidationError:
             continue
 
         require_security = selector.get("require_security")
@@ -181,14 +76,14 @@ def select_node(links: List[str], selector: Dict[str, Any]) -> Dict[str, Any]:
         for link, node in parsed_nodes:
             if name_contains.lower() in node["name"].lower():
                 return node
-        raise SystemExit(f"No node name contains: {name_contains!r}")
+        raise SystemExit("No node name matches the requested selector")
 
     host_contains = selector.get("host_contains")
     if host_contains:
         for link, node in parsed_nodes:
             if host_contains.lower() in node["host"].lower():
                 return node
-        raise SystemExit(f"No node host contains: {host_contains!r}")
+        raise SystemExit("No node host matches the requested selector")
 
     index = int(selector.get("index", 0))
     if index < 0 or index >= len(parsed_nodes):
@@ -219,7 +114,7 @@ def build_inbounds(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def build_vless_outbound(profile: Dict[str, Any], node: Dict[str, Any]) -> Dict[str, Any]:
+def build_vless_outbound(profile: Dict[str, Any], node: NodeRecord) -> Dict[str, Any]:
     user = {
         "id": node["uuid"],
         "encryption": "none",
@@ -255,7 +150,7 @@ def build_vless_outbound(profile: Dict[str, Any], node: Dict[str, Any]) -> Dict[
     }
 
 
-def build_outbounds(profiles: List[Dict[str, Any]], nodes: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def build_outbounds(profiles: List[Dict[str, Any]], nodes: Dict[str, NodeRecord]) -> Dict[str, Any]:
     outbounds = [build_vless_outbound(p, nodes[p["name"]]) for p in profiles]
     outbounds.extend([
         {"tag": "direct", "protocol": "freedom"},
@@ -324,7 +219,7 @@ def main() -> int:
     profiles = cfg.get("profiles", [])
     validate_profile_names(profiles)
 
-    nodes: Dict[str, Dict[str, Any]] = {}
+    nodes: Dict[str, NodeRecord] = {}
 
     for profile in profiles:
         text = get_subscription_text(profile)
@@ -340,11 +235,9 @@ def main() -> int:
             )
         nodes[profile["name"]] = node
         eprint(
-            f"Selected {profile['name']}: "
-            f"name={node['name']!r} host={node['host']} port={node['port']} "
+            f"Selected profile {profile['name']}: port={node['port']} "
             f"security={node['security']} network={node['network']} "
-            f"flow={node.get('flow','')} uuid={masked(node['uuid'])} "
-            f"pbk:{masked(node.get('pbk',''), 6)} sid:{masked(node.get('sid',''), 2)}"
+            f"flow={node.get('flow') or 'none'}"
         )
 
     out_dir = Path(args.out)
