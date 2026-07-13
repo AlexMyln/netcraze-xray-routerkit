@@ -122,6 +122,19 @@ def public_resolver(_hostname, _port, *, timeout):
 
 
 class UrlPolicyTests(unittest.TestCase):
+    def test_https_source_normalization_strips_only_outer_whitespace(self):
+        value = " \tHTTPS://example.test/path%20value?token=a%20b\r\n"
+        self.assertEqual(
+            network.normalize_https_source_value(value),
+            "HTTPS://example.test/path%20value?token=a%20b",
+        )
+
+    def test_https_source_normalization_rejects_empty_value_generically(self):
+        marker = "DO_NOT_LEAK_EMPTY_SOURCE"
+        with self.assertRaises(network.UrlPolicyError) as caught:
+            network.normalize_https_source_value(" \r\n\t")
+        self.assertNotIn(marker, str(caught.exception))
+
     def test_normal_https_url(self):
         value = network.validate_https_url("https://example.test/path?token=synthetic")
         self.assertEqual(value.hostname, "example.test")
@@ -201,6 +214,96 @@ class DestinationPolicyTests(unittest.TestCase):
 
     def test_global_ipv6_accepted(self):
         self.assertEqual(network.validate_address_set((PUBLIC_V6,)), (PUBLIC_V6,))
+
+    def test_explicit_policy_tables_are_immutable_and_deterministic(self):
+        for table in (
+            network.DENIED_IPV4_NETWORKS,
+            network.DENIED_IPV6_NETWORKS,
+            network.CONSERVATIVELY_DENIED_IPV6_NETWORKS,
+            network.ALLOWED_SPECIAL_PURPOSE_NETWORKS,
+        ):
+            self.assertIsInstance(table, tuple)
+            self.assertEqual(table, tuple(sorted(table, key=lambda item: (item.version, int(item.network_address), item.prefixlen))))
+
+    def test_representative_ipv4_special_purpose_ranges_are_rejected(self):
+        values = (
+            "0.0.0.1",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.0.0.1",
+            "192.0.0.8",
+            "192.0.0.170",
+            "192.0.2.1",
+            "192.88.99.1",
+            "192.168.0.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+        )
+        for value in values:
+            with self.subTest(value=value), self.assertRaises(network.DestinationPolicyError):
+                network.validate_address_set((value,))
+
+    def test_globally_reachable_192_0_0_exceptions_are_accepted(self):
+        self.assertEqual(
+            network.validate_address_set(("192.0.0.10", "192.0.0.9")),
+            ("192.0.0.9", "192.0.0.10"),
+        )
+
+    def test_narrow_globally_reachable_ipv6_exceptions_are_accepted(self):
+        values = (
+            "2001:1::1",
+            "2001:1::2",
+            "2001:1::3",
+            "2001:3::1",
+            "2001:4:112::1",
+            "2001:30::1",
+        )
+        self.assertEqual(network.validate_address_set(values), values)
+
+    def test_representative_ipv6_special_purpose_ranges_are_rejected(self):
+        values = (
+            "::",
+            "::1",
+            "100::1",
+            "100:0:0:1::1",
+            "2001:2::1",
+            "2001:db8::1",
+            "3fff::1",
+            "5f00::1",
+            "fc00::1",
+            "fe80::1",
+            "ff02::1",
+        )
+        for value in values:
+            with self.subTest(value=value), self.assertRaises(network.DestinationPolicyError):
+                network.validate_address_set((value,))
+
+    def test_translation_tunneling_and_identifier_ranges_are_rejected(self):
+        values = (
+            "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+            "64:ff9b:1::808:808",
+            "2001::1",
+            "2001:10::1",
+            "2001:20::1",
+            "2002:0808:0808::1",
+        )
+        for value in values:
+            with self.subTest(value=value), self.assertRaises(network.DestinationPolicyError):
+                network.validate_address_set((value,))
+
+    def test_explicit_policy_rejects_even_if_properties_are_permissive(self):
+        with mock.patch.object(network, "_has_disallowed_ipaddress_properties", return_value=False):
+            for value in ("100.64.0.1", "192.0.2.1", "2001:db8::1", "2002::1"):
+                with self.subTest(value=value), self.assertRaises(network.DestinationPolicyError):
+                    network.validate_address_set((value,))
 
     def test_unsafe_ranges_rejected(self):
         values = (
@@ -368,6 +471,20 @@ class DnsTimeoutTests(unittest.TestCase):
         with self.assertRaises(network.DnsResolutionError):
             network.resolve_addresses_bounded("secret.example", 443, timeout=0)
 
+    def test_interrupt_during_poll_reaps_child_and_is_not_converted(self):
+        receive = FakePipeEnd()
+        process = FakeProcess()
+        context = FakeContext(receive, process)
+        with mock.patch.object(receive, "poll", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                network.resolve_addresses_bounded(
+                    "secret.example", 443, timeout=1, mp_context=context
+                )
+        self.assertFalse(process.alive)
+        self.assertTrue(process.closed)
+        self.assertTrue(receive.closed)
+        self.assertTrue(context.send.closed)
+
 
 class FakeRawSocket:
     def __init__(self):
@@ -478,6 +595,20 @@ class PinnedConnectionTests(unittest.TestCase):
         context.tls_socket.protocol = "h2"
         with self.assertRaises(network.TlsConnectionError):
             connection.connect()
+
+    def test_interrupt_during_connect_closes_socket_and_is_not_converted(self):
+        connection, raw, _context, _families = self.make_connection()
+        with mock.patch.object(raw, "connect", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                connection.connect()
+        self.assertTrue(raw.closed)
+
+    def test_interrupt_during_tls_closes_socket_and_is_not_converted(self):
+        connection, raw, context, _families = self.make_connection()
+        with mock.patch.object(context, "wrap_socket", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                connection.connect()
+        self.assertTrue(raw.closed)
 
 
 class ResolverFlowTests(unittest.TestCase):
@@ -727,6 +858,96 @@ class ResolverFlowTests(unittest.TestCase):
         self.assertEqual(result.payload, "ok")
         self.assertEqual(resolver_calls, ["first.example"])
         self.assertEqual(factory_calls, [PUBLIC_V4_ALT, PUBLIC_V4])
+
+    def test_interrupt_during_request_closes_connection_and_does_not_try_next_ip(self):
+        calls = []
+
+        class InterruptingConnection(FakeConnection):
+            def request(self, method, target, headers=None):
+                raise KeyboardInterrupt
+
+        connection = InterruptingConnection(FakeResponse())
+
+        def factory(_url, address, _timeout):
+            calls.append(address)
+            return connection
+
+        with self.assertRaises(KeyboardInterrupt):
+            network.resolve_https_source(
+                "https://first.example/",
+                resolver=lambda *_args, **_kwargs: (PUBLIC_V4_ALT, PUBLIC_V4),
+                connection_factory=factory,
+            )
+        self.assertEqual(calls, [PUBLIC_V4_ALT])
+        self.assertTrue(connection.closed)
+
+    def test_interrupt_during_getresponse_closes_connection(self):
+        connection = FakeConnection(FakeResponse())
+        with mock.patch.object(connection, "getresponse", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                network.resolve_https_source(
+                    "https://first.example/",
+                    resolver=public_resolver,
+                    connection_factory=lambda *_args: connection,
+                )
+        self.assertTrue(connection.closed)
+
+    def test_interrupt_during_body_read_closes_response_and_connection(self):
+        response = FakeResponse(read_error=KeyboardInterrupt())
+        connection = FakeConnection(response)
+        with self.assertRaises(KeyboardInterrupt):
+            network.resolve_https_source(
+                "https://first.example/",
+                resolver=public_resolver,
+                connection_factory=lambda *_args: connection,
+            )
+        self.assertTrue(response.closed)
+        self.assertTrue(connection.closed)
+
+    def test_cleanup_failure_does_not_replace_active_cancellation(self):
+        interrupt = KeyboardInterrupt()
+        response = FakeResponse(read_error=interrupt)
+        connection = FakeConnection(response)
+        with mock.patch.object(response, "close", side_effect=SystemExit(9)):
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                network.resolve_https_source(
+                    "https://first.example/",
+                    resolver=public_resolver,
+                    connection_factory=lambda *_args: connection,
+                )
+        self.assertIs(caught.exception, interrupt)
+        self.assertTrue(connection.closed)
+
+    def test_cancellation_never_follows_redirect(self):
+        resolver_calls = []
+        transport = PlannedTransport(
+            [FakeResponse(status=302, headers={"Location": "https://second.example/"})]
+        )
+
+        def resolver(host, _port, *, timeout):
+            resolver_calls.append(host)
+            return (PUBLIC_V4,)
+
+        with mock.patch.object(network, "_single_location", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                network.resolve_https_source(
+                    "https://first.example/",
+                    resolver=resolver,
+                    connection_factory=transport,
+                )
+        self.assertEqual(resolver_calls, ["first.example"])
+        self.assertEqual(len(transport.connections), 1)
+        self.assertTrue(transport.connections[0].closed)
+
+    def test_base_exceptions_from_resolver_are_not_swallowed(self):
+        for exception_type in (KeyboardInterrupt, SystemExit, GeneratorExit):
+            with self.subTest(exception_type=exception_type.__name__):
+                with self.assertRaises(exception_type):
+                    network.resolve_https_source(
+                        "https://first.example/",
+                        resolver=lambda *_args, **_kwargs: (_ for _ in ()).throw(exception_type()),
+                        connection_factory=PlannedTransport([]),
+                    )
 
 
 if __name__ == "__main__":

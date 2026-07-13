@@ -9,6 +9,7 @@ import multiprocessing
 import re
 import socket
 import ssl
+import sys
 import threading
 import time
 import urllib.parse
@@ -32,6 +33,69 @@ _HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 _MEDIA_TYPE_RE = re.compile(
     r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
 )
+
+# Fixed, reviewed policy derived from the IANA special-purpose registries on
+# 2026-07-13. Runtime decisions never fetch registry data. These tuples are
+# public so tests can pin their immutability and exact compatibility contract.
+DENIED_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.0.0.0/24",
+        "192.0.2.0/24",
+        "192.88.99.0/24",
+        "192.168.0.0/16",
+        "198.18.0.0/15",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "224.0.0.0/4",
+        "240.0.0.0/4",
+    )
+)
+
+DENIED_IPV6_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "2001::/23",
+        "2001:db8::/32",
+        "3fff::/20",
+    )
+)
+
+CONSERVATIVELY_DENIED_IPV6_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "::ffff:0:0/96",
+        "64:ff9b::/96",
+        "64:ff9b:1::/48",
+        "2001::/32",
+        "2001:10::/28",
+        "2001:20::/28",
+        "2002::/16",
+    )
+)
+
+ALLOWED_SPECIAL_PURPOSE_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "192.0.0.9/32",
+        "192.0.0.10/32",
+        "2001:1::1/128",
+        "2001:1::2/128",
+        "2001:1::3/128",
+        "2001:3::/32",
+        "2001:4:112::/48",
+        "2001:30::/28",
+    )
+)
+
+_IPV6_PUBLIC_UNICAST_NETWORK = ipaddress.ip_network("2000::/3")
+_CANCELLATION_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 
 
 class ProfileNetworkError(Exception):
@@ -92,6 +156,17 @@ def _generic_url_error() -> UrlPolicyError:
     return UrlPolicyError("HTTPS source URL is not allowed by policy.")
 
 
+def normalize_https_source_value(value: str) -> str:
+    """Strip only outer whitespace around one complete HTTPS source value."""
+
+    if not isinstance(value, str):
+        raise _generic_url_error()
+    normalized = value.strip()
+    if not normalized:
+        raise _generic_url_error()
+    return normalized
+
+
 def _has_invalid_percent_escape(value: str) -> bool:
     index = 0
     while True:
@@ -147,6 +222,43 @@ def _normalize_address(value: str) -> str:
         raise DestinationPolicyError("Destination address is not allowed by policy.") from None
 
 
+def _contains_address(networks: Sequence[Any], address: Any) -> bool:
+    return any(network.version == address.version and address in network for network in networks)
+
+
+def _is_allowed_special_purpose(address: Any) -> bool:
+    return _contains_address(ALLOWED_SPECIAL_PURPOSE_NETWORKS, address)
+
+
+def _is_explicitly_denied(address: Any) -> bool:
+    if address.version == 6 and _contains_address(
+        CONSERVATIVELY_DENIED_IPV6_NETWORKS, address
+    ):
+        return True
+    if _is_allowed_special_purpose(address):
+        return False
+    if address.version == 4:
+        return _contains_address(DENIED_IPV4_NETWORKS, address)
+    if address not in _IPV6_PUBLIC_UNICAST_NETWORK:
+        return True
+    return _contains_address(DENIED_IPV6_NETWORKS, address)
+
+
+def _has_disallowed_ipaddress_properties(address: Any) -> bool:
+    """Retain stdlib classification checks as defense in depth only."""
+
+    return bool(
+        not address.is_global
+        or address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_reserved
+        or getattr(address, "ipv4_mapped", None) is not None
+    )
+
+
 def validate_address_set(addresses: Sequence[str]) -> Tuple[str, ...]:
     """Require a non-empty, entirely global address set."""
 
@@ -156,16 +268,9 @@ def validate_address_set(addresses: Sequence[str]) -> Tuple[str, ...]:
     for value in addresses:
         normalized = _normalize_address(value)
         address = ipaddress.ip_address(normalized)
-        mapped = getattr(address, "ipv4_mapped", None)
-        if (
-            not address.is_global
-            or address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_multicast
-            or address.is_unspecified
-            or address.is_reserved
-            or mapped is not None
+        if _is_explicitly_denied(address) or (
+            not _is_allowed_special_purpose(address)
+            and _has_disallowed_ipaddress_properties(address)
         ):
             raise DestinationPolicyError("Destination address set is not allowed by policy.")
         accepted[(address.version, int(address))] = normalized
@@ -268,15 +373,15 @@ def _dns_worker(send_connection: Any, hostname: str, port: int) -> None:
             if len(address_records) > MAX_DNS_ADDRESSES:
                 break
         send_connection.send(("ok", tuple(address_records)))
-    except BaseException:
+    except Exception:
         try:
             send_connection.send(("error", ()))
-        except BaseException:
+        except Exception:
             pass
     finally:
         try:
             send_connection.close()
-        except BaseException:
+        except Exception:
             pass
 
 
@@ -298,15 +403,32 @@ def _stop_and_reap_process(process: Any, *, terminate_first: bool) -> None:
             raise DnsResolutionError("DNS resolver process could not be stopped safely.")
     except DnsResolutionError:
         raise
-    except BaseException:
+    except Exception:
         raise DnsResolutionError("DNS resolver process could not be stopped safely.") from None
     finally:
         close = getattr(process, "close", None)
         if close is not None:
             try:
                 close()
-            except BaseException:
+            except Exception:
                 pass
+
+
+def _has_active_cancellation() -> bool:
+    exception_type = sys.exc_info()[0]
+    return exception_type is not None and issubclass(exception_type, _CANCELLATION_EXCEPTIONS)
+
+
+def _best_effort_cleanup(action: Callable[[], Any], *, preserve_cancellation: bool) -> None:
+    """Suppress ordinary cleanup failures and never replace an active cancellation."""
+
+    try:
+        action()
+    except Exception:
+        pass
+    except _CANCELLATION_EXCEPTIONS:
+        if not preserve_cancellation:
+            raise
 
 
 def resolve_addresses_bounded(
@@ -362,21 +484,29 @@ def resolve_addresses_bounded(
         return tuple(addresses)
     except DnsResolutionError:
         raise
-    except BaseException:
+    except Exception:
         raise DnsResolutionError("DNS resolution failed.") from None
     finally:
+        preserve_cancellation = _has_active_cancellation()
         if receive_connection is not None:
-            try:
-                receive_connection.close()
-            except BaseException:
-                pass
+            _best_effort_cleanup(
+                receive_connection.close,
+                preserve_cancellation=preserve_cancellation,
+            )
         if send_connection is not None:
-            try:
-                send_connection.close()
-            except BaseException:
-                pass
+            _best_effort_cleanup(
+                send_connection.close,
+                preserve_cancellation=preserve_cancellation,
+            )
         if process is not None:
-            _stop_and_reap_process(process, terminate_first=timed_out)
+            try:
+                _stop_and_reap_process(process, terminate_first=timed_out)
+            except Exception:
+                if not preserve_cancellation:
+                    raise
+            except _CANCELLATION_EXCEPTIONS:
+                if not preserve_cancellation:
+                    raise
 
 
 class PinnedHTTPSConnection(http.client.HTTPConnection):
@@ -431,19 +561,20 @@ class PinnedHTTPSConnection(http.client.HTTPConnection):
             tls_socket = None
         except TlsConnectionError:
             raise
-        except BaseException:
+        except Exception:
             raise TlsConnectionError("Secure HTTPS connection failed.") from None
         finally:
+            preserve_cancellation = _has_active_cancellation()
             if tls_socket is not None:
-                try:
-                    tls_socket.close()
-                except BaseException:
-                    pass
+                _best_effort_cleanup(
+                    tls_socket.close,
+                    preserve_cancellation=preserve_cancellation,
+                )
             if raw_socket is not None:
-                try:
-                    raw_socket.close()
-                except BaseException:
-                    pass
+                _best_effort_cleanup(
+                    raw_socket.close,
+                    preserve_cancellation=preserve_cancellation,
+                )
 
 
 def _default_connection_factory(
@@ -467,10 +598,10 @@ class _DeadlineGuard:
             if active_socket is not None:
                 try:
                     active_socket.shutdown(socket.SHUT_RDWR)
-                except BaseException:
+                except Exception:
                     pass
             self._connection.close()
-        except BaseException:
+        except Exception:
             pass
 
     def stop(self) -> None:
@@ -543,6 +674,7 @@ def _request_one_hop(
     for address in addresses:
         connection = None
         deadline_guard = None
+        handed_off = False
         try:
             timeout = min(CONNECT_TIMEOUT, _remaining(deadline, clock))
             connection = connection_factory(validated_url, address, timeout)
@@ -561,24 +693,25 @@ def _request_one_hop(
             response = connection.getresponse()
             if getattr(connection, "sock", None) is not None:
                 connection.sock.settimeout(_remaining(deadline, clock))
+            handed_off = True
             return response, connection, deadline_guard
         except ResponsePolicyError:
-            if deadline_guard is not None:
-                deadline_guard.stop()
-            if connection is not None:
-                try:
-                    connection.close()
-                except BaseException:
-                    pass
             raise
-        except BaseException:
-            if deadline_guard is not None:
-                deadline_guard.stop()
-            if connection is not None:
-                try:
-                    connection.close()
-                except BaseException:
-                    pass
+        except Exception:
+            pass
+        finally:
+            if not handed_off:
+                preserve_cancellation = _has_active_cancellation()
+                if deadline_guard is not None:
+                    _best_effort_cleanup(
+                        deadline_guard.stop,
+                        preserve_cancellation=preserve_cancellation,
+                    )
+                if connection is not None:
+                    _best_effort_cleanup(
+                        connection.close,
+                        preserve_cancellation=preserve_cancellation,
+                    )
     if deadline - clock() <= 0:
         raise ResponsePolicyError("HTTPS source resolution timed out.")
     raise TlsConnectionError("Secure HTTPS connection failed.")
@@ -602,7 +735,7 @@ def _read_body_bounded(
         amount = min(65536, maximum + 1 - byte_count)
         try:
             chunk = read_once(amount)
-        except BaseException:
+        except Exception:
             if deadline - clock() <= 0:
                 raise ResponsePolicyError("HTTPS source resolution timed out.") from None
             raise ResponsePolicyError("HTTPS response body could not be read safely.") from None
@@ -635,7 +768,7 @@ def resolve_https_source(
 
     if overall_timeout <= 0 or max_redirects < 0 or max_response_bytes <= 0:
         raise ProfileNetworkError("HTTPS resolver limits are invalid.")
-    current = validate_https_url(source)
+    current = validate_https_url(normalize_https_source_value(source))
     deadline = clock() + overall_timeout
     visited = set()
     redirect_count = 0
@@ -655,7 +788,7 @@ def resolve_https_source(
                 resolved_values = tuple(resolved)
             except ProfileNetworkError:
                 raise
-            except BaseException:
+            except Exception:
                 raise DnsResolutionError("DNS resolution failed.") from None
             addresses = validate_address_set(resolved_values)
 
@@ -681,7 +814,7 @@ def resolve_https_source(
                 try:
                     combined = urllib.parse.urljoin(current.normalized_url, location)
                     next_url = validate_https_url(combined)
-                except BaseException:
+                except Exception:
                     raise RedirectPolicyError("HTTPS redirect is not allowed by policy.") from None
                 redirect_count += 1
                 current = next_url
@@ -721,15 +854,19 @@ def resolve_https_source(
                 content_type=_sanitized_content_type(response),
             )
         finally:
+            preserve_cancellation = _has_active_cancellation()
             if deadline_guard is not None:
-                deadline_guard.stop()
+                _best_effort_cleanup(
+                    deadline_guard.stop,
+                    preserve_cancellation=preserve_cancellation,
+                )
             if response is not None:
-                try:
-                    response.close()
-                except BaseException:
-                    pass
+                _best_effort_cleanup(
+                    response.close,
+                    preserve_cancellation=preserve_cancellation,
+                )
             if connection is not None:
-                try:
-                    connection.close()
-                except BaseException:
-                    pass
+                _best_effort_cleanup(
+                    connection.close,
+                    preserve_cancellation=preserve_cancellation,
+                )

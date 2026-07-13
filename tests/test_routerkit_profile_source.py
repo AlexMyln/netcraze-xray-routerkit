@@ -426,6 +426,60 @@ class CliSafetyTests(unittest.TestCase):
         self.assertNotIn(source, stdout + stderr)
         self.assertNotIn(link, stdout + stderr)
 
+    def test_https_outer_whitespace_is_normalized_for_hidden_and_environment_input(self):
+        source = "https://source.example/sub?token=synthetic"
+        surrounded = " \t" + source + "\r\n"
+        link = make_link(label="Normalized HTTPS")
+        resolved = network.ResolvedPayload(link, len(link.encode()), 0)
+        cases = (
+            ([], mock.patch.object(cli.getpass, "getpass", return_value=surrounded)),
+            (
+                ["--source-env", "ROUTERKIT_TEST_SOURCE"],
+                mock.patch.dict(os.environ, {"ROUTERKIT_TEST_SOURCE": surrounded}),
+            ),
+        )
+        for argv, source_context in cases:
+            with self.subTest(argv=argv), source_context:
+                with mock.patch.object(cli, "resolve_https_source", return_value=resolved) as resolver:
+                    code, stdout, stderr = self.run_cli(argv + ["--list"])
+            self.assertEqual(code, 0)
+            resolver.assert_called_once_with(source)
+            self.assertNotIn(source, stdout + stderr)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission semantics required")
+    def test_https_source_file_lf_and_crlf_are_normalized(self):
+        source_value = "https://source.example/sub?token=synthetic"
+        link = make_link(label="File HTTPS")
+        resolved = network.ResolvedPayload(link, len(link.encode()), 0)
+        for ending in ("\n", "\r\n"):
+            with self.subTest(ending=repr(ending)), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source.txt"
+                source.write_bytes((source_value + ending).encode())
+                source.chmod(0o600)
+                with mock.patch.object(cli, "resolve_https_source", return_value=resolved) as resolver:
+                    code, stdout, stderr = self.run_cli(["--source-file", str(source), "--list"])
+                self.assertEqual(code, 0)
+                resolver.assert_called_once_with(source_value)
+                self.assertNotIn(source_value, stdout + stderr)
+
+    def test_internal_whitespace_multiline_and_empty_https_values_fail_without_leak(self):
+        values = (
+            "https://source.example/pa th?token=DO_NOT_LEAK_SPACE",
+            "https://source.example/one\nhttps://source.example/two",
+            " \r\n\t",
+        )
+        for value in values:
+            with self.subTest(value=repr(value)):
+                with mock.patch.object(cli.getpass, "getpass", return_value=value):
+                    code, stdout, stderr = self.run_cli(["--list"])
+                self.assertEqual(code, 1)
+                self.assertNotIn(value, stdout + stderr)
+
+    def test_raw_payload_is_not_rewritten_by_https_normalization(self):
+        link = make_link()
+        payload = "  " + link + "  \n"
+        self.assertIs(cli.acquire_source_payload(payload), payload)
+
     def test_https_base64_subscription_reaches_offline_parser(self):
         link = make_link(label="Base64 HTTPS")
         payload = base64.b64encode(link.encode()).decode()
@@ -637,6 +691,18 @@ class CliSafetyTests(unittest.TestCase):
                 code, _, _ = self.run_cli(["--output", str(output)], stdin_values=["q"])
             self.assertEqual(code, 1)
             self.assertFalse(output.exists())
+
+    def test_network_keyboard_interrupt_is_generic_and_writes_nothing(self):
+        source = "https://source.example/path?token=DO_NOT_LEAK_INTERRUPT"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            with mock.patch.object(cli.getpass, "getpass", return_value=source):
+                with mock.patch.object(cli, "resolve_https_source", side_effect=KeyboardInterrupt):
+                    code, stdout, stderr = self.run_cli(["--output", str(output)])
+            self.assertEqual(code, 1)
+            self.assertFalse(output.exists())
+            self.assertIn("Cancelled; no profiles file was written.", stderr)
+            self.assertNotIn(source, stdout + stderr)
 
     def test_write_and_force_rules(self):
         link = make_link()

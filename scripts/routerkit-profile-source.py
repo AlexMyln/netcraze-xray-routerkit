@@ -13,7 +13,11 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from routerkit_profile_network import ProfileNetworkError, resolve_https_source
+from routerkit_profile_network import (
+    ProfileNetworkError,
+    normalize_https_source_value,
+    resolve_https_source,
+)
 from routerkit_profile_source import (
     MAX_PAYLOAD_BYTES,
     NodeRecord,
@@ -153,7 +157,7 @@ def acquire_source_payload(payload: str) -> str:
     if scheme == "vless":
         return payload
     if scheme == "https":
-        resolved = resolve_https_source(payload)
+        resolved = resolve_https_source(normalize_https_source_value(payload))
         return resolved.payload
     raise CliConfigurationError(UNSUPPORTED_URL_MESSAGE)
 
@@ -269,7 +273,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except CliConfigurationError as exc:
         print(f"routerkit-profile-source: {exc}", file=sys.stderr)
         return 2
-    except UserCancelled:
+    except (UserCancelled, KeyboardInterrupt):
         print("Cancelled; no profiles file was written.", file=sys.stderr)
         return 1
     except OutputExistsError as exc:

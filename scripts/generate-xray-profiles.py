@@ -32,7 +32,11 @@ from routerkit_profile_source import (  # noqa: E402
     extract_vless_links,
     parse_vless,
 )
-from routerkit_profile_network import ProfileNetworkError, resolve_https_source  # noqa: E402
+from routerkit_profile_network import (  # noqa: E402
+    ProfileNetworkError,
+    normalize_https_source_value,
+    resolve_https_source,
+)
 
 
 def eprint(*args: Any) -> None:
@@ -46,7 +50,7 @@ def load_json(path: Path) -> Any:
 def fetch_url(url: str, user_agent: str = "netcraze-xray-routerkit/0.1") -> str:
     del user_agent  # Retained for compatibility with callers of this helper.
     try:
-        return resolve_https_source(url).payload
+        return resolve_https_source(normalize_https_source_value(url)).payload
     except ProfileNetworkError:
         raise SystemExit("HTTPS subscription could not be resolved securely.") from None
 

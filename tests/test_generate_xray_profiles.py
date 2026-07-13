@@ -82,6 +82,46 @@ class SubscriptionAcquisitionTests(unittest.TestCase):
                 )
         resolver.assert_called_once_with(source)
 
+    def test_subscription_urls_normalize_outer_whitespace(self):
+        source = "https://source.example/sub?token=synthetic"
+        surrounded = " \t" + source + "\r\n"
+        result = network.ResolvedPayload("payload", 7, 0)
+        with mock.patch.object(generator, "resolve_https_source", return_value=result) as resolver:
+            self.assertEqual(generator.get_subscription_text({"subscription_url": surrounded}), "payload")
+        resolver.assert_called_once_with(source)
+
+        with mock.patch.dict(os.environ, {"SYNTHETIC_SUBSCRIPTION_URL": surrounded}):
+            with mock.patch.object(generator, "resolve_https_source", return_value=result) as resolver:
+                self.assertEqual(
+                    generator.get_subscription_text(
+                        {"subscription_url_env": "SYNTHETIC_SUBSCRIPTION_URL"}
+                    ),
+                    "payload",
+                )
+        resolver.assert_called_once_with(source)
+
+    def test_internal_whitespace_multiline_and_empty_urls_fail_generically(self):
+        values = (
+            "https://source.example/pa th?token=DO_NOT_LEAK_SPACE",
+            "https://source.example/one\nhttps://source.example/two",
+            " \r\n\t",
+        )
+        for value in values:
+            with self.subTest(value=repr(value)), self.assertRaises(SystemExit) as caught:
+                generator.get_subscription_text({"subscription_url": value})
+            self.assertNotIn(value, str(caught.exception))
+
+    def test_generator_interrupt_is_not_rewritten_as_resolver_error(self):
+        def interrupting_resolver(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        def call_real_resolver(value):
+            return network.resolve_https_source(value, resolver=interrupting_resolver)
+
+        with mock.patch.object(generator, "resolve_https_source", side_effect=call_real_resolver):
+            with self.assertRaises(KeyboardInterrupt):
+                generator.get_subscription_text({"subscription_url": "https://source.example/sub"})
+
     def test_network_failure_is_generic_and_hides_source(self):
         source = "https://source.example/path?token=DO_NOT_LEAK_GENERATOR"
         with mock.patch.object(

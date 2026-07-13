@@ -13,6 +13,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up primary Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Shell syntax
         run: |
           sh -n scripts/install-xray-direct.sh
@@ -106,3 +111,23 @@ jobs:
 
           print("Secret guard passed.")
           PY
+
+  address-policy:
+    name: Address policy (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.x"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Destination policy tests
+        run: python -m unittest tests.test_routerkit_profile_network.DestinationPolicyTests -v
