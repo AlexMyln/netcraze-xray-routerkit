@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Bounded HTTPS subscription and redirect-based shortlink resolution.
+- Per-hop DNS/address validation with pinned-IP TLS connections.
+- Secret-safe network acquisition shared by profile-source and generator paths.
+- Offline DNS, TLS, redirect, timeout, and SSRF-focused tests.
+- Python 3.8 and primary-runtime CI coverage for the explicit destination-address policy.
 - Offline secret-safe profile-source parser for raw, newline, Base64, and JSON VLESS payloads.
 - Interactive primary/fallback node selection with private profiles output.
 - Reusable parser shared by the profile-source tool and Xray config generator.
@@ -33,9 +38,12 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- Clarified HTTPS resolver browser-redirect, cleanup, address-policy, compatibility-test, and local-file security boundaries after independent security review.
+- HTTPS source values now normalize only outer whitespace at the single-URL boundary; protected LF/CRLF files work while raw/offline payloads remain unchanged.
 - Bootstrap plans now record explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`, while remaining read-only; package installation stays in a later #13 slice and the initial arm64/aarch64 package names still require hardware validation.
 
 ### Security
+- HTTPS resolution now uses fixed reviewed special-purpose CIDR tables plus standard-library defense-in-depth checks, rejects IPv4-mapped/NAT64/Teredo/6to4/ORCHID forms conservatively, and preserves ordinary cancellation while attempting bounded best-effort resource cleanup.
 - Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
 
 ## [0.1.2] - 2026-07-09
