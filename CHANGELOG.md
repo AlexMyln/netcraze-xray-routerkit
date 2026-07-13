@@ -23,6 +23,9 @@ All notable changes to this project will be documented in this file.
 - Guided installer foundation: preflight script and interactive local profiles wizard.
 - Guided installer documentation in English and Russian.
 
+### Security
+- Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
+
 ## [0.1.2] - 2026-07-09
 
 ### Added

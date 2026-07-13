@@ -82,6 +82,8 @@ python3 scripts/routerkit.py setup --apply --yes
 
 `setup` is the first implementation slice of the one-command installer roadmap. It combines the existing wizard, local generation, strict plan, explicit apply confirmation, preflight, backup, install, and healthcheck stages. Without `--apply`, it stops after local generation and a successful strict plan. With `--apply`, it asks for confirmation unless `--yes` is supplied; `--yes` skips only that prompt, not the safety stages.
 
+The unified setup captures and suppresses generator output because it may contain subscription-derived or credential-derived details; standalone generation keeps its existing diagnostic behavior.
+
 This milestone is not the final implementation of epic #5. Entware/OPKG and Xray prerequisite bootstrap remains tracked in #13, autostart in #14, Netcraze proxy/policy automation in #15, and hardware validation in #16.
 
 The individual commands remain available:

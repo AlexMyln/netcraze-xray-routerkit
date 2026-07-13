@@ -28,8 +28,8 @@ def load_module():
 cli = load_module()
 
 
-def completed(returncode):
-    return SimpleNamespace(returncode=returncode)
+def completed(returncode, stdout=None, stderr=None):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 def apply_commands():
@@ -477,6 +477,17 @@ class RouterkitCliCommandTests(unittest.TestCase):
 
 
 class RouterkitSetupTests(unittest.TestCase):
+    def test_only_generator_step_suppresses_output(self):
+        args = cli.parse_args(["setup"])
+
+        steps = cli.build_setup_steps(args, ROOT, profiles_exists=False)
+
+        self.assertEqual(
+            [(step.name, step.suppress_output) for step in steps],
+            [("wizard", False), ("generator", True), ("strict plan", False)],
+        )
+        self.assertTrue(all(not step.suppress_output for step in cli.build_router_apply_steps("generated", ROOT)))
+
     def test_missing_profiles_runs_wizard_generate_plan_in_exact_order(self):
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp:
@@ -501,6 +512,12 @@ class RouterkitSetupTests(unittest.TestCase):
             [call.args[0] for call in run.call_args_list],
             setup_local_commands(profiles, generated),
         )
+        self.assertNotIn("stdout", run.call_args_list[0].kwargs)
+        self.assertNotIn("stderr", run.call_args_list[0].kwargs)
+        self.assertIs(run.call_args_list[1].kwargs["stdout"], cli.subprocess.PIPE)
+        self.assertIs(run.call_args_list[1].kwargs["stderr"], cli.subprocess.PIPE)
+        self.assertNotIn("stdout", run.call_args_list[2].kwargs)
+        self.assertNotIn("stderr", run.call_args_list[2].kwargs)
         output = stdout.getvalue()
         self.assertIn("Setup plan completed.", output)
         self.assertIn("No router apply steps were executed.", output)
@@ -535,6 +552,50 @@ class RouterkitSetupTests(unittest.TestCase):
         )
         self.assertIn(f"Reusing existing profiles file: {profiles}", stdout.getvalue())
         self.assertNotIn(synthetic_secret, stdout.getvalue())
+
+    def test_generator_success_suppresses_captured_secret_output(self):
+        secrets = (
+            "SYNTHETIC_SUBSCRIPTION_SECRET",
+            "SYNTHETIC_UUID_FRAGMENT",
+            "SYNTHETIC_PUBLIC_KEY_FRAGMENT",
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            with mock.patch.object(
+                cli.subprocess,
+                "run",
+                side_effect=[completed(0, stdout=secrets[0], stderr=" ".join(secrets[1:])), completed(0)],
+            ) as run:
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = cli.main(
+                        [
+                            "--repo-root",
+                            str(ROOT),
+                            "setup",
+                            "--profiles",
+                            profiles,
+                            "--generated",
+                            generated,
+                        ]
+                    )
+
+        self.assertEqual(code, 0)
+        generator_call = run.call_args_list[0]
+        self.assertEqual(generator_call.args[0], setup_local_commands(profiles, generated, include_wizard=False)[0])
+        self.assertIs(generator_call.kwargs["stdout"], cli.subprocess.PIPE)
+        self.assertIs(generator_call.kwargs["stderr"], cli.subprocess.PIPE)
+        self.assertTrue(generator_call.kwargs["text"])
+        self.assertFalse(run.call_args_list[1].kwargs.get("stdout"))
+        self.assertFalse(run.call_args_list[1].kwargs.get("stderr"))
+        output = stdout.getvalue() + stderr.getvalue()
+        for secret in secrets:
+            self.assertNotIn(secret, output)
+        self.assertIn("Generator completed. Secret-bearing output was suppressed.", output)
 
     def test_force_wizard_runs_wizard_for_existing_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -785,6 +846,39 @@ class RouterkitSetupTests(unittest.TestCase):
             + "\n",
         )
 
+    def test_apply_yes_dry_run_omits_confirmation_without_side_effects(self):
+        stdout = io.StringIO()
+        input_fn = mock.Mock(side_effect=AssertionError("input must not be requested"))
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            generated_path = Path(tmp) / "generated"
+            args = cli.parse_args(
+                [
+                    "setup",
+                    "--profiles",
+                    str(profiles_path),
+                    "--generated",
+                    str(generated_path),
+                    "--apply",
+                    "--yes",
+                    "--dry-run",
+                ]
+            )
+            with mock.patch.object(cli.subprocess, "run") as run:
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.run_setup(args, ROOT, input_fn=input_fn)
+
+            self.assertFalse(profiles_path.exists())
+            self.assertFalse(generated_path.exists())
+
+        self.assertEqual(code, 0)
+        input_fn.assert_not_called()
+        run.assert_not_called()
+        output = stdout.getvalue()
+        self.assertNotIn("confirmation gate", output)
+        self.assertIn("4. sh scripts/preflight.sh", output)
+        self.assertIn("7. sh scripts/healthcheck.sh", output)
+
     def test_wizard_failure_stops_setup(self):
         with tempfile.TemporaryDirectory() as tmp:
             profiles = str(Path(tmp) / "profiles.json")
@@ -806,6 +900,9 @@ class RouterkitSetupTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in run.call_args_list], setup_local_commands(profiles, generated)[:1])
 
     def test_generator_failure_stops_before_plan_and_apply(self):
+        secrets = ("SYNTHETIC_SUBSCRIPTION_SECRET", "SYNTHETIC_UUID_FRAGMENT")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
         input_fn = mock.Mock(side_effect=AssertionError("input must not be requested"))
         with tempfile.TemporaryDirectory() as tmp:
             profiles_path = Path(tmp) / "profiles.json"
@@ -815,8 +912,13 @@ class RouterkitSetupTests(unittest.TestCase):
             args = cli.parse_args(
                 ["setup", "--profiles", profiles, "--generated", generated, "--apply"]
             )
-            with mock.patch.object(cli.subprocess, "run", return_value=completed(18)) as run:
-                code = cli.run_setup(args, ROOT, input_fn=input_fn)
+            with mock.patch.object(
+                cli.subprocess,
+                "run",
+                return_value=completed(18, stdout=secrets[0], stderr=secrets[1]),
+            ) as run:
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = cli.run_setup(args, ROOT, input_fn=input_fn)
 
         self.assertEqual(code, 18)
         input_fn.assert_not_called()
@@ -824,6 +926,48 @@ class RouterkitSetupTests(unittest.TestCase):
             [call.args[0] for call in run.call_args_list],
             setup_local_commands(profiles, generated, include_wizard=False)[:1],
         )
+        generator_call = run.call_args_list[0]
+        self.assertIs(generator_call.kwargs["stdout"], cli.subprocess.PIPE)
+        self.assertIs(generator_call.kwargs["stderr"], cli.subprocess.PIPE)
+        self.assertTrue(generator_call.kwargs["text"])
+        output = stdout.getvalue() + stderr.getvalue()
+        for secret in secrets:
+            self.assertNotIn(secret, output)
+        self.assertIn("routerkit: generator failed with exit code 18.", output)
+        self.assertIn("Generator output was suppressed", output)
+
+    def test_generator_oserror_is_generic_and_stops_before_later_stages(self):
+        synthetic_secret = "SYNTHETIC_EXECUTION_SECRET"
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        input_fn = mock.Mock(side_effect=AssertionError("input must not be requested"))
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles_path = Path(tmp) / "profiles.json"
+            profiles_path.write_text("{}", encoding="utf-8")
+            profiles = str(profiles_path)
+            generated = str(Path(tmp) / "generated")
+            args = cli.parse_args(
+                ["setup", "--profiles", profiles, "--generated", generated, "--apply"]
+            )
+            with mock.patch.object(
+                cli.subprocess,
+                "run",
+                side_effect=OSError(synthetic_secret),
+            ) as run:
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = cli.run_setup(args, ROOT, input_fn=input_fn)
+
+        self.assertEqual(code, 127)
+        input_fn.assert_not_called()
+        self.assertEqual(len(run.call_args_list), 1)
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            setup_local_commands(profiles, generated, include_wizard=False)[0],
+        )
+        output = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn(synthetic_secret, output)
+        self.assertIn("routerkit: could not run generator.", output)
+        self.assertIn("Generator output was suppressed", output)
 
     def test_plan_failure_stops_before_confirmation_and_apply(self):
         input_fn = mock.Mock(side_effect=AssertionError("input must not be requested"))

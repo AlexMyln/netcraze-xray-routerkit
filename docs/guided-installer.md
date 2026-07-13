@@ -113,6 +113,8 @@ python3 scripts/routerkit.py setup
 
 This performs only local profile collection or reuse, generation, and strict planning. No router apply stage is started.
 
+Within unified setup, generator stdout and stderr are suppressed and replaced with generic status messages because they may contain subscription-derived or credential-derived details. Running the generator directly retains its existing diagnostics.
+
 To continue through the hardened apply pipeline, use:
 
 ```sh

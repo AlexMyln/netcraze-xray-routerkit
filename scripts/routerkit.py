@@ -49,6 +49,7 @@ class CommandStep:
     name: str
     command: List[str]
     rollback_relevant: bool = False
+    suppress_output: bool = False
 
 
 def repo_root_from_script() -> Path:
@@ -218,6 +219,7 @@ def build_setup_steps(
                     "--out",
                     args.generated,
                 ],
+                suppress_output=True,
             ),
             CommandStep(
                 "strict plan",
@@ -270,6 +272,7 @@ def render_setup_steps(
     repo_root: Path,
     generated: str,
     include_apply: bool,
+    include_confirmation: bool,
 ) -> str:
     lines = ["Would run setup pipeline:"]
     index = 1
@@ -278,8 +281,9 @@ def render_setup_steps(
         lines.append(f"{index}. {shlex.join(command)}")
         index += 1
     if include_apply:
-        lines.append(f"{index}. confirmation gate")
-        index += 1
+        if include_confirmation:
+            lines.append(f"{index}. confirmation gate")
+            index += 1
         for step in build_router_apply_steps(generated, repo_root):
             command = [_render_token(token, repo_root) for token in step.command]
             lines.append(f"{index}. {shlex.join(command)}")
@@ -324,7 +328,15 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         print(f"Reusing existing profiles file: {args.profiles}")
 
     if args.dry_run:
-        print(render_setup_steps(steps, repo_root, args.generated, include_apply=args.apply))
+        print(
+            render_setup_steps(
+                steps,
+                repo_root,
+                args.generated,
+                include_apply=args.apply,
+                include_confirmation=args.apply and not args.yes,
+            )
+        )
         return 0
 
     code = run_steps(steps)
@@ -412,9 +424,25 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
     completed_names: List[str] = []
     for step in steps:
         try:
-            completed = subprocess.run(list(step.command), check=False)
+            if step.suppress_output:
+                completed = subprocess.run(
+                    list(step.command),
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            else:
+                completed = subprocess.run(list(step.command), check=False)
         except OSError as exc:
-            print(f"routerkit: could not run {step.name}: {exc}", file=sys.stderr)
+            if step.suppress_output:
+                print(f"routerkit: could not run {step.name}.", file=sys.stderr)
+                print(
+                    "Generator output was suppressed to avoid exposing subscription or profile details.",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"routerkit: could not run {step.name}: {exc}", file=sys.stderr)
             if step.name == "install":
                 _print_install_rollback_hint(steps, completed_names)
             elif step.name == "healthcheck":
@@ -423,6 +451,11 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
 
         if completed.returncode != 0:
             print(f"routerkit: {step.name} failed with exit code {completed.returncode}.", file=sys.stderr)
+            if step.suppress_output:
+                print(
+                    "Generator output was suppressed to avoid exposing subscription or profile details.",
+                    file=sys.stderr,
+                )
             if step.name == "install":
                 _print_install_rollback_hint(steps, completed_names)
             elif step.name == "healthcheck":
@@ -430,6 +463,8 @@ def run_steps(steps: Sequence[CommandStep], dry_run: bool = False, repo_root: Op
             return completed.returncode
 
         completed_names.append(step.name)
+        if step.suppress_output:
+            print("Generator completed. Secret-bearing output was suppressed.")
 
     return 0
 

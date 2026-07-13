@@ -113,6 +113,8 @@ python3 scripts/routerkit.py setup
 
 Команда выполняет только локальный сбор или reuse профилей, генерацию и strict plan. Router apply stages не запускаются.
 
+В unified setup stdout и stderr generator подавляются и заменяются общими status messages, потому что могут содержать данные, производные от подписки или учётных данных. При прямом запуске generator сохраняет прежнюю диагностику.
+
 Чтобы продолжить через hardened apply pipeline, используйте:
 
 ```sh
