@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Bounded HTTPS subscription and redirect-based shortlink resolution.
+- Per-hop DNS/address validation with pinned-IP TLS connections.
+- Secret-safe network acquisition shared by profile-source and generator paths.
+- Offline DNS, TLS, redirect, timeout, and SSRF-focused tests.
 - Offline secret-safe profile-source parser for raw, newline, Base64, and JSON VLESS payloads.
 - Interactive primary/fallback node selection with private profiles output.
 - Reusable parser shared by the profile-source tool and Xray config generator.

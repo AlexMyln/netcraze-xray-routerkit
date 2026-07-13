@@ -52,9 +52,9 @@ python3 scripts/routerkit.py --dry-run plan --generated generated --strict
 
 Wrapper не автоматизирует Netcraze Web UI, не создаёт firewall rules, не вызывает `xkeen -start` и не делает скрытых изменений в `/opt`. Команда `backup` делегирует запуск `scripts/backup.sh`; backup archives могут содержать secrets, их нельзя публиковать.
 
-## Offline profile-source core
+## Безопасное получение profile-source и offline parsing
 
-Команда `profile-source` проверяет локальный payload и создаёт совместимый с generator приватный `profiles.json`:
+Команда `profile-source` проверяет локальный payload либо безопасно получает HTTPS subscription и создаёт совместимый с generator приватный `profiles.json`:
 
 ```sh
 python3 scripts/routerkit.py profile-source
@@ -70,7 +70,9 @@ Compatibility намеренно узкая: VLESS с синтаксически
 
 Нумерованный список secret-safe и очищает недоверенные fragments. Он не печатает raw payload, link, UUID, host, SNI, public key, short ID или spider path. Неподдерживаемые URI schemes отклоняются без вывода source. Нужно выбрать ровно один primary и ноль, один или два fallback. Профили получают имена `primary`, `fallback-1`, `fallback-2` и локальные SOCKS ports `1082`, `1083`, `1084`. Новый output атомарно публикуется без перезаписи destination, появившегося во время записи, и получает mode `0600` на POSIX. Замена требует явного `--force`; даже тогда symlink и не-regular destination отклоняются. `--list` и `--dry-run` ничего не записывают; `--yes` не подразумевает `--force`.
 
-HTTPS source отклоняется без загрузки со ссылкой на #23; все остальные неподдерживаемые URI schemes отклоняются generic error. HTTPS/shortlink resolution остаётся в #23, автоматическая setup integration — в #24. Существующий путь `routerkit setup` этой offline-командой не изменён.
+HTTPS source может быть прямой subscription или стандартным redirect-based shortlink. Допускается только HTTPS port 443, без userinfo и fragments. Каждый hop повторяет URL validation и проверку всех DNS addresses, требует полностью global address set, закрепляет TCP за validated address, проверяет TLS для original hostname и сверяет peer address. Максимум — 5 redirects и 16 DNS addresses на hop; лимиты DNS, connection, overall, URL/Location и body равны 5 секундам, 10 секундам, 30 секундам, 8192 bytes и 1 MiB. Compressed responses, JavaScript redirects и meta refresh отклоняются. Подробнее: [security ADR](architecture/profile-source-network-security.ru.md).
+
+Для этой команды `--dry-run` означает no-write, а не no-network: HTTPS source загружается и разбирается для проверки selection, но output не записывается. Generator использует тот же resolver для `subscription_url` и `subscription_url_env`. Автоматическая default setup integration остаётся в #24, #20 остаётся открытым, существующий путь `routerkit setup` не изменён.
 
 ## Что делает wizard
 

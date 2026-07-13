@@ -104,9 +104,9 @@ Unified setup перехватывает и подавляет вывод genera
 
 Это milestone, а не финальная реализация [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5). Read-only planner/manifest закрывает [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), а bootstrap apply остаётся в [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13). Autostart — #14, Netcraze proxy/policy — #15, hardware validation всё ещё заблокирован #16. `setup` пока не вызывает `bootstrap`.
 
-### Offline-выбор источника профилей
+### Безопасный выбор источника профилей
 
-Offline profile-source core принимает payload через скрытый ввод, указанную переменную окружения или защищённый локальный текстовый файл. Без сетевого доступа он разбирает одну raw VLESS-ссылку, newline subscription, Base64 subscription text, строки во вложенном JSON и Base64-encoded JSON:
+Команда profile-source принимает значение через скрытый ввод, указанную переменную окружения или защищённый локальный текстовый файл. Она разбирает одну raw VLESS-ссылку, newline subscription, Base64 subscription text, строки во вложенном JSON и Base64-encoded JSON. Тот же offline parser теперь может получить прямую HTTPS subscription или HTTPS shortlink со стандартными HTTP redirects:
 
 ```sh
 python3 scripts/routerkit.py profile-source
@@ -117,7 +117,9 @@ python3 scripts/routerkit.py profile-source --source-file /private/path/payload.
 
 Можно выбрать только VLESS Reality nodes с TCP (включая нормализованный Xray alias `raw`), структурно допустимым Reality public key, валидным optional hexadecimal short ID и без flow либо с `xtls-rprx-vision`. Summary не содержит ссылки, identifiers, host, SNI, Reality keys, short IDs или spider paths. `--source-file` отклоняет symlink и не-regular files; на POSIX права должны быть только для владельца, например `0400` или `0600`, и tool никогда не меняет их автоматически. Неподдерживаемые URI schemes отклоняются без вывода source. Выбор включает ровно один primary и до двух fallback на детерминированных портах `1082`, `1083` и `1084`. Итоговый `profiles.json` атомарно публикуется с mode `0600` на POSIX и без явного `--force` не перезаписывает файл, появившийся во время публикации; даже `--force` отклоняет symlink и не-regular destination. Файл содержит secrets, поэтому его нельзя коммитить или публиковать.
 
-Команда не загружает HTTPS subscriptions и не раскрывает shortlinks — это остаётся в [#23](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/23). Автоматическая интеграция с `setup` остаётся в [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24), обычное поведение `routerkit setup` не изменено.
+Network acquisition принимает только HTTPS на port 443, без URL userinfo и fragments. Каждый redirect отдельно проходит URL validation и DNS resolution; все адреса в ответе должны быть globally routable, TCP connection закрепляется за validated address, TLS продолжает проверять original hostname, а connected peer сверяется. Лимиты: 5 redirects, 16 DNS addresses на hop, 5 секунд на DNS hop, 10 секунд на address connection, 30 секунд overall, 8192 bytes на URL/redirect value и 1 MiB на response. Compressed responses, JavaScript redirects и HTML meta refresh не поддерживаются. `profile-source --dry-run` может выполнить network read и parsing, но не записывает `profiles.json`. Существующие поля generator `subscription_url` и `subscription_url_env` используют тот же resolver. Подробнее: [ADR безопасности сети](docs/architecture/profile-source-network-security.ru.md).
+
+Автоматическая default-интеграция с `setup` остаётся в [#24](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/24), parent [#20](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/20) остаётся открытым, обычное поведение `routerkit setup` не изменено.
 
 Отдельные команды также доступны:
 

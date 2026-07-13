@@ -1,0 +1,65 @@
+# Безопасность сетевого источника профилей
+
+Статус: решение принято для issue #23. Оно добавляет только acquisition layer поверх offline parser из #22. Автоматический выбор источника в default setup остаётся в #24; parent issue #20 остаётся открытым.
+
+## Решение и первичные источники
+
+Безопасный resolver реализуем на Python 3.8+ только средствами standard library и без DNS race между проверкой и подключением. Дизайн опирается на официальную документацию Python для [`socket`](https://docs.python.org/3/library/socket.html), [`ssl`](https://docs.python.org/3/library/ssl.html), [`http.client`](https://docs.python.org/3/library/http.client.html), [`ipaddress`](https://docs.python.org/3/library/ipaddress.html), [`multiprocessing`](https://docs.python.org/3/library/multiprocessing.html), [`urllib.parse`](https://docs.python.org/3/library/urllib.parse.html), а также IETF [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986.html), [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) и [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html).
+
+`urllib.parse` сам по себе не валидирует URL, поэтому после разбора применяется отдельный allowlist. `socket.getaddrinfo()` возвращает IPv4/IPv6 TCP candidates, но не имеет надёжного deadline. `multiprocessing` даёт `spawn`, IPC polling, terminate/join и усиление через kill. `ssl.create_default_context()` включает проверку цепочки и hostname; исходный canonical hostname передаётся как `server_hostname` для SNI и TLS identity. `http.client` разбирает HTTP/1.1 и допускает собственный `connect()`. `ipaddress` нормализует и классифицирует адреса.
+
+## Threat model
+
+Начальный source и каждый redirect недоверен. Атакующий может использовать неоднозначный URL, userinfo, секрет в query, local/special-use DNS answer, смешанный набор адресов, DNS rebinding, redirect loop, большой или сжатый body, медленные DNS/TCP/TLS/read, неоднозначный HTTP framing или секреты в исключениях. Ambient proxy, cookies, credentials, referrer и debug logging также считаются каналами утечки или смены маршрута.
+
+Цель — ограниченный GET публичного HTTPS content без доступа к loopback, private, link-local, multicast, unspecified, reserved, special-use и другим non-global адресам. Это не browser, не anonymity layer, не проверка подлинности payload и не защита от вредоносного текста, возвращённого легитимным публичным сервером. Payload по-прежнему проверяет offline parser.
+
+## URL policy
+
+Начальный URL и каждый redirect валидируются заново. Лимит — 8192 UTF-8 bytes. Запрещены control characters, whitespace smuggling, backslash, некорректные percent escapes и non-ASCII символы в request target. Допускается только регистронезависимый `https`, canonical form — lowercase. Authority и hostname обязательны. Userinfo, fragment, пустой port и port, отличный от 443, запрещены. Path и query сохраняются; пустой path становится `/` только при формировании HTTP request target.
+
+Domain labels преобразуются встроенным IDNA codec Python, приводятся к lowercase и проверяются по DNS length/label rules. Одна завершающая DNS dot удаляется для canonical identity. Literal IPv4 и bracketed IPv6 допустимы только после destination policy и остаются IP identity для обычной TLS-проверки. Numeric-looking ambiguous names, IPv6 zone identifiers, malformed authority и labels, отличные от букв, цифр и внутреннего дефиса, отклоняются. Host и literal никогда не попадают в public error или `repr`.
+
+RFC 3986 задаёт authority, relative reference и fragment; RFC 9110 задаёт `Location` как URI-reference. `urllib.parse.urljoin()` только объединяет redirect с уже проверенной base URL. Результат затем проходит полную валидацию.
+
+## DNS deadline и destination policy
+
+Main process не вызывает live `getaddrinfo()`. Он запускает короткоживущий top-level worker через multiprocessing context `spawn` и передаёт hostname/port по одностороннему pipe, а не через пользовательские process arguments. Worker вызывает `getaddrinfo(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP)` и возвращает только normalized family/address pairs либо generic failure marker. Parent ждёт pipe не более 5 секунд на hop, дополнительно ограниченных общим deadline 30 секунд. При timeout/abnormal exit он выполняет terminate + join, при необходимости kill + join, закрывает pipe и завершает операцию generic error. Максимум — 16 addresses.
+
+`spawn` доступен на поддерживаемых POSIX Python и изолирует resolver от caller. Worker — top-level importable function. Если platform не может запустить, остановить или reap worker, операция fail closed. Deadline покрывает blocking system resolver call; запуск процесса остаётся зависимостью OS.
+
+Каждый адрес нормализуется через `ipaddress`. Весь набор отклоняется, если он пуст, слишком велик, malformed либо хотя бы один адрес не `is_global` или является private, loopback, link-local, multicast, unspecified, reserved или IPv4-mapped IPv6. Полный отказ для mixed answer исключает выбор только удобной части DNS ответа. Metadata endpoints и прочие special-use ranges попадают под ту же non-global policy. Дубликаты удаляются, безопасные адреса сортируются детерминированно по version и numeric value.
+
+## Pinned TCP и verified TLS
+
+После проверки hostname больше не передаётся соединению, способному снова выполнить DNS. Небольшой subclass `http.client.HTTPConnection` хранит original canonical hostname и один validated numeric address. Его `connect()` создаёт `AF_INET` или `AF_INET6` socket, задаёт оставшийся timeout и соединяется напрямую с `(validated_ip, 443)`. Затем socket оборачивается через `ssl.create_default_context().wrap_socket(..., server_hostname=original_hostname)`. Код проверяет `check_hostname == True` и `verify_mode == CERT_REQUIRED`; unverified context никогда не используется.
+
+Так routing закреплён за проверенным IP, а TLS SNI и certificate identity остаются исходным DNS name либо literal IP. После handshake нормализованный `getpeername()` сравнивается с выбранным address. Mismatch закрывает соединение. Адреса одного validated set можно пробовать в детерминированном порядке, но connection layer не выполняет новый DNS lookup, а все попытки делят один deadline.
+
+HTTP request — только GET в origin form: явный `Host` исходного authority, `Accept-Encoding: identity`, generic RouterKit user agent и `Connection: close`. Proxy/tunnel API не используется, environment proxy не читается; Cookie, Authorization, Proxy-Authorization и Referer не передаются.
+
+## Redirect, response и timeout policy
+
+Следуем только 301, 302, 303, 307 и 308, всегда методом GET. Максимум 5 redirects. `Location` обязателен, ограничен 8192 UTF-8 bytes, разрешается относительно текущего validated URL, после чего новый hop полностью проверяется вместе с DNS. Canonical internal identities обнаруживают loops. Redirect body не обрабатывается, connection закрывается. HTTPS downgrade, смена port и перенос headers запрещены.
+
+Финальный status — только 200. `Content-Encoding` может отсутствовать или быть `identity`; gzip, deflate, Brotli и другие codings отклоняются без decompression. HTTP/1.1 chunked framing обрабатывает `http.client`, но другие transfer codings, комбинация `Transfer-Encoding` с `Content-Length`, malformed или conflicting lengths отклоняются. Declared length больше 1 MiB отклоняется до body; в любом случае читается не более 1 MiB + 1 sentinel byte. Decoding — strict UTF-8 с поддержкой стандартного UTF-8 BOM. Content-Type не определяет валидность payload; внутри может сохраняться только sanitized broad media type.
+
+Один monotonic deadline 30 секунд включает DNS, TCP, TLS, redirects и body read. DNS получает максимум 5 секунд на hop, каждое address connection — максимум 10 секунд; оба лимита сокращаются до оставшегося overall time. Socket timeout обновляется перед response/body operations. Короткоживущий daemon watchdog выполняет shutdown active socket на абсолютном overall deadline, поэтому peer не может обходить лимит, отправляя байты перед каждым inactivity timeout; bounded вызовы `HTTPResponse.read1()` также проверяют monotonic budget между body reads. Watchdog отменяется и join-ится после каждой попытки. Response и connection закрываются на любом пути.
+
+## Metadata и secret handling
+
+Public output ограничен generic success либо typed generic failure. URL, hostname, redirect-derived port, path, query, `Location`, body, VLESS, UUID, keys, short IDs, peer addresses, подробности исключений и ответа не интерполируются в ошибки или logs. У secret-bearing dataclasses отключён generated `repr`; `ResolvedPayload` не показывает text. Debug output отключён. Byte count, redirect count и media type существуют только для внутренних тестов/диагностики и CLI их не печатает.
+
+`profile-source --dry-run` означает no-write, но не no-network: HTTPS source требуется получить и разобрать для проверки выбора. Поведение `routerkit setup --dry-run` не меняется и остаётся частью #24.
+
+## Намеренно исключённое browser behavior
+
+Поддерживаются только стандартные HTTP redirects. HTML meta refresh и JavaScript navigation требуют browser parsing/execution, значительно расширяют attack surface и не имеют безопасной реализации в standard library. Cookies, cache state, referrers, authentication, negotiation кроме identity encoding и proxy inheritance также исключены.
+
+## Known limitations
+
+- DNSSEC и certificate pinning не добавляются; доверенными остаются platform resolver и default CA store.
+- Публичный сервер может сам proxy/relay запрос; client-side validation этого не видит.
+- Overall deadline зависит от socket timeouts Python и способности OS завершить child process. Невозможность создать или reap DNS worker приводит к fail closed.
+- Используется встроенный IDNA codec Python для совместимости с standard-library baseline; это не WHATWG browser URL implementation.
+- Поддерживаются только HTTP/1.1 over TLS на port 443, identity content encoding и payload до 1 MiB. HTTP/2, alternate ports, authentication и browser shortlinks вне scope.

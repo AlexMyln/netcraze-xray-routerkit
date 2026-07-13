@@ -8,7 +8,6 @@ import stat
 import sys
 import tempfile
 import unittest
-import urllib.request
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -22,6 +21,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import routerkit_profile_source as core
+import routerkit_profile_network as network
 
 
 def load_cli():
@@ -396,7 +396,6 @@ class CliSafetyTests(unittest.TestCase):
 
     def test_uri_schemes_return_two_without_network_or_echo(self):
         cases = (
-            ("https://example.invalid/source", cli.HTTPS_MESSAGE),
             ("http://example.invalid/source", cli.UNSUPPORTED_URL_MESSAGE),
             ("file:/private/source", cli.UNSUPPORTED_URL_MESSAGE),
             ("file:///private/source", cli.UNSUPPORTED_URL_MESSAGE),
@@ -410,11 +409,90 @@ class CliSafetyTests(unittest.TestCase):
         for value, message in cases:
             with self.subTest(value=value):
                 with mock.patch.object(cli.getpass, "getpass", return_value=value):
-                    with mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("network attempted")):
-                        code, stdout, stderr = self.run_cli(["--list"])
+                    code, stdout, stderr = self.run_cli(["--list"])
                 self.assertEqual(code, 2)
                 self.assertIn(message, stderr)
                 self.assertNotIn(value, stdout + stderr)
+
+    def test_https_source_payload_reaches_offline_parser_without_echo(self):
+        source = "https://source.example/path?token=DO_NOT_LEAK_SOURCE"
+        link = make_link(label="HTTPS Example")
+        resolved = network.ResolvedPayload(link, len(link.encode()), 0, "text/plain")
+        with mock.patch.object(cli.getpass, "getpass", return_value=source):
+            with mock.patch.object(cli, "resolve_https_source", return_value=resolved) as resolver:
+                code, stdout, stderr = self.run_cli(["--list"])
+        self.assertEqual(code, 0)
+        resolver.assert_called_once_with(source)
+        self.assertNotIn(source, stdout + stderr)
+        self.assertNotIn(link, stdout + stderr)
+
+    def test_https_base64_subscription_reaches_offline_parser(self):
+        link = make_link(label="Base64 HTTPS")
+        payload = base64.b64encode(link.encode()).decode()
+        resolved = network.ResolvedPayload(payload, len(payload), 0)
+        with mock.patch.object(cli.getpass, "getpass", return_value="https://source.example/sub"):
+            with mock.patch.object(cli, "resolve_https_source", return_value=resolved):
+                code, stdout, stderr = self.run_cli(["--list"])
+        self.assertEqual(code, 0)
+        self.assertIn("Compatible nodes:", stdout)
+        self.assertEqual(stderr, "")
+
+    def test_redirected_https_json_subscription_reaches_offline_parser(self):
+        link = make_link(label="Redirect JSON")
+        payload = json.dumps({"profiles": [{"url": link}]})
+        resolved = network.ResolvedPayload(payload, len(payload.encode()), 1, "application/json")
+        with mock.patch.object(cli.getpass, "getpass", return_value="https://short.example/s"):
+            with mock.patch.object(cli, "resolve_https_source", return_value=resolved):
+                code, stdout, stderr = self.run_cli(["--list", "--json"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(stdout)
+        self.assertIn("compatible_nodes", parsed)
+        self.assertNotIn(link, stdout + stderr)
+
+    def test_https_dry_run_reads_but_writes_nothing(self):
+        link = make_link()
+        resolved = network.ResolvedPayload(link, len(link.encode()), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            with mock.patch.object(cli.getpass, "getpass", return_value="https://source.example/sub"):
+                with mock.patch.object(cli, "resolve_https_source", return_value=resolved) as resolver:
+                    code, stdout, stderr = self.run_cli(
+                        ["--primary-index", "1", "--dry-run", "--output", str(output)]
+                    )
+            self.assertEqual(code, 0)
+            resolver.assert_called_once()
+            self.assertFalse(output.exists())
+            self.assertIn("no profiles file was written", stdout)
+            self.assertEqual(stderr, "")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission semantics required")
+    def test_https_selection_writes_owner_only_output(self):
+        link = make_link()
+        resolved = network.ResolvedPayload(link, len(link.encode()), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            with mock.patch.object(cli.getpass, "getpass", return_value="https://source.example/sub"):
+                with mock.patch.object(cli, "resolve_https_source", return_value=resolved):
+                    code, _stdout, _stderr = self.run_cli(
+                        ["--primary-index", "1", "--yes", "--output", str(output)]
+                    )
+            self.assertEqual(code, 0)
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+    def test_https_failure_creates_no_output_and_hides_source(self):
+        source = "https://source.example/path?token=DO_NOT_LEAK_FAILURE"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.json"
+            with mock.patch.object(cli.getpass, "getpass", return_value=source):
+                with mock.patch.object(
+                    cli,
+                    "resolve_https_source",
+                    side_effect=network.DnsResolutionError("DNS resolution failed."),
+                ):
+                    code, stdout, stderr = self.run_cli(["--output", str(output)])
+            self.assertEqual(code, 1)
+            self.assertFalse(output.exists())
+            self.assertNotIn(source, stdout + stderr)
 
     def test_colon_later_in_malformed_payload_is_not_classified_as_scheme(self):
         value = "ordinary payload with colon: private-value"

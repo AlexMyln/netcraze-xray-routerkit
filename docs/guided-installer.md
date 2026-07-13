@@ -52,9 +52,9 @@ python3 scripts/routerkit.py --dry-run plan --generated generated --strict
 
 The wrapper does not automate the Netcraze Web UI, create firewall rules, call `xkeen -start`, or make hidden `/opt` changes. The `backup` command delegates to `scripts/backup.sh`; backup archives may contain secrets and must not be published.
 
-## Offline profile-source core
+## Safe profile-source acquisition and offline parsing
 
-Use `profile-source` to inspect a local payload and create a generator-compatible private `profiles.json`:
+Use `profile-source` to inspect a local payload or safely acquire an HTTPS subscription and create a generator-compatible private `profiles.json`:
 
 ```sh
 python3 scripts/routerkit.py profile-source
@@ -70,7 +70,9 @@ Compatibility is deliberately narrow: VLESS with a syntactically valid UUID, end
 
 The numbered list is secret-safe and sanitizes untrusted fragments. It does not print the raw payload, link, UUID, host, SNI, public key, short ID, or spider path. Unsupported URI schemes are rejected without echoing the source. Select exactly one primary and zero, one, or two fallbacks. Output profiles are named `primary`, `fallback-1`, and `fallback-2`, using local SOCKS ports `1082`, `1083`, and `1084`. New output is atomically published without clobbering a destination that appears during the write and has mode `0600` on POSIX. Replacement requires explicit `--force`; even then, symlink and non-regular destinations are refused. `--list` and `--dry-run` never write output; `--yes` does not imply `--force`.
 
-An HTTPS source exits without fetching and points to #23; every other unsupported URI scheme is rejected generically. HTTPS/shortlink resolution remains #23, while automatic setup integration remains #24. The existing `routerkit setup` path is unchanged by this offline command.
+An HTTPS source may be a direct subscription or a standard redirect-based shortlink. Only HTTPS port 443 is accepted, without userinfo or fragments. Every hop revalidates the URL and all DNS addresses, requires an entirely global address set, pins TCP to one validated address, verifies TLS for the original hostname, and verifies the peer address. There are at most 5 redirects and 16 DNS addresses per hop; DNS, connection, overall, URL/Location, and body limits are 5 seconds, 10 seconds, 30 seconds, 8192 bytes, and 1 MiB respectively. Compressed responses, JavaScript redirects, and meta refresh are rejected. See the [security ADR](architecture/profile-source-network-security.md).
+
+For this command, `--dry-run` is no-write rather than no-network: an HTTPS source is acquired and parsed before selection, but no output is written. The generator shares the resolver for `subscription_url` and `subscription_url_env`. Automatic default setup integration remains #24, #20 remains open, and the existing `routerkit setup` path is unchanged.
 
 ## What the wizard does
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline CLI for parsing and selecting RouterKit profile-source nodes."""
+"""CLI for safely acquiring, parsing, and selecting profile-source nodes."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+from routerkit_profile_network import ProfileNetworkError, resolve_https_source
 from routerkit_profile_source import (
     MAX_PAYLOAD_BYTES,
     NodeRecord,
@@ -30,7 +31,6 @@ from routerkit_profile_source import (
 )
 
 
-HTTPS_MESSAGE = "HTTPS source resolution is not implemented in this release; tracked in #23."
 UNSUPPORTED_URL_MESSAGE = "This source scheme is not supported."
 _URI_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
@@ -45,7 +45,7 @@ class UserCancelled(Exception):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Parse VLESS profile payloads and select compatible nodes offline."
+        description="Acquire or parse VLESS profile payloads and select compatible nodes safely."
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--source-env", metavar="ENV_NAME")
@@ -144,16 +144,17 @@ def read_payload(args: argparse.Namespace) -> str:
         raise UserCancelled from None
 
 
-def reject_network_source(payload: str) -> None:
+def acquire_source_payload(payload: str) -> str:
     value = payload.strip()
     match = _URI_SCHEME_RE.match(value)
     if match is None:
-        return
+        return payload
     scheme = match.group(0)[:-1].lower()
     if scheme == "vless":
-        return
+        return payload
     if scheme == "https":
-        raise CliConfigurationError(HTTPS_MESSAGE)
+        resolved = resolve_https_source(payload)
+        return resolved.payload
     raise CliConfigurationError(UNSUPPORTED_URL_MESSAGE)
 
 
@@ -222,7 +223,7 @@ def confirm_write() -> bool:
 def run(args: argparse.Namespace) -> int:
     validate_args(args)
     payload = read_payload(args)
-    reject_network_source(payload)
+    payload = acquire_source_payload(payload)
     nodes = parse_compatible_nodes(payload)
 
     if args.list:
@@ -274,6 +275,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except OutputExistsError as exc:
         print(f"routerkit-profile-source: {exc}", file=sys.stderr)
         return 2
+    except ProfileNetworkError as exc:
+        print(f"routerkit-profile-source: {exc}", file=sys.stderr)
+        return 1
     except (ProfileSourceError, SelectionError) as exc:
         print(f"routerkit-profile-source: {exc}", file=sys.stderr)
         return 1

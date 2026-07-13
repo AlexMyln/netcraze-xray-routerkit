@@ -18,7 +18,6 @@ import json
 import os
 import re
 import sys
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -33,6 +32,7 @@ from routerkit_profile_source import (  # noqa: E402
     extract_vless_links,
     parse_vless,
 )
+from routerkit_profile_network import ProfileNetworkError, resolve_https_source  # noqa: E402
 
 
 def eprint(*args: Any) -> None:
@@ -44,10 +44,11 @@ def load_json(path: Path) -> Any:
 
 
 def fetch_url(url: str, user_agent: str = "netcraze-xray-routerkit/0.1") -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    with urllib.request.urlopen(req, timeout=45) as resp:
-        data = resp.read()
-    return data.decode("utf-8", errors="replace")
+    del user_agent  # Retained for compatibility with callers of this helper.
+    try:
+        return resolve_https_source(url).payload
+    except ProfileNetworkError:
+        raise SystemExit("HTTPS subscription could not be resolved securely.") from None
 
 
 def select_node(links: List[str], selector: Dict[str, Any]) -> NodeRecord:

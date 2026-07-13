@@ -1,11 +1,13 @@
 import base64
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +23,7 @@ def load_module():
 
 
 generator = load_module()
+import routerkit_profile_network as network
 
 
 def fake_vless_link(name="Example", host="example.net", security="reality", network="tcp", user_id=None):
@@ -56,6 +59,57 @@ class ExtractVlessLinksTests(unittest.TestCase):
         text = json.dumps({"profiles": [{"url": link}]})
 
         self.assertEqual(generator.extract_vless_links(text), [link])
+
+
+class SubscriptionAcquisitionTests(unittest.TestCase):
+    def test_subscription_url_uses_safe_shared_resolver(self):
+        source = "https://source.example/sub?token=synthetic"
+        result = network.ResolvedPayload("payload", 7, 0)
+        with mock.patch.object(generator, "resolve_https_source", return_value=result) as resolver:
+            self.assertEqual(generator.get_subscription_text({"subscription_url": source}), "payload")
+        resolver.assert_called_once_with(source)
+
+    def test_environment_subscription_url_uses_safe_shared_resolver(self):
+        source = "https://source.example/from-env"
+        result = network.ResolvedPayload("payload", 7, 0)
+        with mock.patch.dict(os.environ, {"SYNTHETIC_SUBSCRIPTION_URL": source}):
+            with mock.patch.object(generator, "resolve_https_source", return_value=result) as resolver:
+                self.assertEqual(
+                    generator.get_subscription_text(
+                        {"subscription_url_env": "SYNTHETIC_SUBSCRIPTION_URL"}
+                    ),
+                    "payload",
+                )
+        resolver.assert_called_once_with(source)
+
+    def test_network_failure_is_generic_and_hides_source(self):
+        source = "https://source.example/path?token=DO_NOT_LEAK_GENERATOR"
+        with mock.patch.object(
+            generator,
+            "resolve_https_source",
+            side_effect=network.UrlPolicyError("HTTPS source URL is not allowed by policy."),
+        ):
+            with self.assertRaises(SystemExit) as caught:
+                generator.get_subscription_text({"subscription_url": source})
+        self.assertNotIn(source, str(caught.exception))
+
+    def test_local_file_and_direct_vless_paths_remain_offline(self):
+        link = fake_vless_link()
+        with tempfile.TemporaryDirectory() as directory:
+            source_file = Path(directory) / "source.txt"
+            source_file.write_text(link, encoding="utf-8")
+            with mock.patch.object(
+                generator, "resolve_https_source", side_effect=AssertionError("network attempted")
+            ):
+                self.assertEqual(
+                    generator.get_subscription_text({"subscription_file": str(source_file)}), link
+                )
+                self.assertEqual(generator.get_subscription_text({"vless": link}), link)
+
+    def test_urllib_request_urlopen_is_absent_from_generator(self):
+        source = (ROOT / "scripts" / "generate-xray-profiles.py").read_text(encoding="utf-8")
+        self.assertNotIn("urllib.request", source)
+        self.assertNotIn("urlopen", source)
 
 
 class ParseVlessTests(unittest.TestCase):
