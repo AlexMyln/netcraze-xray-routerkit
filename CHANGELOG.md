@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Read-only bootstrap environment planner with text and JSON output.
+- Strict pinned-Xray artifact manifest and validation.
+- Bootstrap execution-model ADR and artifact-pin verification documentation.
+- Offline synthetic bootstrap fixtures and unit tests.
 - Initial `setup` orchestrator for wizard, generation, strict planning, explicit apply confirmation, and the hardened install pipeline.
 - Setup dry-run rendering and failure-propagation tests.
 - Wizard-only mode for orchestration without duplicate generator prompts.

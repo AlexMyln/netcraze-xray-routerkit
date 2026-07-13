@@ -1,0 +1,221 @@
+import contextlib
+import importlib.util
+import io
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST_PATH = ROOT / "manifests" / "xray-artifacts.json"
+FIXTURES = ROOT / "tests" / "fixtures" / "bootstrap"
+
+
+def load_module():
+    path = ROOT / "scripts" / "routerkit-bootstrap.py"
+    spec = importlib.util.spec_from_file_location("routerkit_bootstrap", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+bootstrap = load_module()
+
+
+def manifest_data():
+    return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def run_main(*args):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        code = bootstrap.main(list(args))
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+class ManifestValidationTests(unittest.TestCase):
+    def test_valid_manifest_loads(self):
+        data = bootstrap.load_manifest(MANIFEST_PATH)
+        self.assertEqual(data["schema_version"], 1)
+        self.assertEqual(data["upstream"]["release_tag"], "v26.3.27")
+
+    def test_malformed_checksum_rejected(self):
+        data = manifest_data()
+        data["artifacts"]["linux-arm64"]["sha256"] = "not-a-checksum"
+        with self.assertRaises(bootstrap.ManifestValidationError):
+            bootstrap.validate_manifest(data)
+
+    def test_uppercase_noncanonical_checksum_rejected(self):
+        data = manifest_data()
+        data["artifacts"]["linux-arm64"]["sha256"] = data["artifacts"][
+            "linux-arm64"
+        ]["sha256"].upper()
+        with self.assertRaises(bootstrap.ManifestValidationError):
+            bootstrap.validate_manifest(data)
+
+    def test_latest_url_rejected(self):
+        data = manifest_data()
+        data["artifacts"]["linux-arm64"]["download_url"] = (
+            "https://github.com/XTLS/Xray-core/releases/latest/download/"
+            "Xray-linux-arm64-v8a.zip"
+        )
+        with self.assertRaises(bootstrap.ManifestValidationError):
+            bootstrap.validate_manifest(data)
+
+    def test_wrong_github_repository_url_rejected(self):
+        data = manifest_data()
+        data["artifacts"]["linux-arm64"]["download_url"] = data["artifacts"][
+            "linux-arm64"
+        ]["download_url"].replace("XTLS/Xray-core", "example/not-xray")
+        with self.assertRaises(bootstrap.ManifestValidationError):
+            bootstrap.validate_manifest(data)
+
+    def test_version_tag_mismatch_rejected(self):
+        data = manifest_data()
+        data["upstream"]["release_tag"] = "v1.2.3"
+        with self.assertRaises(bootstrap.ManifestValidationError):
+            bootstrap.validate_manifest(data)
+
+    def test_duplicate_machine_alias_rejected(self):
+        data = manifest_data()
+        data["artifacts"]["linux-arm64"]["uname_machines"] = [
+            "aarch64",
+            "arm64",
+            "aarch64",
+        ]
+        with self.assertRaises(bootstrap.ManifestValidationError):
+            bootstrap.validate_manifest(data)
+
+    def test_missing_architecture_mapping_rejected(self):
+        data = manifest_data()
+        del data["artifacts"]["linux-arm64"]
+        with self.assertRaises(bootstrap.ManifestValidationError):
+            bootstrap.validate_manifest(data)
+
+
+class ArtifactResolutionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = bootstrap.load_manifest(MANIFEST_PATH)
+
+    def test_aarch64_resolves_to_linux_arm64(self):
+        key, _ = bootstrap.resolve_artifact(self.manifest, "Linux", "aarch64")
+        self.assertEqual(key, "linux-arm64")
+
+    def test_arm64_resolves_to_linux_arm64(self):
+        key, _ = bootstrap.resolve_artifact(self.manifest, "Linux", "arm64")
+        self.assertEqual(key, "linux-arm64")
+
+    def test_x86_64_rejected(self):
+        with self.assertRaises(bootstrap.UnsupportedEnvironmentError):
+            bootstrap.resolve_artifact(self.manifest, "Linux", "x86_64")
+
+    def test_mipsel_rejected(self):
+        with self.assertRaises(bootstrap.UnsupportedEnvironmentError):
+            bootstrap.resolve_artifact(self.manifest, "Linux", "mipsel")
+
+
+class PlannerTests(unittest.TestCase):
+    def test_inventory_file_mode_performs_no_subprocesses(self):
+        with mock.patch.object(
+            bootstrap.subprocess, "run", side_effect=AssertionError("must not execute")
+        ) as run:
+            code, _, _ = run_main(
+                "--inventory-file", str(FIXTURES / "supported-aarch64.json")
+            )
+        self.assertEqual(code, 0)
+        run.assert_not_called()
+
+    def test_supported_complete_inventory_returns_zero(self):
+        code, output, errors = run_main(
+            "--inventory-file", str(FIXTURES / "supported-aarch64.json")
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(errors, "")
+        self.assertIn("RouterKit bootstrap plan", output)
+        self.assertNotIn("Warnings:", output)
+
+    def test_supported_missing_prerequisites_warns_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            before = list(Path(tmp).iterdir())
+            code, output, _ = run_main(
+                "--inventory-file",
+                str(FIXTURES / "supported-missing-prerequisites.json"),
+            )
+            after = list(Path(tmp).iterdir())
+        self.assertEqual(code, 0)
+        self.assertEqual(before, after)
+        self.assertIn("Warnings:", output)
+        self.assertIn("ca-bundle, curl, unzip", output)
+        self.assertIn("Would NOT in this release:", output)
+
+    def test_existing_xray_is_reported_without_modification(self):
+        code, output, _ = run_main(
+            "--inventory-file", str(FIXTURES / "existing-xray.json")
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("existing Xray: present", output)
+        self.assertIn("Xray 25.1.30", output)
+
+    def test_text_output_does_not_include_ignored_synthetic_secret_marker(self):
+        code, output, errors = run_main(
+            "--inventory-file", str(FIXTURES / "supported-aarch64.json")
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("SYNTHETIC_SECRET_MARKER", output + errors)
+
+    def test_json_output_is_valid_and_deterministic(self):
+        args = (
+            "--inventory-file",
+            str(FIXTURES / "supported-aarch64.json"),
+            "--json",
+        )
+        first = run_main(*args)
+        second = run_main(*args)
+        self.assertEqual(first, second)
+        self.assertEqual(first[0], 0)
+        parsed = json.loads(first[1])
+        self.assertEqual(parsed["mode"], "read-only")
+        self.assertEqual(parsed["pinned_artifact"]["key"], "linux-arm64")
+
+    def test_unsupported_inventory_returns_one(self):
+        for name in ("unsupported-x86_64.json", "unsupported-mipsel.json"):
+            with self.subTest(name=name):
+                code, output, errors = run_main(
+                    "--inventory-file", str(FIXTURES / name)
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(output, "")
+                self.assertIn("unsupported environment", errors)
+
+    def test_apply_returns_two_before_manifest_or_subprocess_access(self):
+        with mock.patch.object(
+            bootstrap, "load_manifest", side_effect=AssertionError("must not load")
+        ) as load_manifest, mock.patch.object(
+            bootstrap.subprocess, "run", side_effect=AssertionError("must not execute")
+        ) as run:
+            code, output, errors = run_main("--apply")
+        self.assertEqual(code, 2)
+        self.assertEqual(output, "")
+        self.assertEqual(errors, bootstrap.APPLY_NOT_IMPLEMENTED + "\n")
+        load_manifest.assert_not_called()
+        run.assert_not_called()
+
+    def test_dry_run_is_explicitly_read_only(self):
+        code, output, _ = run_main(
+            "--inventory-file",
+            str(FIXTURES / "supported-aarch64.json"),
+            "--dry-run",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("default and --dry-run perform the same non-mutating checks", output)
+
+
+if __name__ == "__main__":
+    unittest.main()
