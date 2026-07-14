@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
@@ -75,9 +77,28 @@ class AutostartPaths:
 
 
 @dataclass
+class ProcessIdentity:
+    pid: int
+    start_time: str
+    executable_device: int
+    executable_inode: int
+    cmdline: Tuple[str, ...]
+
+    def same_epoch(self, other: "ProcessIdentity") -> bool:
+        return (
+            self.pid == other.pid
+            and self.start_time == other.start_time
+            and self.executable_device == other.executable_device
+            and self.executable_inode == other.executable_inode
+            and self.cmdline == other.cmdline
+        )
+
+
+@dataclass
 class RuntimeVerification:
     ok: bool
     pid: Optional[int] = None
+    identity: Optional[ProcessIdentity] = None
     messages: List[str] = field(default_factory=list)
     listeners: Dict[int, str] = field(default_factory=dict)
 
@@ -136,7 +157,7 @@ class AutostartStatus:
             "pid_file_state": self.pid_file_state,
             "runtime_verification": {
                 "ok": self.runtime.ok,
-                "pid": self.runtime.pid,
+                "process_identity_verified": self.runtime.identity is not None,
                 "messages": list(self.runtime.messages),
                 "listeners": {str(port): owner for port, owner in self.runtime.listeners.items()},
             },
@@ -150,9 +171,10 @@ class TransactionResult:
     action: str
     changed_s23_mode: bool = False
     disabled_s24: bool = False
-    restarted_process: bool = False
+    runtime_verified: bool = False
+    restart_performed: bool = False
+    restart_verified: bool = False
     noop: bool = False
-    strict_restart_verified: bool = False
     rollback_unproven: bool = False
     message: str = ""
 
@@ -161,9 +183,10 @@ class TransactionResult:
             "action": self.action,
             "changed_s23_mode": self.changed_s23_mode,
             "disabled_s24": self.disabled_s24,
-            "restarted_process": self.restarted_process,
+            "runtime_verified": self.runtime_verified,
+            "restart_performed": self.restart_performed,
+            "restart_verified": self.restart_verified,
             "noop": self.noop,
-            "strict_restart_verified": self.strict_restart_verified,
             "rollback_unproven": self.rollback_unproven,
             "message": self.message,
         }
@@ -294,23 +317,38 @@ def _enable_executable(path: Path, description: str) -> bool:
 
 
 def _bounded_init_conflicts(paths: AutostartPaths) -> List[str]:
+    display_root = Path("/opt/etc/init.d")
     try:
-        entries = list(paths.init_dir.iterdir())
+        scanner = os.scandir(str(paths.init_dir))
     except OSError:
-        return []
+        return [str(display_root / "<unreadable>")]
     conflicts: List[str] = []
-    for entry in entries[:MAX_INIT_ENTRIES]:
-        if entry.name in {"S23xray-direct", "S24xray"}:
-            continue
-        lowered = entry.name.lower()
-        if "xray" not in lowered:
-            continue
-        present, regular, symlink, _mode, executable = _file_info(entry)
-        if present and regular and not symlink and executable:
-            conflicts.append(str(Path("/opt/etc/init.d") / entry.name))
-    if len(entries) > MAX_INIT_ENTRIES:
-        conflicts.append("/opt/etc/init.d/<too-many-entries>")
+    count = 0
+    with scanner:
+        for entry in scanner:
+            count += 1
+            if count > MAX_INIT_ENTRIES:
+                conflicts.append(str(display_root / "<too-many-entries>"))
+                break
+            if entry.name in {"S23xray-direct", "S24xray"}:
+                continue
+            lowered = entry.name.lower()
+            if "xray" not in lowered:
+                continue
+            present, regular, symlink, _mode, executable = _file_info(Path(entry.path))
+            if present and regular and not symlink and executable:
+                conflicts.append(str(display_root / entry.name))
     return conflicts
+
+
+def _lexists(path: Path) -> bool:
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
 
 
 def _pid_file_state(paths: AutostartPaths) -> str:
@@ -344,29 +382,61 @@ def _proc_path(proc_root: Path, pid: int, *parts: str) -> Path:
     return proc_root / str(pid) / Path(*parts)
 
 
-def _same_executable(proc_root: Path, pid: int, expected: Path) -> bool:
+def _read_start_time(proc_root: Path, pid: int) -> str:
     try:
-        actual = _proc_path(proc_root, pid, "exe").resolve(strict=True)
-        expected_resolved = expected.resolve(strict=True)
-    except OSError:
-        return False
-    return actual == expected_resolved
+        text = _proc_path(proc_root, pid, "stat").read_text(encoding="ascii", errors="strict")
+    except (OSError, UnicodeError):
+        raise AutostartError("PID start time could not be read from /proc.")
+    marker = text.rfind(") ")
+    if marker == -1:
+        raise AutostartError("PID stat record is malformed.")
+    fields = text[marker + 2 :].split()
+    if len(fields) < 20:
+        raise AutostartError("PID stat record is incomplete.")
+    start_time = fields[19]
+    if not start_time.isdecimal():
+        raise AutostartError("PID start time is not decimal.")
+    return start_time
 
 
-def _cmdline_ok(proc_root: Path, pid: int, expected_xray: Path, expected_conf_dir: Path) -> bool:
+def _read_cmdline(proc_root: Path, pid: int) -> Tuple[str, ...]:
     try:
         raw = _proc_path(proc_root, pid, "cmdline").read_bytes()
     except OSError:
-        return False
-    args = [item.decode("utf-8", "replace") for item in raw.split(b"\0") if item]
-    if len(args) != 4:
-        return False
-    exe_arg, run_arg, conf_arg, conf_dir_arg = args
-    return (
-        Path(exe_arg) == expected_xray
-        and run_arg == "run"
-        and conf_arg == "-confdir"
-        and Path(conf_dir_arg) == expected_conf_dir
+        raise AutostartError("PID command line could not be read from /proc.")
+    try:
+        return tuple(item.decode("utf-8", "strict") for item in raw.split(b"\0") if item)
+    except UnicodeError:
+        raise AutostartError("PID command line is not valid UTF-8.") from None
+
+
+def _read_process_identity(paths: AutostartPaths, proc_root: Path, pid: int) -> ProcessIdentity:
+    start_before = _read_start_time(proc_root, pid)
+    try:
+        expected = paths.xray.stat()
+        actual = os.stat(str(_proc_path(proc_root, pid, "exe")))
+    except OSError:
+        raise AutostartError("PID executable identity could not be read from /proc.") from None
+    if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+        raise AutostartError("PID does not belong to the expected /opt/sbin/xray executable.")
+    cmdline = _read_cmdline(proc_root, pid)
+    expected_cmdline = (
+        str(paths.xray),
+        "run",
+        "-confdir",
+        str(paths.conf_dir),
+    )
+    if cmdline != expected_cmdline:
+        raise AutostartError("PID command line does not match run -confdir /opt/etc/xray/configs.")
+    start_after = _read_start_time(proc_root, pid)
+    if start_before != start_after:
+        raise AutostartError("PID identity changed during verification.")
+    return ProcessIdentity(
+        pid=pid,
+        start_time=start_after,
+        executable_device=actual.st_dev,
+        executable_inode=actual.st_ino,
+        cmdline=cmdline,
     )
 
 
@@ -385,12 +455,12 @@ def _decode_tcp6(hex_addr: str) -> str:
     return "non-loopback"
 
 
-def _parse_proc_net(path: Path, *, ipv6: bool) -> List[Tuple[str, int, str, str]]:
+def _parse_proc_net(path: Path, *, ipv6: bool) -> Optional[List[Tuple[str, int, str, str]]]:
     rows: List[Tuple[str, int, str, str]] = []
     try:
         lines = path.read_text(encoding="ascii", errors="replace").splitlines()
     except OSError:
-        return rows
+        return None
     for line in lines[1:]:
         parts = line.split()
         if len(parts) < 10 or parts[3] != "0A":
@@ -405,20 +475,23 @@ def _parse_proc_net(path: Path, *, ipv6: bool) -> List[Tuple[str, int, str, str]
     return rows
 
 
-def _socket_inodes_for_pid(proc_root: Path, pid: int) -> Set[str]:
+def _socket_inodes_for_pid(proc_root: Path, pid: int) -> Optional[Set[str]]:
     fd_dir = _proc_path(proc_root, pid, "fd")
     inodes: Set[str] = set()
     try:
-        entries = list(fd_dir.iterdir())
+        scanner = os.scandir(str(fd_dir))
     except OSError:
-        return inodes
-    for entry in entries[:256]:
-        try:
-            target = os.readlink(str(entry))
-        except OSError:
-            continue
-        if target.startswith("socket:[") and target.endswith("]"):
-            inodes.add(target[len("socket:[") : -1])
+        return None
+    with scanner:
+        for index, entry in enumerate(scanner, start=1):
+            if index > 256:
+                return None
+            try:
+                target = os.readlink(entry.path)
+            except OSError:
+                return None
+            if target.startswith("socket:[") and target.endswith("]"):
+                inodes.add(target[len("socket:[") : -1])
     return inodes
 
 
@@ -429,14 +502,23 @@ def verify_runtime(paths: AutostartPaths, *, proc_root: Path = Path("/proc")) ->
     except (AutostartError, OSError, UnicodeError) as exc:
         return RuntimeVerification(False, messages=[str(exc)])
 
-    if not _same_executable(proc_root, pid, paths.xray):
-        messages.append("PID does not belong to the expected /opt/sbin/xray executable.")
-    if not _cmdline_ok(proc_root, pid, paths.xray, paths.conf_dir):
-        messages.append("PID command line does not match run -confdir /opt/etc/xray/configs.")
+    identity: Optional[ProcessIdentity] = None
+    try:
+        identity = _read_process_identity(paths, proc_root, pid)
+    except AutostartError as exc:
+        messages.append(str(exc))
 
     owned_inodes = _socket_inodes_for_pid(proc_root, pid)
-    rows = _parse_proc_net(proc_root / "net" / "tcp", ipv6=False)
-    rows.extend(_parse_proc_net(proc_root / "net" / "tcp6", ipv6=True))
+    if owned_inodes is None:
+        messages.append("PID socket ownership could not be established from /proc.")
+        owned_inodes = set()
+    rows4 = _parse_proc_net(proc_root / "net" / "tcp", ipv6=False)
+    rows6 = _parse_proc_net(proc_root / "net" / "tcp6", ipv6=True)
+    if rows4 is None or rows6 is None:
+        messages.append("Kernel listener table could not be read from /proc.")
+        rows: List[Tuple[str, int, str, str]] = []
+    else:
+        rows = rows4 + rows6
     listeners: Dict[int, str] = {}
     for port in EXPECTED_PORTS:
         port_rows = [row for row in rows if row[1] == port]
@@ -454,7 +536,13 @@ def verify_runtime(paths: AutostartPaths, *, proc_root: Path = Path("/proc")) ->
             messages.append(f"Port {port} does not have exactly one expected listener.")
         else:
             listeners[port] = f"{EXPECTED_HOST}:{port}"
-    return RuntimeVerification(not messages, pid=pid, messages=messages, listeners=listeners)
+    if identity is not None:
+        try:
+            if _read_start_time(proc_root, pid) != identity.start_time:
+                messages.append("PID identity changed during listener verification.")
+        except AutostartError as exc:
+            messages.append(str(exc))
+    return RuntimeVerification(not messages, pid=pid, identity=identity, messages=messages, listeners=listeners)
 
 
 def inspect_status(target_root: Path, *, proc_root: Path = Path("/proc")) -> AutostartStatus:
@@ -511,6 +599,8 @@ class TransactionSignals:
     def __init__(self) -> None:
         self.first_signal: Optional[int] = None
         self.previous: Dict[int, object] = {}
+        self.child: Optional[subprocess.Popen] = None
+        self._previous_signal_mask = None
 
     @staticmethod
     def handled_signals() -> Tuple[int, ...]:
@@ -524,16 +614,40 @@ class TransactionSignals:
     def _handle(self, signum: int, _frame: Optional[FrameType]) -> None:
         if self.first_signal is None:
             self.first_signal = signum
+        child = self.child
+        if child is not None and child.poll() is None:
+            try:
+                if os.name == "posix":
+                    os.killpg(child.pid, signum)
+                else:
+                    child.send_signal(signum)
+            except OSError:
+                pass
 
     def __enter__(self) -> "TransactionSignals":
+        if (
+            os.name == "posix"
+            and threading.current_thread() is threading.main_thread()
+            and hasattr(signal, "pthread_sigmask")
+        ):
+            self._previous_signal_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                self.handled_signals(),
+            )
         for signum in self.handled_signals():
             self.previous[signum] = signal.getsignal(signum)
             signal.signal(signum, self._handle)
+        if self._previous_signal_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, self._previous_signal_mask)
+            self._previous_signal_mask = None
         return self
 
     def __exit__(self, *_exc: object) -> None:
         for signum, handler in self.previous.items():
             signal.signal(signum, handler)
+        if self._previous_signal_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, self._previous_signal_mask)
+            self._previous_signal_mask = None
 
     def raise_if_requested(self) -> None:
         if self.first_signal is not None:
@@ -543,15 +657,61 @@ class TransactionSignals:
             )
 
 
-def _run_init(paths: AutostartPaths, action: str) -> None:
+def _wait_child(child: subprocess.Popen) -> int:
+    while True:
+        try:
+            return child.wait()
+        except InterruptedError:
+            continue
+        except OSError as exc:
+            if exc.errno == errno.EINTR:
+                continue
+            raise
+
+
+def _run_init(
+    paths: AutostartPaths,
+    action: str,
+    *,
+    signals: Optional[TransactionSignals] = None,
+    emit_output: bool = True,
+) -> None:
     try:
-        completed = subprocess.run(["sh", str(paths.s23), action], check=False)
+        child = subprocess.Popen(
+            ["sh", str(paths.s23), action],
+            stdout=None if emit_output else subprocess.PIPE,
+            stderr=None if emit_output else subprocess.PIPE,
+            start_new_session=os.name == "posix",
+        )
     except OSError as exc:
         raise AutostartError(f"could not run S23xray-direct {action}: {exc}", SPAWN_ERROR) from None
-    if completed.returncode != 0:
+    if signals is not None:
+        signals.child = child
+        signals.raise_if_requested()
+    try:
+        if emit_output:
+            returncode = _wait_child(child)
+        else:
+            child.communicate()
+            returncode = child.returncode
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            if os.name == "posix":
+                os.killpg(child.pid, signal.SIGTERM)
+            else:
+                child.terminate()
+        with contextlib.suppress(Exception):
+            _wait_child(child)
+        raise AutostartError(f"S23xray-direct {action} supervision failed: {exc}", 1) from None
+    finally:
+        if signals is not None and signals.child is child:
+            signals.child = None
+    if returncode < 0:
+        returncode = 128 + abs(returncode)
+    if returncode != 0:
         raise AutostartError(
-            f"S23xray-direct {action} failed with exit code {completed.returncode}.",
-            completed.returncode,
+            f"S23xray-direct {action} failed with exit code {returncode}.",
+            returncode,
         )
 
 
@@ -570,51 +730,86 @@ def _preflight_apply(paths: AutostartPaths) -> None:
         raise AutostartError("Xray executable is not executable.")
     if not paths.conf_dir.is_dir():
         raise AutostartError("Xray config directory is missing.")
-    if paths.s24.exists():
+    if _lexists(paths.s24):
         _require_regular_nonsymlink(paths.s24, "S24xray")
     conflicts = _bounded_init_conflicts(paths)
     if conflicts:
         raise AutostartError("conflicting executable Xray init scripts were found.")
 
 
-def enable_autostart(paths: AutostartPaths, *, proc_root: Path = Path("/proc")) -> TransactionResult:
+def _remove_runtime_if_started(paths: AutostartPaths, *, proc_root: Path, emit_init_output: bool) -> bool:
+    before = verify_runtime(paths, proc_root=proc_root)
+    if not before.ok:
+        return True
+    try:
+        _run_init(paths, "stop", emit_output=emit_init_output)
+    except AutostartError:
+        return False
+    after = verify_runtime(paths, proc_root=proc_root)
+    return not after.ok
+
+
+def enable_autostart(
+    paths: AutostartPaths,
+    *,
+    proc_root: Path = Path("/proc"),
+    emit_init_output: bool = True,
+) -> TransactionResult:
     _preflight_apply(paths)
     before_mode = stat.S_IMODE(paths.s23.lstat().st_mode)
     result = TransactionResult(action="enable")
     before = inspect_status(paths.target_root, proc_root=proc_root)
     if before.verify_ok:
         result.noop = True
-        result.strict_restart_verified = True
-        result.message = "Already enabled and strictly verified."
+        result.runtime_verified = True
+        result.restart_performed = False
+        result.restart_verified = False
+        result.message = "Autostart already enabled and runtime-verified; no restart was performed."
         return result
 
     with TransactionSignals() as signals:
         try:
-            if paths.s24.exists():
+            if _lexists(paths.s24):
                 result.disabled_s24 = _disable_executable(paths.s24, "S24xray")
             _disable_executable(paths.s23, "S23xray-direct")
             signals.raise_if_requested()
-            _run_init(paths, "restart")
-            result.restarted_process = True
+            _run_init(paths, "restart", signals=signals, emit_output=emit_init_output)
+            result.restart_performed = True
             signals.raise_if_requested()
             runtime = verify_runtime(paths, proc_root=proc_root)
             if not runtime.ok:
                 raise AutostartError("strict runtime verification failed: " + "; ".join(runtime.messages))
+            if before.runtime.ok and before.runtime.identity is not None:
+                if runtime.identity is None or before.runtime.identity.same_epoch(runtime.identity):
+                    raise AutostartError("restart did not prove a new Xray process epoch.")
+            result.runtime_verified = True
+            result.restart_verified = True
             result.changed_s23_mode = _enable_executable(paths.s23, "S23xray-direct")
             signals.raise_if_requested()
             final_status = inspect_status(paths.target_root, proc_root=proc_root)
             if not final_status.verify_ok:
                 raise AutostartError("final autostart verification failed.")
-            _publish_receipt(paths, result)
-            result.strict_restart_verified = True
+            _remove_receipt(paths)
             result.message = "Autostart enabled and restart-verified."
             return result
         except AutostartError:
             rollback_failed = False
+            _remove_receipt(paths)
             with contextlib.suppress(Exception):
                 current = stat.S_IMODE(paths.s23.lstat().st_mode)
                 if current != before_mode:
                     _safe_chmod(paths.s23, before_mode, "S23xray-direct")
+            if before.runtime.ok:
+                restored_runtime = verify_runtime(paths, proc_root=proc_root)
+                if not restored_runtime.ok:
+                    with contextlib.suppress(AutostartError):
+                        _run_init(paths, "start", signals=signals, emit_output=emit_init_output)
+                    restored_runtime = verify_runtime(paths, proc_root=proc_root)
+                if not restored_runtime.ok:
+                    rollback_failed = True
+            elif result.restart_performed:
+                if not _remove_runtime_if_started(paths, proc_root=proc_root, emit_init_output=emit_init_output):
+                    rollback_failed = True
             try:
                 restored = inspect_status(paths.target_root, proc_root=proc_root)
                 if stat.S_IMODE(paths.s23.lstat().st_mode) != before_mode:
@@ -636,30 +831,31 @@ def disable_autostart(paths: AutostartPaths) -> TransactionResult:
     if str(paths.target_root) != DEFAULT_TARGET_ROOT:
         raise AutostartError("autostart apply supports only literal /opt.", USAGE_ERROR)
     result = TransactionResult(action="disable")
-    if paths.s23.exists():
-        result.changed_s23_mode = _disable_executable(paths.s23, "S23xray-direct")
-    if paths.s24.exists():
-        result.disabled_s24 = _disable_executable(paths.s24, "S24xray")
+    with TransactionSignals() as signals:
+        if _lexists(paths.s24):
+            result.disabled_s24 = _disable_executable(paths.s24, "S24xray")
+        signals.raise_if_requested()
+        if _lexists(paths.s23):
+            result.changed_s23_mode = _disable_executable(paths.s23, "S23xray-direct")
+        signals.raise_if_requested()
+    if _lexists(paths.s24):
+        s24_present, s24_regular, s24_symlink, _mode, s24_enabled = _file_info(paths.s24)
+        if not s24_present or not s24_regular or s24_symlink or s24_enabled:
+            raise AutostartError(
+                "S24xray disable could not be proven; leave S23xray-direct disabled and inspect /opt/etc/init.d.",
+                1,
+            )
+    if _lexists(paths.s23):
+        s23_present, s23_regular, s23_symlink, _mode, s23_enabled = _file_info(paths.s23)
+        if not s23_present or not s23_regular or s23_symlink or s23_enabled:
+            raise AutostartError(
+                "S23xray-direct disable could not be proven; inspect /opt/etc/init.d before reboot.",
+                1,
+            )
     _remove_receipt(paths)
     result.noop = not result.changed_s23_mode and not result.disabled_s24
     result.message = "Autostart disabled. Runtime may continue until manually stopped or rebooted."
     return result
-
-
-def _publish_receipt(paths: AutostartPaths, result: TransactionResult) -> None:
-    paths.receipt.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    data = json.dumps(result.to_json(), sort_keys=True) + "\n"
-    tmp = paths.receipt.with_name(paths.receipt.name + ".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        os.write(fd, data.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(str(tmp), str(paths.receipt))
-    with contextlib.suppress(OSError):
-        paths.receipt.chmod(0o600)
-    _fsync_parent(paths.receipt)
 
 
 def _remove_receipt(paths: AutostartPaths) -> None:
@@ -698,7 +894,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--yes", action="store_true", help="Skip standalone confirmation prompt; requires --apply.")
     parser.add_argument("--json", action="store_true", help="Render deterministic secret-safe JSON.")
     parser.add_argument("--target-root", default=DEFAULT_TARGET_ROOT, help="Read-only inspection root; apply supports only /opt.")
-    parser.add_argument("--proc-root", default="/proc", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     validate_args(args)
     return args
@@ -706,7 +901,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def _print_transaction_result(result: TransactionResult) -> None:
     print(result.message)
-    if result.action == "enable" and result.strict_restart_verified:
+    if result.action == "enable" and result.restart_verified:
         print("S24xray remains disabled.")
         print("No reboot was performed; reboot verification remains #16.")
 
@@ -728,7 +923,7 @@ def main(argv: Optional[Sequence[str]] = None, *, input_fn=input) -> int:
         print(f"routerkit autostart: {exc}", file=sys.stderr)
         return exc.exit_code
     paths = AutostartPaths(Path(args.target_root))
-    proc_root = Path(args.proc_root)
+    proc_root = Path("/proc")
 
     if args.dry_run:
         return _dry_run(args)
@@ -741,7 +936,7 @@ def main(argv: Optional[Sequence[str]] = None, *, input_fn=input) -> int:
             print("Cancelled; no autostart changes were made.")
             return 1
         try:
-            result = enable_autostart(paths, proc_root=proc_root)
+            result = enable_autostart(paths, proc_root=proc_root, emit_init_output=not args.json)
         except AutostartError as exc:
             print(f"routerkit autostart: {exc}", file=sys.stderr)
             print("Safe disable command: routerkit autostart --disable --apply --yes", file=sys.stderr)

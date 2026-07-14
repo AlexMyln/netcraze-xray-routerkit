@@ -12,23 +12,61 @@ CONF_DIR="/opt/etc/xray/configs"
 PIDFILE="/opt/var/run/xray-direct.pid"
 LOGFILE="/opt/var/log/xray-direct.log"
 LOCKDIR="/opt/var/run/xray-direct.lock"
+OWNERFILE="owner"
+LOCK_OWNED=0
 
 mkdir -p /opt/var/run /opt/var/log
 
-lock() {
-    i=0
-    while ! mkdir "$LOCKDIR" 2>/dev/null; do
-        i=$((i + 1))
-        if [ "$i" -ge 20 ]; then
-            echo "ERROR: xray-direct lock is busy." >&2
-            return 1
+proc_start_time() {
+    pid="$1"
+    [ -r "/proc/$pid/stat" ] || return 1
+    line="$(sed -n '1p' "/proc/$pid/stat" 2>/dev/null)" || return 1
+    rest="${line##*) }"
+    set -- $rest
+    [ "$#" -ge 20 ] || return 1
+    i=1
+    for field in "$@"; do
+        if [ "$i" -eq 20 ]; then
+            case "$field" in
+                ""|*[!0-9]*) return 1 ;;
+            esac
+            printf '%s\n' "$field"
+            return 0
         fi
-        sleep 1
+        i=$((i + 1))
     done
+    return 1
 }
 
-unlock() {
-    rmdir "$LOCKDIR" 2>/dev/null || true
+cmdline_matches_xray() {
+    pid="$1"
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    cmdline="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" || return 1
+    [ "$cmdline" = "$PROG run -confdir $CONF_DIR " ]
+}
+
+exe_matches_xray() {
+    pid="$1"
+    [ -L "/proc/$pid/exe" ] || return 1
+    exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || return 1
+    [ "$exe" = "$PROG" ]
+}
+
+pid_epoch_matches_xray() {
+    pid="$1"
+    start="$2"
+    [ -d "/proc/$pid" ] || return 1
+    [ "$(proc_start_time "$pid" 2>/dev/null)" = "$start" ] || return 1
+    exe_matches_xray "$pid" || return 1
+    cmdline_matches_xray "$pid" || return 1
+    [ "$(proc_start_time "$pid" 2>/dev/null)" = "$start" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+pid_matches_xray() {
+    pid="$1"
+    start="$(proc_start_time "$pid" 2>/dev/null)" || return 1
+    pid_epoch_matches_xray "$pid" "$start"
 }
 
 safe_read_pid() {
@@ -42,23 +80,94 @@ safe_read_pid() {
     printf '%s\n' "$pid"
 }
 
-pid_matches_xray() {
-    pid="$1"
-    [ -d "/proc/$pid" ] || return 1
-    if [ -L "/proc/$pid/exe" ]; then
-        exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
-        [ "$exe" = "$PROG" ] || return 1
-    fi
-    if [ -r "/proc/$pid/cmdline" ]; then
-        cmdline="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-        [ "$cmdline" = "$PROG run -confdir $CONF_DIR " ] || return 1
-    fi
-    kill -0 "$pid" 2>/dev/null
+read_lock_owner() {
+    [ -d "$LOCKDIR" ] || return 1
+    [ ! -L "$LOCKDIR" ] || return 1
+    [ -f "$LOCKDIR/$OWNERFILE" ] || return 1
+    [ ! -L "$LOCKDIR/$OWNERFILE" ] || return 1
+    set -- $(sed -n '1p' "$LOCKDIR/$OWNERFILE" 2>/dev/null)
+    [ "$#" -eq 2 ] || return 1
+    case "$1:$2" in
+        *[!0-9:]*|":"*) return 1 ;;
+    esac
+    OWNER_PID="$1"
+    OWNER_START="$2"
+    return 0
 }
 
-is_running() {
-    pid="$(safe_read_pid)" || return 1
-    pid_matches_xray "$pid"
+owner_is_alive() {
+    read_lock_owner || return 2
+    [ "$(proc_start_time "$OWNER_PID" 2>/dev/null)" = "$OWNER_START" ] || return 1
+    kill -0 "$OWNER_PID" 2>/dev/null
+}
+
+write_lock_owner() {
+    start="$(proc_start_time "$$" 2>/dev/null)" || return 1
+    tmp="$LOCKDIR/$OWNERFILE.$$"
+    printf '%s %s\n' "$$" "$start" > "$tmp" || return 1
+    chmod 600 "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    mv "$tmp" "$LOCKDIR/$OWNERFILE" || {
+        rm -f "$tmp"
+        return 1
+    }
+}
+
+release_lock() {
+    [ "$LOCK_OWNED" -eq 1 ] || return 0
+    current_start="$(proc_start_time "$$" 2>/dev/null)" || return 0
+    if read_lock_owner && [ "$OWNER_PID" = "$$" ] && [ "$OWNER_START" = "$current_start" ]; then
+        rm -f "$LOCKDIR/$OWNERFILE" 2>/dev/null || true
+        rmdir "$LOCKDIR" 2>/dev/null || true
+    fi
+    LOCK_OWNED=0
+}
+
+trap 'release_lock' EXIT
+trap 'release_lock; exit 130' INT
+trap 'release_lock; exit 143' TERM
+trap 'release_lock; exit 129' HUP
+
+lock() {
+    i=0
+    while :; do
+        if [ -L "$LOCKDIR" ]; then
+            echo "ERROR: xray-direct lock path is unsafe; inspect $LOCKDIR manually." >&2
+            return 1
+        fi
+        if mkdir "$LOCKDIR" 2>/dev/null; then
+            if write_lock_owner; then
+                LOCK_OWNED=1
+                return 0
+            fi
+            rmdir "$LOCKDIR" 2>/dev/null || true
+            echo "ERROR: xray-direct lock owner could not be recorded." >&2
+            return 1
+        fi
+
+        owner_is_alive
+        owner_state="$?"
+        if [ "$owner_state" -eq 0 ]; then
+            i=$((i + 1))
+            if [ "$i" -ge 20 ]; then
+                echo "ERROR: xray-direct lock is busy." >&2
+                return 1
+            fi
+            sleep 1
+            continue
+        fi
+        if [ "$owner_state" -eq 1 ]; then
+            if read_lock_owner && [ ! -L "$LOCKDIR" ]; then
+                rm -f "$LOCKDIR/$OWNERFILE" 2>/dev/null || true
+                rmdir "$LOCKDIR" 2>/dev/null || true
+                continue
+            fi
+        fi
+        echo "ERROR: xray-direct lock ownership is unclear; inspect $LOCKDIR manually." >&2
+        return 1
+    done
 }
 
 cleanup_stale_pid() {
@@ -69,10 +178,29 @@ cleanup_stale_pid() {
 
 publish_pid() {
     pid="$1"
-    tmp="$PIDFILE.$$"
-    printf '%s\n' "$pid" > "$tmp"
-    chmod 600 "$tmp"
-    mv "$tmp" "$PIDFILE"
+    tmp="$LOCKDIR/xray-direct.pid.$$"
+    printf '%s\n' "$pid" > "$tmp" || return 1
+    chmod 600 "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    mv "$tmp" "$PIDFILE" || {
+        rm -f "$tmp"
+        return 1
+    }
+}
+
+terminate_direct_child() {
+    child="$1"
+    kill "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    kill -9 "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+}
+
+is_running() {
+    pid="$(safe_read_pid)" || return 1
+    pid_matches_xray "$pid"
 }
 
 start_unlocked() {
@@ -95,7 +223,11 @@ start_unlocked() {
     echo "Starting xray-direct..."
     "$PROG" run -confdir "$CONF_DIR" >> "$LOGFILE" 2>&1 &
     child="$!"
-    publish_pid "$child"
+    if ! publish_pid "$child"; then
+        terminate_direct_child "$child"
+        echo "ERROR: xray-direct PID could not be published." >&2
+        return 1
+    fi
 
     sleep 2
 
@@ -104,8 +236,9 @@ start_unlocked() {
         return 0
     fi
 
-    echo "ERROR: xray-direct failed to start. See $LOGFILE on the router." >&2
+    terminate_direct_child "$child"
     [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
+    echo "ERROR: xray-direct failed to start. Inspect the router log." >&2
     return 1
 }
 
@@ -116,37 +249,51 @@ stop_unlocked() {
         return 0
     }
 
-    if ! pid_matches_xray "$pid"; then
+    start="$(proc_start_time "$pid" 2>/dev/null)" || {
+        cleanup_stale_pid
+        echo "xray-direct is not running"
+        return 0
+    }
+    if ! pid_epoch_matches_xray "$pid" "$start"; then
         cleanup_stale_pid
         echo "xray-direct is not running"
         return 0
     fi
 
     echo "Stopping xray-direct: $pid"
-    kill "$pid" 2>/dev/null || true
+    pid_epoch_matches_xray "$pid" "$start" && kill "$pid" 2>/dev/null || true
 
     i=0
-    while pid_matches_xray "$pid" && [ "$i" -lt 10 ]; do
+    while pid_epoch_matches_xray "$pid" "$start" && [ "$i" -lt 10 ]; do
         sleep 1
         i=$((i + 1))
     done
 
-    if pid_matches_xray "$pid"; then
+    if pid_epoch_matches_xray "$pid" "$start"; then
         echo "Force stopping verified xray-direct: $pid"
-        kill -9 "$pid" 2>/dev/null || true
+        pid_epoch_matches_xray "$pid" "$start" && kill -9 "$pid" 2>/dev/null || true
+        i=0
+        while pid_epoch_matches_xray "$pid" "$start" && [ "$i" -lt 5 ]; do
+            sleep 1
+            i=$((i + 1))
+        done
     fi
 
-    if ! pid_matches_xray "$pid"; then
-        [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
+    if pid_epoch_matches_xray "$pid" "$start"; then
+        echo "ERROR: xray-direct process did not stop." >&2
+        return 1
     fi
+
+    [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
     echo "xray-direct stopped"
+    return 0
 }
 
 start() {
     lock || return 1
     start_unlocked
     rc="$?"
-    unlock
+    release_lock
     return "$rc"
 }
 
@@ -154,7 +301,7 @@ stop() {
     lock || return 1
     stop_unlocked
     rc="$?"
-    unlock
+    release_lock
     return "$rc"
 }
 
@@ -166,7 +313,7 @@ restart() {
         start_unlocked
         rc="$?"
     fi
-    unlock
+    release_lock
     return "$rc"
 }
 

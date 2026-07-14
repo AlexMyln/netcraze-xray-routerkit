@@ -515,20 +515,27 @@ class RouterkitCliCommandTests(unittest.TestCase):
         with mock.patch.object(
             cli.subprocess,
             "run",
-            side_effect=[completed(0), completed(0), completed(0), completed(0), completed(0), completed(0)],
+            side_effect=[completed(0), completed(0), completed(0), completed(0), completed(0)],
         ) as run:
-            with contextlib.redirect_stdout(stdout):
-                code = cli.main(
-                    ["--repo-root", str(ROOT), "install", "--generated", "generated", "--apply", "--enable-autostart"]
-                )
+            with mock.patch.object(
+                cli,
+                "run_setup_autostart_apply",
+                return_value=cli.SetupBootstrapResult(0),
+            ) as run_autostart:
+                with contextlib.redirect_stdout(stdout):
+                    code = cli.main(
+                        ["--repo-root", str(ROOT), "install", "--generated", "generated", "--apply", "--enable-autostart"]
+                    )
 
         self.assertEqual(code, 0)
-        self.assertEqual([call.args[0] for call in run.call_args_list], apply_commands() + [[
+        self.assertEqual([call.args[0] for call in run.call_args_list], apply_commands())
+        run_autostart.assert_called_once()
+        self.assertEqual(run_autostart.call_args.args[0].command, [
             sys.executable,
             str(ROOT / "scripts" / "routerkit-autostart.py"),
             "--enable",
             "--apply",
-        ]])
+        ])
         self.assertIn("Autostart enabled and restart-verified.", stdout.getvalue())
 
 

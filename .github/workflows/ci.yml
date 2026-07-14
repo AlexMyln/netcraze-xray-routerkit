@@ -39,6 +39,15 @@ jobs:
           python3 -m py_compile scripts/routerkit_artifact_network.py
           python3 -m py_compile scripts/routerkit_bootstrap_apply.py
           python3 -m py_compile scripts/routerkit.py
+          python3 -m py_compile scripts/routerkit-autostart.py
+          python3 -m py_compile scripts/routerkit_autostart.py
+
+      - name: Focused autostart tests
+        run: |
+          python3 -m unittest tests.test_routerkit_autostart -v
+          python3 -m unittest tests.test_routerkit_autostart_signals -v
+          python3 -m unittest tests.test_routerkit_s23xray_direct -v
+          python3 -m unittest tests.test_routerkit_setup_autostart -v
 
       - name: Python tests
         run: |

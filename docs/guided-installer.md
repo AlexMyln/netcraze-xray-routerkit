@@ -1,6 +1,6 @@
 # Guided installer
 
-The v0.2-alpha guided setup integrates profile-source acquisition, private local generation, strict planning, and explicitly confirmed router apply stages. It does not automate the Netcraze Web UI, firewall, autostart, or device policies.
+The v0.2-alpha guided setup integrates profile-source acquisition, private local generation, strict planning, and explicitly confirmed router apply stages. Autostart remains separate unless `--enable-autostart` is explicitly requested after healthcheck. The setup flow does not automate the Netcraze Web UI, firewall, or device policies.
 
 ## Prerequisites
 
@@ -38,6 +38,21 @@ Only Linux `aarch64`/`arm64` is supported. Default mode and standalone `--dry-ru
 Apply requests only missing top-level names from the fixed set `ca-bundle`, `curl`, `unzip`, `coreutils-sha256sum`, and `python3`; RouterKit never requests upgrade or removal. Trusted dependencies and maintainer scripts remain controlled by `opkg`, and additions may remain after a partially failed package install or a later failure because automatic dependency removal is unsafe. It then streams the exact manifest URL through proxy-free HTTPS with per-hop destination/TLS validation and hard bounds, verifies SHA-256, safely extracts only one root `xray`, and requires the first non-empty version-output line to equal the exact pin. An existing executable is hashed and copied to a verified deterministic backup before same-filesystem atomic replacement. Post-install hash/version failure restores that backup; failed clean installs remove the new candidate. A restrictive receipt records non-secret provenance and enables an idempotent no-network rerun only when every identity field still matches.
 
 Manual Entware activation remains required. Bootstrap does not restart services, enable autostart, install configs, read profile secrets, call `xkeen -start`, or change firewall/Web UI/policies. Ctrl-C at the apply confirmation prompt performs no transaction action. During mutable apply, `SIGINT`, `SIGTERM`, and `SIGHUP` stop forward progress; after replacement they defer repeated catchable signals until verified rollback or clean-install removal and staging cleanup complete. Verified SIGINT recovery exits `130`; unproven recovery returns distinct exit `3` with retained-backup guidance. `SIGKILL`, power loss, kernel failure, and host crash remain residual risks. Setup invokes bootstrap only with the explicit `--apply --bootstrap-apply` pair. The [execution-model ADR](architecture/bootstrap-execution-model.md) and [pinned Xray verification](xray-artifact-pin.md) contain the full contract. Hardware validation remains [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), so the true one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) is incomplete.
+
+### Standalone autostart transaction
+
+Autostart is explicit and runs only through `routerkit autostart`, `install --apply --enable-autostart`, or `setup --apply --enable-autostart`:
+
+```sh
+python3 scripts/routerkit.py autostart
+python3 scripts/routerkit.py autostart --verify
+python3 scripts/routerkit.py autostart --enable --apply
+python3 scripts/routerkit.py autostart --disable --apply
+```
+
+Status and verify are read-only and always inspect real `/proc` in production. Apply supports only literal `/opt`. Enable disables `S24xray`, restarts or starts the reviewed `S23xray-direct` runtime when needed, verifies PID start time, executable device/inode, exact command line, and 127.0.0.1 listener ownership, then enables only `S23xray-direct`. Already-enabled and runtime-verified state is a no-op: runtime is verified, no restart is performed, and restart verification is false/not applicable. Disable turns off `S24xray` first and then `S23xray-direct`; it does not stop runtime.
+
+JSON apply suppresses init-script stdout/stderr and emits one secret-safe document. The old autostart receipt is not trusted for idempotency and is removed during cleanup. No reboot is performed or proven; after a real reboot, run read-only verify. #16 remains mandatory before calling this hardware/reboot validated. See the [autostart execution-model ADR](architecture/autostart-execution-model.md).
 
 Router-side checks:
 
@@ -208,7 +223,15 @@ Explicit runtime preparation is a distinct third mode:
 python3 scripts/routerkit.py setup --apply --bootstrap-apply
 ```
 
-After generation cleanup and a successful strict plan, setup prints the package/Xray warning and asks one visible `Proceed with bootstrap and router apply stages? [y/N]:` question. Once confirmed, it delegates exactly to the repository-default standalone `routerkit-bootstrap.py --apply --yes`, then continues through preflight, backup, install, and healthcheck. The internal `--yes` prevents a second bootstrap prompt; setup `--yes` suppresses only the one setup prompt. Bootstrap failure, cancellation, or an unproven rollback stops every later router stage and preserves the standalone exit code. Any catchable signal observed by the setup bootstrap supervisor, or any internal bootstrap-supervision failure, likewise stops every later router stage. The supervisor keeps the direct bootstrap child owned through unexpected wait failures until it is terminal and reaped. Fixed package additions may remain; Xray replacement uses the standalone transaction's separate verified backup/rollback. No service restart or autostart occurs.
+After generation cleanup and a successful strict plan, setup prints the package/Xray warning and asks one visible `Proceed with bootstrap and router apply stages? [y/N]:` question. Once confirmed, it delegates exactly to the repository-default standalone `routerkit-bootstrap.py --apply --yes`, then continues through preflight, backup, install, and healthcheck. The internal `--yes` prevents a second bootstrap prompt; setup `--yes` suppresses only the one setup prompt. Bootstrap failure, cancellation, or an unproven rollback stops every later router stage and preserves the standalone exit code. Any catchable signal observed by the setup bootstrap supervisor, or any internal bootstrap-supervision failure, likewise stops every later router stage. The supervisor keeps the direct bootstrap child owned through unexpected wait failures until it is terminal and reaped. Fixed package additions may remain; Xray replacement uses the standalone transaction's separate verified backup/rollback. Bootstrap itself performs no service restart or autostart.
+
+Explicit autostart from setup is a separate mode:
+
+```sh
+python3 scripts/routerkit.py setup --apply --enable-autostart
+```
+
+It runs only after healthcheck and uses the same transactional child supervisor as bootstrap integration. Autostart failure, signal observation, spawn failure, or supervision failure blocks the setup success summary and preserves the child result.
 
 Use dry-run to render an abstract secret-free flow with no source, reuse-file, secret-input, or environment-value read; no stdin prompt; and no DNS/HTTPS request, subprocess, private workspace, profile, generated file, write, or router action:
 
@@ -220,7 +243,7 @@ python3 scripts/routerkit.py setup --apply --bootstrap-apply --dry-run
 
 This setup dry-run contract differs from standalone `profile-source --dry-run`: standalone profile-source may still perform an HTTPS network read to validate selection, while setup dry-run performs no secret input or network access. Python module loading and repository-path resolution are outside the secret-input contract.
 
-This integration functionally completes #29 and parent #13 but is not the end of epic #5. Autostart is #14, Netcraze proxy/policy automation #15, device discovery #21, and hardware validation #16. The path is not hardware-tested until #16 is complete. Plain `setup` and `setup --apply` do not bootstrap; only the explicit combined mode downloads or installs pinned Xray. No setup mode activates Entware, enables autostart, discovers devices, changes Netcraze policies or the default policy, automates the Web UI, creates firewall/TPROXY/REDIRECT rules, or calls `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
+This integration functionally completes #29 and parent #13 but is not the end of epic #5. Autostart is #14, Netcraze proxy/policy automation #15, device discovery #21, and hardware validation #16. The path is not hardware-tested until #16 is complete. Plain `setup` and `setup --apply` do not bootstrap or enable autostart; only explicit flags add those stages. No setup mode activates Entware, proves reboot persistence, discovers devices, changes Netcraze policies or the default policy, automates the Web UI, creates firewall/TPROXY/REDIRECT rules, or calls `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
 
 ## Install command
 
@@ -254,7 +277,7 @@ If a step before install fails, the pipeline stops and does not run later steps.
 
 Backups may contain secret-bearing router files. Do not publish backup archives.
 
-The command does not automate Netcraze Web UI policies, does not create firewall rules, does not call `xkeen -start`, and does not enable autostart. The `--enable-autostart` flag is reserved and currently exits before running any install step. Autostart remains a manual action after healthcheck.
+The command does not automate Netcraze Web UI policies, does not create firewall rules, and does not call `xkeen -start`. With `--enable-autostart`, it runs the explicit autostart transaction after healthcheck; without that flag, autostart is not enabled.
 
 Preview the apply pipeline without running it:
 

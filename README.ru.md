@@ -103,7 +103,7 @@ Apply проверяет фиксированный набор `ca-bundle`, `cur
 
 Bootstrap apply не активирует Entware, не перезапускает services, не включает autostart, не загружает configs, не вызывает `xkeen -start` и не меняет Web UI, firewall, proxy или policy. Ctrl-C на confirmation prompt отменяет запуск до package, network, staging или write action. Внутри mutable transaction `SIGINT` координируется вместе с `SIGTERM`/`SIGHUP`: до replacement он останавливает forward progress и очищает staging; после replacement проверяет восстановление backup или удаление clean-install candidate до обычного exit `130`. Повторные catchable signals откладываются до завершения recovery и cleanup, а итоговый signal exit определяется первым сигналом. Неподтверждённое recovery возвращает отдельный exit `3` с указанием сохранённого backup, а не обычный signal result. `SIGKILL`, потеря питания, сбой kernel и crash хоста остаются residual risks. Profile inputs и generated secrets не относятся к bootstrap и не читаются им. Manual Entware activation всё ещё обязательна, а #16 должен завершиться до заявления о hardware-tested статусе. Подробнее: [ADR](docs/architecture/bootstrap-execution-model.ru.md) и [evidence для pin](docs/xray-artifact-pin.ru.md).
 
-По умолчанию `setup` использует завершённый стек profile-source, private workspace и strict plan. Обычный `setup` останавливается после plan: без bootstrap и router apply. `setup --apply` сохраняет существующий подтверждаемый flow preflight → backup → install → healthcheck и не запускает bootstrap. Только `setup --apply --bootstrap-apply` добавляет reviewed standalone bootstrap transaction после strict plan и единственного видимого setup confirmation, но до preflight; внутренний `--yes` исключает второй prompt. Сбой bootstrap, cancellation, любой catchable signal, замеченный setup bootstrap supervisor, или внутренний bootstrap-supervision failure не запускает последующие router stages. Setup supervisor сохраняет ownership прямого bootstrap child при неожиданных wait failures до terminal state и reaping. Добавленные packages могут остаться, а Xray replacement имеет отдельную проверенную границу backup/rollback. Bootstrap не перезапускает services и не включает autostart.
+По умолчанию `setup` использует завершённый стек profile-source, private workspace и strict plan. Обычный `setup` останавливается после plan: без bootstrap и router apply. `setup --apply` сохраняет существующий подтверждаемый flow preflight → backup → install → healthcheck и не запускает bootstrap. Только `setup --apply --bootstrap-apply` добавляет reviewed standalone bootstrap transaction после strict plan и единственного видимого setup confirmation, но до preflight; внутренний `--yes` исключает второй prompt. Сбой bootstrap, cancellation, любой catchable signal, замеченный setup bootstrap supervisor, или внутренний bootstrap-supervision failure не запускает последующие router stages. `setup --apply --enable-autostart` добавляет explicit autostart transaction после healthcheck и использует тот же transactional child supervisor. Добавленные packages могут остаться, а Xray replacement и autostart имеют отдельные проверенные rollback boundaries. Reboot proof, service management вне reviewed init script, Web UI, firewall или policy action не выполняются.
 
 Пока существует private workspace, перехватываемые `SIGTERM` и `SIGHUP` запускают согласованную остановку process group source/generator, reaping дочернего процесса и cleanup workspace до выхода setup. `SIGINT` сохраняет обычное поведение интерактивной отмены. `SIGKILL`, потеря питания, сбой kernel и crash хоста не могут выполнить in-process cleanup и способны оставить owner-only workspace для ручного удаления.
 
@@ -238,7 +238,7 @@ Pipeline по умолчанию:
 
 Backup-архивы могут содержать секретные файлы роутера. Не публикуйте backup archives.
 
-`install --apply` не автоматизирует политики Web UI, не вызывает `xkeen -start`, не трогает firewall и не включает autostart.
+`install --apply` не автоматизирует политики Web UI, не вызывает `xkeen -start`, не трогает firewall и не включает autostart, если явно не указан `--enable-autostart`.
 
 Для advanced/debug usage доступны skip flags: `--skip-preflight`, `--skip-backup` и `--skip-healthcheck`. Они не recommended; default apply flow выполняет все safety steps. Если пропустить backup, rollback может быть сложнее.
 
@@ -248,7 +248,21 @@ Backup-архивы могут содержать секретные файлы 
 python3 scripts/routerkit.py --dry-run install --generated generated --apply
 ```
 
-Флаг `--enable-autostart` зарезервирован для отдельного будущего flow. Autostart остаётся ручным шагом после healthcheck.
+Включить autostart после healthcheck через проверенную transaction:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --apply --enable-autostart
+```
+
+Autostart stage запускается только после healthcheck и сохраняет standalone confirmation prompt. Он выключает `S24xray`, при необходимости перезапускает runtime через проверенный `S23xray-direct`, проверяет стабильный process epoch и ownership loopback listeners, а затем включает только `S23xray-direct`. Если autostart уже включён и runtime verified, команда сообщает no-op и не утверждает restart verification. Disable выполняется явно и не останавливает running process:
+
+```sh
+python3 scripts/routerkit.py autostart --verify
+python3 scripts/routerkit.py autostart --enable --apply
+python3 scripts/routerkit.py autostart --disable --apply
+```
+
+Reboot не выполняется и не доказывается. После реальной перезагрузки роутера запустите read-only `autostart --verify`. Hardware/reboot validation остаётся #16; device discovery #21, Netcraze policy automation #15 и epic #5 остаются открытыми. Подробнее: [модель выполнения autostart](docs/architecture/autostart-execution-model.ru.md).
 
 ### Тесты
 

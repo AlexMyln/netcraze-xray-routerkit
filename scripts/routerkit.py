@@ -1201,6 +1201,24 @@ def run_setup_autostart_apply(step: CommandStep) -> SetupBootstrapResult:
     return SetupTransactionalChildSupervisor().run(step)
 
 
+def run_install_apply_steps(steps: Sequence[CommandStep]) -> int:
+    if steps and steps[-1].name == "autostart apply":
+        code = run_steps(steps[:-1])
+        if code != 0:
+            return code
+        result = run_setup_autostart_apply(steps[-1])
+        if (
+            result.returncode != 0
+            or result.first_signal is not None
+            or result.spawn_failed
+            or result.supervision_failed
+        ):
+            print_setup_autostart_failure(result)
+            return result.returncode if result.returncode != 0 else 1
+        return 0
+    return run_steps(steps)
+
+
 def print_setup_bootstrap_failure(result: SetupBootstrapResult) -> None:
     if result.spawn_failed:
         print("routerkit: could not run bootstrap apply.", file=sys.stderr)
@@ -1987,7 +2005,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # Bootstrap and profile-source own their dry-run semantics. Profile-source
     # must still parse and validate while guaranteeing that it writes nothing.
     wrapper_dry_run = args.dry_run and args.command not in {"bootstrap", "profile-source", "autostart"}
-    code = run_steps(steps, dry_run=wrapper_dry_run, repo_root=repo_root)
+    if args.command == "install" and args.apply and not wrapper_dry_run:
+        code = run_install_apply_steps(steps)
+    else:
+        code = run_steps(steps, dry_run=wrapper_dry_run, repo_root=repo_root)
     if code == 0 and args.command == "install" and args.apply and not args.dry_run:
         print_apply_summary(steps)
     return code

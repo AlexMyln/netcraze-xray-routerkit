@@ -38,6 +38,15 @@ def _tcp_row(port, inode, address="0100007F"):
     ).format(address=address, port=port, inode=inode)
 
 
+def _stat_row(pid, start_time="123456"):
+    fields_after_comm = [
+        "S", "1", "1", "1", "0", "-1", "4194560", "0", "0", "0",
+        "0", "0", "0", "0", "0", "20", "0", "1", "0", start_time,
+        "4096", "1",
+    ]
+    return "{} (xray) {}\n".format(pid, " ".join(fields_after_comm))
+
+
 def build_synthetic_runtime(root, *, exposed_port=None, wrong_owner_port=None):
     root = Path(root)
     opt = root / "opt"
@@ -66,6 +75,7 @@ def build_synthetic_runtime(root, *, exposed_port=None, wrong_owner_port=None):
     fd_dir.mkdir(parents=True)
     net_dir.mkdir(parents=True)
     (pid_dir / "exe").symlink_to(xray)
+    (pid_dir / "stat").write_text(_stat_row(pid), encoding="ascii")
     (pid_dir / "cmdline").write_bytes(
         b"\0".join(
             [
@@ -129,16 +139,34 @@ class AutostartCliValidationTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Cancelled", stdout)
 
-    def test_json_status_is_secret_safe(self):
+    def test_public_cli_rejects_proc_root(self):
         with tempfile.TemporaryDirectory() as directory:
             opt, proc = build_synthetic_runtime(Path(directory))
-            code, stdout, stderr = self.run_main("--target-root", str(opt), "--proc-root", str(proc), "--json")
-        self.assertEqual(code, 0)
-        self.assertEqual(stderr, "")
-        parsed = json.loads(stdout)
-        self.assertNotIn("cmdline", stdout)
-        self.assertNotIn("SECRET", stdout)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as caught:
+                    autostart.main(["--target-root", str(opt), "--proc-root", str(proc), "--json"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("unrecognized arguments: --proc-root", stderr.getvalue())
+
+    def test_public_cli_has_no_proc_root_attribute_or_env_override(self):
+        with mock.patch.dict(os.environ, {"ROUTERKIT_PROC_ROOT": "/tmp/fake-proc"}):
+            args = autostart.parse_args(["--json"])
+        self.assertFalse(hasattr(args, "proc_root"))
+
+    def test_json_status_is_secret_safe_without_pid_or_cmdline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, proc = build_synthetic_runtime(Path(directory))
+            status = autostart.inspect_status(opt, proc_root=proc)
+        payload = json.dumps(status.to_json(), sort_keys=True)
+        parsed = json.loads(payload)
+        self.assertNotIn("cmdline", payload)
+        self.assertNotIn("SECRET", payload)
+        self.assertNotIn('"pid"', payload)
         self.assertTrue(parsed["runtime_verification"]["ok"])
+        self.assertTrue(parsed["runtime_verification"]["process_identity_verified"])
 
 
 class AutostartRuntimeTests(unittest.TestCase):
@@ -168,17 +196,69 @@ class AutostartRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             opt, proc = build_synthetic_runtime(Path(directory))
             paths = autostart.AutostartPaths(opt)
+            stat_path = proc / "4321" / "stat"
+
+            def restart_changes_epoch(*_args, **_kwargs):
+                stat_path.write_text(_stat_row(4321, start_time="123999"), encoding="ascii")
+
             with mock.patch.object(autostart, "DEFAULT_TARGET_ROOT", str(opt)):
                 with mock.patch.object(autostart.os, "uname", return_value=SimpleNamespace(sysname="Linux")):
-                    with mock.patch.object(autostart, "_run_init") as run_init:
+                    with mock.patch.object(autostart, "_run_init", side_effect=restart_changes_epoch) as run_init:
                         result = autostart.enable_autostart(paths, proc_root=proc)
             self.assertEqual(result.action, "enable")
             self.assertTrue(result.changed_s23_mode)
             self.assertTrue(result.disabled_s24)
-            self.assertTrue(result.strict_restart_verified)
-            run_init.assert_called_once_with(paths, "restart")
+            self.assertTrue(result.runtime_verified)
+            self.assertTrue(result.restart_performed)
+            self.assertTrue(result.restart_verified)
+            run_init.assert_called_once()
+            self.assertEqual(run_init.call_args.args[:2], (paths, "restart"))
             self.assertTrue(paths.s23.stat().st_mode & stat.S_IXUSR)
             self.assertFalse(paths.s24.stat().st_mode & stat.S_IXUSR)
+
+    def test_verified_noop_does_not_claim_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, proc = build_synthetic_runtime(Path(directory))
+            paths = autostart.AutostartPaths(opt)
+            paths.s23.chmod(0o755)
+            paths.s24.chmod(0o644)
+            with mock.patch.object(autostart, "DEFAULT_TARGET_ROOT", str(opt)):
+                with mock.patch.object(autostart.os, "uname", return_value=SimpleNamespace(sysname="Linux")):
+                    result = autostart.enable_autostart(paths, proc_root=proc)
+        self.assertTrue(result.noop)
+        self.assertTrue(result.runtime_verified)
+        self.assertFalse(result.restart_performed)
+        self.assertFalse(result.restart_verified)
+
+    def test_same_epoch_after_requested_restart_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, proc = build_synthetic_runtime(Path(directory))
+            paths = autostart.AutostartPaths(opt)
+            with mock.patch.object(autostart, "DEFAULT_TARGET_ROOT", str(opt)):
+                with mock.patch.object(autostart.os, "uname", return_value=SimpleNamespace(sysname="Linux")):
+                    with mock.patch.object(autostart, "_run_init"):
+                        with self.assertRaises(autostart.AutostartError) as caught:
+                            autostart.enable_autostart(paths, proc_root=proc)
+        self.assertIn("new Xray process epoch", str(caught.exception))
+
+    def test_pid_epoch_change_during_verification_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, proc = build_synthetic_runtime(Path(directory))
+            paths = autostart.AutostartPaths(opt)
+            original = autostart._read_start_time
+            calls = {"count": 0}
+
+            def changing_start(root, pid):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    return "10"
+                return "11"
+
+            with mock.patch.object(autostart, "_read_start_time", side_effect=changing_start):
+                runtime = autostart.verify_runtime(paths, proc_root=proc)
+        self.assertFalse(runtime.ok)
+        self.assertTrue(any("changed during verification" in item for item in runtime.messages))
+        self.assertIs(original, autostart._read_start_time)
 
     def test_disable_does_not_stop_runtime_or_delete_pid(self):
         with tempfile.TemporaryDirectory() as directory:
