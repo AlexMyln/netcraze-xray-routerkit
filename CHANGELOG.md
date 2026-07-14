@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Setup now retains bootstrap-child ownership through unexpected wait errors and fails closed after signal-state restoration errors.
 - Setup now snapshots bootstrap-supervisor signal state only after temporary handler teardown, preventing a late catchable signal from being lost before router apply stages.
 - Setup supervises and forwards catchable signals to the standalone bootstrap child so verified binary recovery is not abandoned.
 - Bootstrap now coordinates SIGINT through the same verified replacement-recovery boundary, closing the atomic-replacement cancellation gap.

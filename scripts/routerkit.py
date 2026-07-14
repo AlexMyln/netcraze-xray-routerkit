@@ -10,6 +10,7 @@ Web UI automation, firewall automation, or hidden writes under /opt.
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import shlex
 import signal
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -76,6 +78,7 @@ class SetupBootstrapResult:
     returncode: int
     first_signal: Optional[int] = None
     spawn_failed: bool = False
+    supervision_failed: bool = False
 
 
 class SetupCleanupError(Exception):
@@ -874,6 +877,9 @@ def print_setup_apply_summary(mode: str = "source", *, bootstrap_apply: bool = F
 class SetupBootstrapSupervisor:
     """Forward setup signals while allowing standalone bootstrap recovery to finish."""
 
+    cleanup_attempts = 2
+    supervision_retry_sleep = 0.01
+
     def __init__(self) -> None:
         self.child: Optional[subprocess.Popen] = None
         self.first_signal: Optional[int] = None
@@ -913,12 +919,16 @@ class SetupBootstrapSupervisor:
                 self.handled_signals(),
             )
 
-    def _restore_signal_mask(self) -> None:
+    def _restore_signal_mask(self) -> bool:
         if self._previous_signal_mask is None:
-            return
+            return True
         previous = self._previous_signal_mask
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        except (OSError, RuntimeError, ValueError):
+            return False
         self._previous_signal_mask = None
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        return True
 
     def _install_handlers(self) -> None:
         if threading.current_thread() is not threading.main_thread():
@@ -927,23 +937,115 @@ class SetupBootstrapSupervisor:
             self._previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, self._handle_signal)
 
-    def _restore_handlers(self) -> None:
-        for signum, previous in self._previous_handlers.items():
-            signal.signal(signum, previous)
-        self._previous_handlers.clear()
+    def _restore_handlers(self) -> bool:
+        restored_all = True
+        for signum, previous in list(self._previous_handlers.items()):
+            try:
+                signal.signal(signum, previous)
+            except (OSError, RuntimeError, ValueError):
+                restored_all = False
+                continue
+            self._previous_handlers.pop(signum, None)
+        return restored_all
 
     @staticmethod
-    def _child_result(returncode: int, first_signal: Optional[int]) -> int:
+    def _child_result(returncode: int) -> int:
         if returncode < 0:
-            returncode = 128 + abs(returncode)
-        if first_signal is not None and returncode == 0:
-            return 128 + first_signal
+            return 128 + abs(returncode)
         return returncode
+
+    def _result_code(
+        self,
+        raw_returncode: int,
+        *,
+        first_signal: Optional[int],
+        spawn_failed: bool,
+        supervision_failed: bool,
+    ) -> int:
+        child_returncode = self._child_result(raw_returncode)
+        if child_returncode != 0:
+            return child_returncode
+        if first_signal is not None:
+            return 128 + first_signal
+        if spawn_failed:
+            return 127
+        if supervision_failed:
+            return 1
+        return 0
+
+    def _restore_signal_state(self) -> Tuple[bool, bool]:
+        had_failure = False
+        for attempt in range(self.cleanup_attempts):
+            mask_restored = self._restore_signal_mask()
+            handlers_restored = self._restore_handlers()
+            if mask_restored and handlers_restored:
+                return True, had_failure
+            had_failure = True
+            if attempt + 1 < self.cleanup_attempts:
+                time.sleep(self.supervision_retry_sleep)
+        return False, True
+
+    def _forward_pending_signals(self) -> None:
+        child = self.child
+        if child is None:
+            self._pending_signals.clear()
+            return
+        for signum in self._pending_signals:
+            try:
+                child.send_signal(signum)
+            except OSError:
+                pass
+        self._pending_signals.clear()
+
+    def _wait_owned_child(self) -> Tuple[int, bool]:
+        child = self.child
+        if child is None:
+            return 127, True
+
+        supervision_failed = False
+        while True:
+            should_sleep = False
+            try:
+                raw_returncode = child.wait()
+            except InterruptedError:
+                continue
+            except OSError as exc:
+                if exc.errno == errno.EINTR:
+                    continue
+                supervision_failed = True
+                should_sleep = True
+            except (RuntimeError, ValueError):
+                supervision_failed = True
+                should_sleep = True
+            else:
+                self.child = None
+                return raw_returncode, supervision_failed
+
+            try:
+                polled = child.poll()
+            except InterruptedError:
+                continue
+            except OSError as exc:
+                if exc.errno == errno.EINTR:
+                    continue
+                supervision_failed = True
+                polled = None
+                should_sleep = True
+            except (RuntimeError, ValueError):
+                supervision_failed = True
+                polled = None
+                should_sleep = True
+            if polled is not None:
+                self.child = None
+                return polled, supervision_failed
+            if should_sleep:
+                time.sleep(self.supervision_retry_sleep)
 
     def run(self, step: CommandStep) -> SetupBootstrapResult:
         child_env = None
         raw_returncode = 127
         spawn_failed = False
+        supervision_failed = False
         if step.remove_env_names:
             child_env = os.environ.copy()
             for name in step.remove_env_names:
@@ -955,40 +1057,44 @@ class SetupBootstrapSupervisor:
             # Do not let the bootstrap child inherit the parent's temporary
             # blocked mask. Signals in the remaining spawn window are recorded
             # by the installed handlers and forwarded after child registration.
-            self._restore_signal_mask()
-            self.child = subprocess.Popen(
-                list(step.command),
-                cwd=str(step.cwd) if step.cwd is not None else None,
-                env=child_env,
-                start_new_session=os.name == "posix",
-            )
-            for signum in self._pending_signals:
+            if not self._restore_signal_mask():
+                spawn_failed = True
+                supervision_failed = True
+            else:
                 try:
-                    self.child.send_signal(signum)
-                except OSError:
-                    pass
-            self._pending_signals.clear()
-            while True:
-                try:
-                    raw_returncode = self.child.wait()
-                    break
-                except InterruptedError:
-                    continue
+                    self.child = subprocess.Popen(
+                        list(step.command),
+                        cwd=str(step.cwd) if step.cwd is not None else None,
+                        env=child_env,
+                        start_new_session=os.name == "posix",
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    spawn_failed = True
+                    raw_returncode = 127
+                else:
+                    self._forward_pending_signals()
+                    raw_returncode, wait_failed = self._wait_owned_child()
+                    supervision_failed = supervision_failed or wait_failed
         except (OSError, RuntimeError, ValueError):
             spawn_failed = True
             raw_returncode = 127
         finally:
-            try:
-                self._restore_signal_mask()
-            finally:
-                self._restore_handlers()
-                self.child = None
+            restored, restore_failed = self._restore_signal_state()
+            supervision_failed = supervision_failed or restore_failed or not restored
+            self.child = None
+            self._pending_signals.clear()
 
         first_signal = self.first_signal
         return SetupBootstrapResult(
-            self._child_result(raw_returncode, first_signal),
+            self._result_code(
+                raw_returncode,
+                first_signal=first_signal,
+                spawn_failed=spawn_failed,
+                supervision_failed=supervision_failed,
+            ),
             first_signal=first_signal,
             spawn_failed=spawn_failed,
+            supervision_failed=supervision_failed,
         )
 
 
@@ -999,6 +1105,35 @@ def run_setup_bootstrap_apply(step: CommandStep) -> SetupBootstrapResult:
 def print_setup_bootstrap_failure(result: SetupBootstrapResult) -> None:
     if result.spawn_failed:
         print("routerkit: could not run bootstrap apply.", file=sys.stderr)
+        return
+    if result.supervision_failed:
+        print(
+            "routerkit: bootstrap supervision did not complete cleanly.",
+            file=sys.stderr,
+        )
+        if result.first_signal is not None:
+            try:
+                signal_name = signal.Signals(result.first_signal).name
+            except ValueError:
+                signal_name = str(result.first_signal)
+            print(
+                f"routerkit: bootstrap apply ended after setup received {signal_name} "
+                f"(exit code {result.returncode}).",
+                file=sys.stderr,
+            )
+        elif result.returncode not in (0, 1):
+            print(
+                f"routerkit: bootstrap apply failed with exit code {result.returncode}.",
+                file=sys.stderr,
+            )
+        print(
+            "No preflight, backup, install, or healthcheck stage was started.",
+            file=sys.stderr,
+        )
+        print(
+            "Bootstrap package additions may remain; review the bootstrap output above.",
+            file=sys.stderr,
+        )
         return
     if result.first_signal is not None:
         try:
@@ -1182,9 +1317,14 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
                 remove_env_names=remove_env_names,
             )
         )
-        if bootstrap_result.returncode != 0 or bootstrap_result.first_signal is not None:
+        if (
+            bootstrap_result.returncode != 0
+            or bootstrap_result.first_signal is not None
+            or bootstrap_result.spawn_failed
+            or bootstrap_result.supervision_failed
+        ):
             print_setup_bootstrap_failure(bootstrap_result)
-            return bootstrap_result.returncode
+            return bootstrap_result.returncode if bootstrap_result.returncode != 0 else 1
 
     apply_steps = build_router_apply_steps(
         args.generated,

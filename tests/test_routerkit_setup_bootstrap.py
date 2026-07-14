@@ -48,18 +48,60 @@ def write_profiles(path):
 class FakeBootstrapProcess:
     pid = 999999
 
-    def __init__(self, returncode=0, wait_action=None):
+    def __init__(self, returncode=0, wait_action=None, poll_action=None):
         self.returncode = returncode
         self.wait_action = wait_action
+        self.poll_action = poll_action
         self.signals = []
+        self.wait_calls = 0
+        self.poll_calls = 0
 
     def send_signal(self, signum):
         self.signals.append(signum)
 
     def wait(self):
+        self.wait_calls += 1
         if self.wait_action is not None:
             return self.wait_action(self)
         return self.returncode
+
+    def poll(self):
+        self.poll_calls += 1
+        if self.poll_action is not None:
+            return self.poll_action(self)
+        return self.returncode
+
+
+class WaitErrorProcess:
+    def __init__(self, child, exc_type=OSError, failures=1, on_first_failure=None):
+        self._child = child
+        self._exc_type = exc_type
+        self._failures_remaining = failures
+        self._on_first_failure = on_first_failure
+        self.wait_failures = 0
+        self.alive_at_first_failure = None
+
+    @property
+    def pid(self):
+        return self._child.pid
+
+    def send_signal(self, signum):
+        return self._child.send_signal(signum)
+
+    def poll(self):
+        return self._child.poll()
+
+    def wait(self):
+        if self._failures_remaining > 0:
+            self._failures_remaining -= 1
+            self.wait_failures += 1
+            alive = self._child.poll() is None
+            if self.alive_at_first_failure is None:
+                self.alive_at_first_failure = alive
+                if self._on_first_failure is not None:
+                    self._on_first_failure()
+            raise self._exc_type("synthetic wait failure")
+        return self._child.wait()
 
 
 def run_supervisor_with_teardown_signal(signum, *, returncode=0, spawn_error=False):
@@ -75,7 +117,7 @@ def run_supervisor_with_teardown_signal(signum, *, returncode=0, spawn_error=Fal
     def restore_handlers():
         state["restore_calls"] += 1
         os.kill(os.getpid(), signum)
-        real_restore_handlers()
+        return real_restore_handlers()
 
     supervisor._restore_handlers = restore_handlers
     popen = mock.patch.object(
@@ -300,6 +342,46 @@ class SetupBootstrapIntegrationTests(unittest.TestCase):
         self.assertNotIn("Setup apply completed.", stdout)
         self.assertEqual(stderr, "routerkit: could not run bootstrap apply.\n")
 
+    def test_supervision_flag_blocks_later_stages_even_with_zero_code(self):
+        result = cli.SetupBootstrapResult(0, supervision_failed=True)
+        code, events, stdout, stderr, _run_bootstrap = self._run(
+            bootstrap_result=result
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1], "bootstrap apply")
+        for stage in ("preflight", "backup", "install", "healthcheck"):
+            self.assertNotIn(stage, events)
+        self.assertNotIn("Setup apply completed.", stdout)
+        self.assertIn("bootstrap supervision did not complete cleanly", stderr)
+        self.assertIn("No preflight, backup, install, or healthcheck", stderr)
+        self.assertNotIn("synthetic", stderr)
+
+    def test_wait_error_result_blocks_router_stages_and_success_summary(self):
+        result = cli.SetupBootstrapResult(1, supervision_failed=True)
+        code, events, stdout, stderr, _run_bootstrap = self._run(
+            bootstrap_result=result
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1], "bootstrap apply")
+        self.assertNotIn("preflight", events)
+        self.assertNotIn("backup", events)
+        self.assertNotIn("install", events)
+        self.assertNotIn("healthcheck", events)
+        self.assertNotIn("Setup apply completed.", stdout)
+        self.assertIn("bootstrap supervision did not complete cleanly", stderr)
+
+    def test_restoration_error_result_preserves_child_code_and_blocks_stages(self):
+        result = cli.SetupBootstrapResult(3, supervision_failed=True)
+        code, events, stdout, stderr, _run_bootstrap = self._run(
+            bootstrap_result=result
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(events[-1], "bootstrap apply")
+        self.assertNotIn("preflight", events)
+        self.assertNotIn("Setup apply completed.", stdout)
+        self.assertIn("bootstrap supervision did not complete cleanly", stderr)
+        self.assertIn("failed with exit code 3", stderr)
+
     def test_parent_signal_result_blocks_later_stages_even_after_child_zero(self):
         result = cli.SetupBootstrapResult(130, first_signal=signal.SIGINT)
         code, events, stdout, stderr, _run_bootstrap = self._run(
@@ -319,7 +401,7 @@ class SetupBootstrapIntegrationTests(unittest.TestCase):
             bootstrap_result=result
         )
         self.assertEqual(supervisor.first_signal, signal.SIGINT)
-        self.assertEqual(process.signals, [signal.SIGINT])
+        self.assertEqual(process.signals, [])
         self.assertEqual(result, cli.SetupBootstrapResult(130, first_signal=signal.SIGINT))
         self.assertEqual(code, 130)
         self.assertEqual(events[-1], "bootstrap apply")
@@ -345,12 +427,308 @@ class SetupBootstrapSupervisorTests(unittest.TestCase):
         for item, handler in previous.items():
             self.assertIs(signal.getsignal(item), handler)
 
+    def run_real_child_with_wait_error(
+        self,
+        *,
+        returncode=0,
+        exc_type=OSError,
+        failures=1,
+        child_script=None,
+        on_first_failure=None,
+    ):
+        real_popen = cli.subprocess.Popen
+        wrapped = {}
+        script = child_script
+        if script is None:
+            script = "import sys, time; time.sleep(0.2); sys.exit({})".format(
+                returncode
+            )
+
+        def popen(_command, **_kwargs):
+            child = real_popen([sys.executable, "-c", script])
+            process = WaitErrorProcess(
+                child,
+                exc_type=exc_type,
+                failures=failures,
+                on_first_failure=on_first_failure,
+            )
+            wrapped["process"] = process
+            wrapped["child"] = child
+            return process
+
+        supervisor = cli.SetupBootstrapSupervisor()
+        with mock.patch.object(cli.subprocess, "Popen", side_effect=popen):
+            result = supervisor.run(cli.CommandStep("bootstrap apply", ["ignored"]))
+        child = wrapped["child"]
+        try:
+            child.wait(timeout=1)
+        except Exception:
+            child.kill()
+            child.wait(timeout=1)
+            raise
+        return supervisor, wrapped["process"], child, result
+
+    def test_transient_wait_oserror_keeps_real_child_owned_and_reaped(self):
+        supervisor, process, child, result = self.run_real_child_with_wait_error()
+        self.assertTrue(process.alive_at_first_failure)
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(result.spawn_failed)
+        self.assertTrue(result.supervision_failed)
+        self.assertIsNone(supervisor.child)
+        self.assertIsNotNone(child.returncode)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child.pid, 0)
+
+    def test_repeated_wait_error_while_child_remains_live_is_reaped(self):
+        supervisor, process, child, result = self.run_real_child_with_wait_error(
+            failures=3
+        )
+        self.assertTrue(process.alive_at_first_failure)
+        self.assertEqual(process.wait_failures, 3)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.supervision_failed)
+        self.assertFalse(result.spawn_failed)
+        self.assertIsNone(supervisor.child)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child.pid, 0)
+
+    def test_wait_error_preserves_child_exit_three(self):
+        supervisor, _process, child, result = self.run_real_child_with_wait_error(
+            returncode=3
+        )
+        self.assertEqual(result.returncode, 3)
+        self.assertTrue(result.supervision_failed)
+        self.assertFalse(result.spawn_failed)
+        self.assertIsNone(supervisor.child)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child.pid, 0)
+
+    def test_wait_runtimeerror_and_valueerror_after_spawn_are_not_spawn_failures(self):
+        for exc_type in (RuntimeError, ValueError):
+            with self.subTest(exc_type=exc_type.__name__):
+                supervisor, _process, child, result = self.run_real_child_with_wait_error(
+                    exc_type=exc_type
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertFalse(result.spawn_failed)
+                self.assertTrue(result.supervision_failed)
+                self.assertIsNone(supervisor.child)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child.pid, 0)
+
+    def test_signal_during_exceptional_wait_is_forwarded_and_blocks_success(self):
+        signum = signal.SIGTERM
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "signal"
+            ready = Path(directory) / "ready"
+            child_script = "\n".join(
+                [
+                    "import pathlib, signal, sys, time",
+                    "marker = pathlib.Path({!r})".format(str(marker)),
+                    "ready = pathlib.Path({!r})".format(str(ready)),
+                    "def handle(signum, _frame):",
+                    "    marker.write_text(str(signum), encoding='utf-8')",
+                    "signal.signal(signal.SIGTERM, handle)",
+                    "ready.write_text('ready', encoding='utf-8')",
+                    "deadline = time.time() + 2",
+                    "while not marker.exists() and time.time() < deadline:",
+                    "    time.sleep(0.01)",
+                    "time.sleep(0.05)",
+                    "sys.exit(0)",
+                ]
+            )
+            def send_after_ready():
+                deadline = time.monotonic() + 2
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                os.kill(os.getpid(), signum)
+
+            supervisor, _process, child, result = self.run_real_child_with_wait_error(
+                child_script=child_script,
+                on_first_failure=send_after_ready,
+            )
+            self.assertEqual(result.returncode, 128 + signum)
+            self.assertEqual(result.first_signal, signum)
+            self.assertTrue(result.supervision_failed)
+            self.assertFalse(result.spawn_failed)
+            self.assertEqual(marker.read_text(encoding="utf-8"), str(int(signum)))
+            self.assertIsNone(supervisor.child)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child.pid, 0)
+
+    @unittest.skipUnless(hasattr(signal, "pthread_sigmask"), "pthread_sigmask unavailable")
+    def run_with_mask_restore_failure(self, *, failures, returncode=0):
+        real_sigmask = cli.signal.pthread_sigmask
+        saved_mask = real_sigmask(signal.SIG_BLOCK, [])
+        supervisor = cli.SetupBootstrapSupervisor()
+        state = {"armed": False, "failures": 0}
+
+        def wait_action(_process):
+            state["armed"] = True
+            supervisor._previous_signal_mask = saved_mask
+            return returncode
+
+        def pthread_sigmask(how, mask):
+            if (
+                state["armed"]
+                and how == signal.SIG_SETMASK
+                and state["failures"] < failures
+            ):
+                state["failures"] += 1
+                raise OSError("synthetic mask restore failure")
+            return real_sigmask(how, mask)
+
+        with mock.patch.object(cli.signal, "pthread_sigmask", side_effect=pthread_sigmask):
+            with mock.patch.object(
+                cli.subprocess,
+                "Popen",
+                return_value=FakeBootstrapProcess(returncode, wait_action=wait_action),
+            ):
+                result = supervisor.run(cli.build_setup_bootstrap_apply_step(ROOT))
+        return supervisor, result, state
+
+    @unittest.skipUnless(hasattr(signal, "pthread_sigmask"), "pthread_sigmask unavailable")
+    def test_one_shot_signal_mask_restore_failure_is_retried_and_blocks_success(self):
+        supervisor, result, state = self.run_with_mask_restore_failure(failures=1)
+        self.assertEqual(state["failures"], 1)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.supervision_failed)
+        self.assertFalse(result.spawn_failed)
+        self.assertIsNone(supervisor._previous_signal_mask)
+        self.assertIsNone(supervisor.child)
+
+    @unittest.skipUnless(hasattr(signal, "pthread_sigmask"), "pthread_sigmask unavailable")
+    def test_persistent_signal_mask_restore_failure_is_controlled(self):
+        supervisor, result, state = self.run_with_mask_restore_failure(failures=2)
+        self.assertEqual(state["failures"], 2)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.supervision_failed)
+        self.assertFalse(result.spawn_failed)
+        self.assertIsNotNone(supervisor._previous_signal_mask)
+        self.assertIsNone(supervisor.child)
+
+    def run_with_handler_restore_failure(
+        self,
+        *,
+        failures,
+        returncode=0,
+        spawn_error=False,
+    ):
+        handled = cli.SetupBootstrapSupervisor.handled_signals()
+        if len(handled) < 2:
+            self.skipTest("at least two handled signals required")
+        previous = {signum: signal.getsignal(signum) for signum in handled}
+        supervisor = cli.SetupBootstrapSupervisor()
+        failed_signum = handled[0]
+        state = {"failures": 0, "restore_calls": []}
+        real_signal = cli.signal.signal
+
+        def signal_call(signum, handler):
+            installing = getattr(handler, "__self__", None) is supervisor
+            if not installing:
+                state["restore_calls"].append(signum)
+                if signum == failed_signum and state["failures"] < failures:
+                    state["failures"] += 1
+                    raise RuntimeError("synthetic handler restore failure")
+            return real_signal(signum, handler)
+
+        try:
+            with mock.patch.object(cli.signal, "signal", side_effect=signal_call):
+                popen = mock.patch.object(
+                    cli.subprocess,
+                    "Popen",
+                    side_effect=OSError("missing") if spawn_error else None,
+                    return_value=FakeBootstrapProcess(returncode),
+                )
+                with popen:
+                    result = supervisor.run(cli.build_setup_bootstrap_apply_step(ROOT))
+            remaining = dict(supervisor._previous_handlers)
+            active_handlers = {
+                signum: signal.getsignal(signum)
+                for signum in handled
+            }
+            return supervisor, result, state, previous, remaining, active_handlers
+        finally:
+            for signum, handler in previous.items():
+                real_signal(signum, handler)
+
+    def test_one_handler_restore_failure_retries_after_restoring_others(self):
+        supervisor, result, state, previous, remaining, active = (
+            self.run_with_handler_restore_failure(failures=1)
+        )
+        handled = cli.SetupBootstrapSupervisor.handled_signals()
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.supervision_failed)
+        self.assertFalse(result.spawn_failed)
+        self.assertEqual(state["failures"], 1)
+        self.assertEqual(state["restore_calls"][0], handled[0])
+        self.assertIn(handled[1], state["restore_calls"][1:])
+        self.assertGreaterEqual(state["restore_calls"].count(handled[0]), 2)
+        self.assertEqual(remaining, {})
+        self.assertEqual(active, previous)
+        self.assertIsNone(supervisor.child)
+
+    def test_persistent_handler_restore_failure_restores_later_handlers(self):
+        supervisor, result, state, previous, remaining, active = (
+            self.run_with_handler_restore_failure(failures=2)
+        )
+        handled = cli.SetupBootstrapSupervisor.handled_signals()
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.supervision_failed)
+        self.assertEqual(state["failures"], 2)
+        self.assertEqual(set(remaining), {handled[0]})
+        for signum in handled[1:]:
+            self.assertIs(active[signum], previous[signum])
+        self.assertIsNone(supervisor.child)
+
+    def test_child_exit_three_wins_over_restoration_failure(self):
+        supervisor, result, _state, _previous, remaining, _active = (
+            self.run_with_handler_restore_failure(failures=1, returncode=3)
+        )
+        self.assertEqual(result.returncode, 3)
+        self.assertTrue(result.supervision_failed)
+        self.assertFalse(result.spawn_failed)
+        self.assertEqual(remaining, {})
+        self.assertIsNone(supervisor.child)
+
+    def test_spawn_failure_with_restoration_failure_preserves_127(self):
+        supervisor, result, _state, _previous, _remaining, _active = (
+            self.run_with_handler_restore_failure(failures=1, spawn_error=True)
+        )
+        self.assertEqual(result.returncode, 127)
+        self.assertTrue(result.spawn_failed)
+        self.assertTrue(result.supervision_failed)
+        self.assertIsNone(supervisor.child)
+
+    def test_cleanup_bookkeeping_and_new_supervisor_start_clean(self):
+        process = FakeBootstrapProcess()
+
+        def wait_action(_process):
+            os.kill(os.getpid(), signal.SIGINT)
+            return 0
+
+        process.wait_action = wait_action
+        supervisor = cli.SetupBootstrapSupervisor()
+        with mock.patch.object(cli.subprocess, "Popen", return_value=process):
+            result = supervisor.run(cli.build_setup_bootstrap_apply_step(ROOT))
+        self.assertEqual(result.returncode, 130)
+        self.assertEqual(process.signals, [signal.SIGINT])
+        self.assertEqual(supervisor._pending_signals, [])
+        self.assertIsNone(supervisor.child)
+
+        second = cli.SetupBootstrapSupervisor()
+        with mock.patch.object(cli.subprocess, "Popen", return_value=FakeBootstrapProcess()):
+            second_result = second.run(cli.build_setup_bootstrap_apply_step(ROOT))
+        self.assertEqual(second_result, cli.SetupBootstrapResult(0))
+        self.assertEqual(second._pending_signals, [])
+        self.assertIsNone(second.child)
+
     def test_late_sigint_during_handler_teardown_is_in_result(self):
         supervisor, process, result, previous, state = (
             run_supervisor_with_teardown_signal(signal.SIGINT)
         )
         self.assertEqual(supervisor.first_signal, signal.SIGINT)
-        self.assertEqual(process.signals, [signal.SIGINT])
+        self.assertEqual(process.signals, [])
         self.assertEqual(result.first_signal, signal.SIGINT)
         self.assertEqual(result.returncode, 130)
         self.assertFalse(result.spawn_failed)
@@ -364,7 +742,7 @@ class SetupBootstrapSupervisorTests(unittest.TestCase):
             run_supervisor_with_teardown_signal(signal.SIGTERM)
         )
         self.assertEqual(supervisor.first_signal, signal.SIGTERM)
-        self.assertEqual(process.signals, [signal.SIGTERM])
+        self.assertEqual(process.signals, [])
         self.assertEqual(result.first_signal, signal.SIGTERM)
         self.assertEqual(result.returncode, 143)
         self.assertFalse(result.spawn_failed)
@@ -378,7 +756,7 @@ class SetupBootstrapSupervisorTests(unittest.TestCase):
             run_supervisor_with_teardown_signal(signal.SIGTERM, returncode=3)
         )
         self.assertEqual(supervisor.first_signal, signal.SIGTERM)
-        self.assertEqual(process.signals, [signal.SIGTERM])
+        self.assertEqual(process.signals, [])
         self.assertEqual(result.first_signal, signal.SIGTERM)
         self.assertEqual(result.returncode, 3)
         self.assertFalse(result.spawn_failed)
