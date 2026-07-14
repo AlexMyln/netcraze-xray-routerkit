@@ -62,6 +62,33 @@ class FakeBootstrapProcess:
         return self.returncode
 
 
+def run_supervisor_with_teardown_signal(signum, *, returncode=0, spawn_error=False):
+    supervisor = cli.SetupBootstrapSupervisor()
+    process = FakeBootstrapProcess(returncode)
+    previous_handlers = {
+        item: signal.getsignal(item)
+        for item in cli.SetupBootstrapSupervisor.handled_signals()
+    }
+    real_restore_handlers = supervisor._restore_handlers
+    state = {"restore_calls": 0}
+
+    def restore_handlers():
+        state["restore_calls"] += 1
+        os.kill(os.getpid(), signum)
+        real_restore_handlers()
+
+    supervisor._restore_handlers = restore_handlers
+    popen = mock.patch.object(
+        cli.subprocess,
+        "Popen",
+        side_effect=OSError("missing") if spawn_error else None,
+        return_value=process,
+    )
+    with popen:
+        result = supervisor.run(cli.build_setup_bootstrap_apply_step(ROOT))
+    return supervisor, process, result, previous_handlers, state
+
+
 class SetupBootstrapCliTests(unittest.TestCase):
     def test_option_requires_apply_before_environment_or_workspace_access(self):
         source_name = "ROUTERKIT_EARLY_REJECT_SOURCE"
@@ -284,6 +311,27 @@ class SetupBootstrapIntegrationTests(unittest.TestCase):
         self.assertIn("setup received SIGINT", stderr)
         self.assertNotIn("rollback succeeded", stderr.lower())
 
+    def test_late_supervisor_signal_result_blocks_all_later_stages(self):
+        supervisor, process, result, previous, state = (
+            run_supervisor_with_teardown_signal(signal.SIGINT)
+        )
+        code, events, stdout, stderr, _run_bootstrap = self._run(
+            bootstrap_result=result
+        )
+        self.assertEqual(supervisor.first_signal, signal.SIGINT)
+        self.assertEqual(process.signals, [signal.SIGINT])
+        self.assertEqual(result, cli.SetupBootstrapResult(130, first_signal=signal.SIGINT))
+        self.assertEqual(code, 130)
+        self.assertEqual(events[-1], "bootstrap apply")
+        for stage in ("preflight", "backup", "install", "healthcheck"):
+            self.assertNotIn(stage, events)
+        self.assertNotIn("Setup apply completed.", stdout)
+        self.assertIn("setup received SIGINT", stderr)
+        self.assertEqual(state["restore_calls"], 1)
+        self.assertIsNone(supervisor.child)
+        for item, handler in previous.items():
+            self.assertIs(signal.getsignal(item), handler)
+
     def test_preflight_failure_after_bootstrap_is_preserved(self):
         code, events, stdout, _stderr, _run_bootstrap = self._run(apply_result=47)
         self.assertEqual(code, 47)
@@ -293,6 +341,82 @@ class SetupBootstrapIntegrationTests(unittest.TestCase):
 
 
 class SetupBootstrapSupervisorTests(unittest.TestCase):
+    def assert_handlers_restored(self, previous):
+        for item, handler in previous.items():
+            self.assertIs(signal.getsignal(item), handler)
+
+    def test_late_sigint_during_handler_teardown_is_in_result(self):
+        supervisor, process, result, previous, state = (
+            run_supervisor_with_teardown_signal(signal.SIGINT)
+        )
+        self.assertEqual(supervisor.first_signal, signal.SIGINT)
+        self.assertEqual(process.signals, [signal.SIGINT])
+        self.assertEqual(result.first_signal, signal.SIGINT)
+        self.assertEqual(result.returncode, 130)
+        self.assertFalse(result.spawn_failed)
+        self.assertEqual(state["restore_calls"], 1)
+        self.assertIsNone(supervisor.child)
+        self.assert_handlers_restored(previous)
+
+    @unittest.skipUnless(hasattr(signal, "SIGTERM"), "SIGTERM unavailable")
+    def test_late_sigterm_during_handler_teardown_is_in_result(self):
+        supervisor, process, result, previous, state = (
+            run_supervisor_with_teardown_signal(signal.SIGTERM)
+        )
+        self.assertEqual(supervisor.first_signal, signal.SIGTERM)
+        self.assertEqual(process.signals, [signal.SIGTERM])
+        self.assertEqual(result.first_signal, signal.SIGTERM)
+        self.assertEqual(result.returncode, 143)
+        self.assertFalse(result.spawn_failed)
+        self.assertEqual(state["restore_calls"], 1)
+        self.assertIsNone(supervisor.child)
+        self.assert_handlers_restored(previous)
+
+    @unittest.skipUnless(hasattr(signal, "SIGTERM"), "SIGTERM unavailable")
+    def test_late_signal_preserves_meaningful_child_failure(self):
+        supervisor, process, result, previous, state = (
+            run_supervisor_with_teardown_signal(signal.SIGTERM, returncode=3)
+        )
+        self.assertEqual(supervisor.first_signal, signal.SIGTERM)
+        self.assertEqual(process.signals, [signal.SIGTERM])
+        self.assertEqual(result.first_signal, signal.SIGTERM)
+        self.assertEqual(result.returncode, 3)
+        self.assertFalse(result.spawn_failed)
+        self.assertEqual(state["restore_calls"], 1)
+        self.assertIsNone(supervisor.child)
+        self.assert_handlers_restored(previous)
+
+    def test_spawn_failure_preserves_127_and_late_signal(self):
+        supervisor, process, result, previous, state = (
+            run_supervisor_with_teardown_signal(signal.SIGINT, spawn_error=True)
+        )
+        self.assertEqual(supervisor.first_signal, signal.SIGINT)
+        self.assertEqual(process.signals, [])
+        self.assertEqual(result.first_signal, signal.SIGINT)
+        self.assertEqual(result.returncode, 127)
+        self.assertTrue(result.spawn_failed)
+        self.assertEqual(state["restore_calls"], 1)
+        self.assertIsNone(supervisor.child)
+        self.assert_handlers_restored(previous)
+
+    def test_new_supervisor_has_no_stale_late_signal_state(self):
+        first, _process, first_result, previous, _state = (
+            run_supervisor_with_teardown_signal(signal.SIGINT)
+        )
+        second = cli.SetupBootstrapSupervisor()
+        with mock.patch.object(
+            cli.subprocess,
+            "Popen",
+            return_value=FakeBootstrapProcess(0),
+        ):
+            second_result = second.run(cli.build_setup_bootstrap_apply_step(ROOT))
+        self.assertEqual(first.first_signal, signal.SIGINT)
+        self.assertEqual(first_result.returncode, 130)
+        self.assertIsNone(second.first_signal)
+        self.assertEqual(second_result, cli.SetupBootstrapResult(0))
+        self.assertIsNone(second.child)
+        self.assert_handlers_restored(previous)
+
     def test_environment_is_sanitized_but_path_and_unrelated_values_remain(self):
         captured = {}
 

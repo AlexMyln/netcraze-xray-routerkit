@@ -942,6 +942,8 @@ class SetupBootstrapSupervisor:
 
     def run(self, step: CommandStep) -> SetupBootstrapResult:
         child_env = None
+        raw_returncode = 127
+        spawn_failed = False
         if step.remove_env_names:
             child_env = os.environ.copy()
             for name in step.remove_env_names:
@@ -968,22 +970,26 @@ class SetupBootstrapSupervisor:
             self._pending_signals.clear()
             while True:
                 try:
-                    returncode = self.child.wait()
+                    raw_returncode = self.child.wait()
                     break
                 except InterruptedError:
                     continue
-            return SetupBootstrapResult(
-                self._child_result(returncode, self.first_signal),
-                first_signal=self.first_signal,
-            )
         except (OSError, RuntimeError, ValueError):
-            return SetupBootstrapResult(127, first_signal=self.first_signal, spawn_failed=True)
+            spawn_failed = True
+            raw_returncode = 127
         finally:
             try:
                 self._restore_signal_mask()
             finally:
                 self._restore_handlers()
                 self.child = None
+
+        first_signal = self.first_signal
+        return SetupBootstrapResult(
+            self._child_result(raw_returncode, first_signal),
+            first_signal=first_signal,
+            spawn_failed=spawn_failed,
+        )
 
 
 def run_setup_bootstrap_apply(step: CommandStep) -> SetupBootstrapResult:
