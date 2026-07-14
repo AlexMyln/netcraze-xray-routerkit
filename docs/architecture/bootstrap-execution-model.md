@@ -1,8 +1,8 @@
 # ADR: bootstrap execution model
 
-- Status: Accepted for the read-only planning slice; apply behavior remains gated
+- Status: Accepted for the read-only planner and explicitly gated standalone apply
 - Date: 2026-07-13
-- Tracks: [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13), [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), epic [#5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5)
+- Tracks: [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13), planner [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), standalone apply [#28](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/28), later setup integration [#29](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/29), epic [#5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5)
 
 ## Decision question
 
@@ -14,8 +14,10 @@ Use a documented hybrid:
 
 1. A trusted host performs orchestration and connects to the router over SSH on a private/local interface.
 2. Before Entware Python exists, any router-side bootstrap component must be a minimal, auditable POSIX `sh` entrypoint using only capabilities proven on the target hardware.
-3. After Entware and Python 3 are confirmed, control hands off to the repository Python CLI for manifest validation, planning, and later explicitly approved apply stages.
-4. In this slice only the Python read-only planner exists. It performs no host-to-router connection and no apply action.
+3. After manual Entware activation and Python 3 availability are confirmed, control hands off to the repository Python CLI for manifest validation and planning.
+4. `routerkit bootstrap` and standalone `--dry-run` remain read-only. `routerkit bootstrap --apply` is a separate write-capable transaction that requires fresh live inventory, literal `/opt`, a trusted fixed-path Entware `opkg`, supported Linux arm64, and explicit confirmation. `--yes` skips only that prompt; `--apply --dry-run` is a no-write preview.
+5. The standalone transaction installs only missing fixed prerequisites, acquires only the reviewed manifest artifact, validates a private candidate, preserves a verified rollback binary, replaces atomically, post-validates, rolls back on failure, and publishes a non-secret provenance receipt.
+6. Normal `routerkit setup` does not invoke bootstrap. That integration remains #29.
 
 This keeps trust decisions, pin review, and operator confirmation on a general-purpose host while avoiding an assumption that Python already exists on a factory or partially prepared router. The future shell stage must remain small and must verify a repository-owned immutable manifest before any replacement is considered.
 
@@ -61,9 +63,17 @@ USB formatting remains deliberately outside RouterKit. It is destructive, depend
 
 The current official materials show supported UI and CLI building blocks, but they do not prove a single non-interactive Entware activation sequence for the target Netcraze hardware, firmware, disk layout, and architecture. RouterKit therefore preserves Entware activation as a manual gate. It does not invent an NDM command sequence.
 
-After activation, the read-only planner records whether `opkg`, `python3`, `curl`, `unzip`, and checksum tooling are available. A later reviewed apply slice may install pinned prerequisites only after model validation. Until then, absence is reported as a warning, not repaired.
+After activation, the read-only planner reports command and Xray state without invoking the package manager. Standalone apply resolves `opkg` only from `/opt/bin/opkg` or `/opt/sbin/opkg`; a symlink is accepted only when its resolved regular executable remains below `/opt`. Arbitrary `PATH` resolution is never authoritative for writes.
 
-The plan records one deterministic command-to-Entware-package contract: `curl -> curl`, `unzip -> unzip`, `sha256sum -> coreutils-sha256sum`, and `python3 -> python3`, plus the base package `ca-bundle`. These package names are scoped to the documented initial Entware arm64/aarch64 environment and still require hardware validation. Package installation remains a later #13 slice.
+The fixed transaction package set is `ca-bundle`, `curl`, `unzip`, `coreutils-sha256sum`, and `python3`. Apply queries each name, requests only missing top-level names in deterministic order with one bounded `opkg install`, and re-queries every requirement. RouterKit never runs `opkg upgrade`, accepts package input, or requests update/removal of unrelated packages; trusted dependencies and maintainer scripts remain within `opkg`'s authority. Package installation is additive: additions may remain after a partially failed `opkg install` or a later Xray stage because automated dependency removal is unsafe.
+
+## Artifact and candidate transaction
+
+Only the selected `linux-arm64` manifest `download_url` and `sha256` are runtime artifact inputs. The repository manifest is the default, while standalone `--manifest` is an explicit operator-controlled trust input; every selected manifest must pass the same repository, release, architecture, URL, and checksum validation. The initial URL must match that validated manifest exactly. Acquisition uses raw HTTPS connections rather than ambient proxy handlers: port 443 only, TLS hostname verification, connected-peer verification, the existing reviewed global-destination policy, fail-closed mixed DNS answers, and independent redirect validation. Redirects are limited to five and only `github.com` or dot-boundary subdomains of `githubusercontent.com`; query-bearing signed redirects are permitted but never printed. Operational bounds are 16 DNS addresses per hop, 5 seconds per DNS hop, 10 seconds per address connection, 180 seconds overall, 8192-byte URL/Location values, and a 128 MiB archive. The response is streamed to an exclusive `0600` file while hashing and is never buffered in full.
+
+The downloaded SHA-256 must equal the manifest's lowercase digest before extraction or execution. Python ZIP handling rejects malformed, encrypted, traversal, absolute, backslash-confused, duplicate-normalized, directory, symlink/special, unsupported-compression, oversized, excessive-ratio, or excessive-entry archives. It writes only the single member that normalizes to root `xray`; it does not extract GeoIP, GeoSite, README, or any other entry. Limits are 128 entries, a 96 MiB candidate, and a 200:1 compression ratio. The private candidate becomes executable only after complete CRC-checked extraction; the first non-empty version-output line must equal the manifest-derived value `Xray 26.3.27` under a sanitized environment and bounded child lifecycle. Later output lines do not participate in version matching.
+
+Private staging is a unique `0700` directory below the RouterKit-owned `/opt/var/tmp/routerkit`, must share the destination filesystem, and is removed with directory-identity and flat-entry checks on success, failure, `SIGINT`, `SIGTERM`, and `SIGHUP`. Ctrl-C at the confirmation prompt remains ordinary cancellation and enters none of this mutable scope. After confirmation, scoped `SIGINT`/`SIGTERM`/`SIGHUP` handlers record the first signal and coordinate bounded process-group shutdown and reaping. Before replacement, a catchable signal proceeds to staging cleanup without binary rollback. From the point replacement may start through post-install hash/version validation and receipt publication, any catchable termination enters a recovery critical section: pending and repeated catchable signals are deferred while the prior binary is restored and validated, or while a clean-install candidate is removed and absence is verified. Only verified recovery plus staging cleanup permits conventional exit `130` for SIGINT, `143` for SIGTERM, or `129` for SIGHUP. An unproven rollback remains the highest-priority error and returns exit `3` with retained-backup guidance; a cleanup failure outranks an otherwise verified signal exit. `SIGKILL`, power loss, kernel failure, and host crash cannot run in-process cleanup and remain explicit residual risks.
 
 ## Hardware-validation unknowns
 
@@ -79,20 +89,25 @@ Spare-hardware work in #16 must establish:
 
 No apply implementation should claim support until those points are observed on disposable hardware.
 
-## Rollback boundary
+## Backup, replacement, rollback, and provenance
 
-This slice stops before the first write. Its rollback is therefore “no state to restore.” A later apply design must create and verify a backup of the existing `/opt/sbin/xray`, validate the candidate independently, replace atomically, and retain a recovery path. Entware activation, USB formatting, router component changes, service state, firewall state, and Netcraze policies are outside this slice.
+Before replacement, `/opt/sbin/xray` is opened without following symlinks, identity-checked, bounded-hashed, and safely version-probed. A present target must be a regular executable. After checksum and candidate validation, the current binary is copied exclusively to `/opt/var/lib/routerkit/backups/xray-<full-sha256>`; an existing deterministic backup is reused only after metadata and hash verification. Backups remain after success.
+
+The validated candidate is copied to an exclusive `0755` file in the destination directory, fsynced, hash-verified, and installed with same-filesystem `os.replace()`, followed by directory fsync. No service is stopped or restarted. The installed path must hash-identically and return the exact pinned version. Any post-replacement or receipt-publication failure atomically restores and hash/version-validates the prior backup, or removes and verifies absence for a clean install. Provenance is removed only after binary recovery is verified. A rollback that cannot be proven returns a distinct failure and identifies the retained backup path; it is never downgraded to ordinary signal termination. Package additions are outside this binary rollback boundary.
+
+Successful installation atomically publishes `/opt/var/lib/routerkit/bootstrap-state.json` with restrictive permissions, deterministic JSON, release/archive/installed hashes, exact version, backup identity, and fixed packages installed by RouterKit. It contains no source/profile secret, transient URL, response body, environment dump, timestamp, or staging path. A rerun skips package installation, network, backup, and replacement only when all packages are installed and receipt, release, archive hash, current executable hash, and exact version agree. Matching version without matching provenance is insufficient; stale or corrupt state causes the normal verified transaction.
 
 ## Impact on `routerkit setup`
 
-`routerkit bootstrap` is a separate read-only command in this release. `routerkit setup` does not invoke it. The next #13 slice may add an explicit planner gate before setup only after the manifest, inventory, execution model, and hardware results are reviewed. It must not silently turn `setup` into a package installer or Xray replacer.
+`routerkit bootstrap --apply` is standalone in this release. `routerkit setup` does not invoke it. #29 may add an explicit setup gate later, but must preserve confirmation and safety contracts rather than silently turning setup into a package installer or Xray replacer.
 
 ## Non-goals
 
 - formatting or selecting USB devices;
 - automatic Entware activation;
-- package installation or index updates;
-- downloading or replacing Xray;
+- package index updates, upgrades, or removals;
+- any artifact other than the exact reviewed manifest pin;
 - service/autostart changes;
+- config installation or profile-source consumption;
 - `xkeen -start`, firewall, TPROXY, REDIRECT, Web UI/API, or policy automation;
 - router/runtime, Docker, database, server, or production actions.

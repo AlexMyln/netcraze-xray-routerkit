@@ -36,6 +36,8 @@ jobs:
           python3 -m py_compile scripts/routerkit-wizard.py
           python3 -m py_compile scripts/routerkit-plan.py
           python3 -m py_compile scripts/routerkit-bootstrap.py
+          python3 -m py_compile scripts/routerkit_artifact_network.py
+          python3 -m py_compile scripts/routerkit_bootstrap_apply.py
           python3 -m py_compile scripts/routerkit.py
 
       - name: Python tests
@@ -130,5 +132,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Destination policy tests
-        run: python -m unittest tests.test_routerkit_profile_network.DestinationPolicyTests -v
+      - name: Destination and artifact policy tests
+        run: |
+          python -m unittest tests.test_routerkit_profile_network.DestinationPolicyTests -v
+          python -m unittest tests.test_routerkit_artifact_network -v

@@ -97,6 +97,21 @@ class RouterkitCliCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_bootstrap_apply_yes_flags_are_forwarded(self):
+        args = cli.parse_args(["bootstrap", "--apply", "--yes"])
+
+        command = cli.build_command(args, ROOT)
+
+        self.assertEqual(
+            command,
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "routerkit-bootstrap.py"),
+                "--apply",
+                "--yes",
+            ],
+        )
+
     def test_bootstrap_propagates_delegated_exit_code(self):
         with mock.patch.object(cli.subprocess, "run", return_value=completed(17)) as run:
             code = cli.main(["--repo-root", str(ROOT), "bootstrap"])

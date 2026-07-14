@@ -5,10 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Bootstrap now coordinates SIGINT through the same verified replacement-recovery boundary, closing the atomic-replacement cancellation gap.
+- Bootstrap now treats signal-time rollback as a recovery critical section and never suppresses an unproven binary rollback.
+- Bootstrap artifact acquisition is HTTPS-only, proxy-free, destination-validated, bounded, checksum-gated, and safely extracted.
 - Unified setup now consumes dedicated `ROUTERKIT_*` source variables and removes them from resolver workers and all later generator, plan, and apply subprocess environments.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Transactional standalone bootstrap apply for fixed Entware prerequisites and the manifest-pinned Xray artifact.
+- Verified existing-binary backup, atomic replacement, post-install validation, rollback, and provenance receipt.
 - Default setup integration for hidden/local/HTTPS profile sources and primary/fallback selection.
 - Private setup-owned profile workspace with post-generator cleanup.
 - Explicit secure existing-profiles reuse and legacy-wizard compatibility modes.
@@ -46,11 +51,12 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- `routerkit bootstrap` remains read-only by default; writes require explicit `--apply` and confirmation.
 - `routerkit setup` no longer silently reuses a current-directory `profiles.json`.
 - Profile-source cancellation messaging no longer makes an unconditional no-write claim.
 - Clarified HTTPS resolver browser-redirect, cleanup, address-policy, compatibility-test, and local-file security boundaries after independent security review.
 - HTTPS source values now normalize only outer whitespace at the single-URL boundary; protected LF/CRLF files work while raw/offline payloads remain unchanged.
-- Bootstrap plans now record explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`, while remaining read-only; package installation stays in a later #13 slice and the initial arm64/aarch64 package names still require hardware validation.
+- Bootstrap plans retain explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`; standalone apply now installs only missing fixed prerequisites, while the initial arm64/aarch64 package names still require hardware validation.
 
 ### Security
 - HTTPS resolution now uses fixed reviewed special-purpose CIDR tables plus standard-library defense-in-depth checks, rejects IPv4-mapped/NAT64/Teredo/6to4/ORCHID forms conservatively, and preserves ordinary cancellation while attempting bounded best-effort resource cleanup.
