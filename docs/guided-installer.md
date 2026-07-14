@@ -37,7 +37,7 @@ Only Linux `aarch64`/`arm64` is supported. Default mode and standalone `--dry-ru
 
 Apply requests only missing top-level names from the fixed set `ca-bundle`, `curl`, `unzip`, `coreutils-sha256sum`, and `python3`; RouterKit never requests upgrade or removal. Trusted dependencies and maintainer scripts remain controlled by `opkg`, and additions may remain after a partially failed package install or a later failure because automatic dependency removal is unsafe. It then streams the exact manifest URL through proxy-free HTTPS with per-hop destination/TLS validation and hard bounds, verifies SHA-256, safely extracts only one root `xray`, and requires the first non-empty version-output line to equal the exact pin. An existing executable is hashed and copied to a verified deterministic backup before same-filesystem atomic replacement. Post-install hash/version failure restores that backup; failed clean installs remove the new candidate. A restrictive receipt records non-secret provenance and enables an idempotent no-network rerun only when every identity field still matches.
 
-Manual Entware activation remains required. Bootstrap does not restart services, enable autostart, install configs, read profile secrets, call `xkeen -start`, or change firewall/Web UI/policies. Ctrl-C at the apply confirmation prompt performs no transaction action. During mutable apply, `SIGINT`, `SIGTERM`, and `SIGHUP` stop forward progress; after replacement they defer repeated catchable signals until verified rollback or clean-install removal and staging cleanup complete. Verified SIGINT recovery exits `130`; unproven recovery returns distinct exit `3` with retained-backup guidance. `SIGKILL`, power loss, kernel failure, and host crash remain residual risks. `routerkit setup` does not invoke bootstrap; that integration is #29. The [execution-model ADR](architecture/bootstrap-execution-model.md) and [pinned Xray verification](xray-artifact-pin.md) contain the full contract. Hardware validation remains [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), so the true one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) is incomplete.
+Manual Entware activation remains required. Bootstrap does not restart services, enable autostart, install configs, read profile secrets, call `xkeen -start`, or change firewall/Web UI/policies. Ctrl-C at the apply confirmation prompt performs no transaction action. During mutable apply, `SIGINT`, `SIGTERM`, and `SIGHUP` stop forward progress; after replacement they defer repeated catchable signals until verified rollback or clean-install removal and staging cleanup complete. Verified SIGINT recovery exits `130`; unproven recovery returns distinct exit `3` with retained-backup guidance. `SIGKILL`, power loss, kernel failure, and host crash remain residual risks. Setup invokes bootstrap only with the explicit `--apply --bootstrap-apply` pair. The [execution-model ADR](architecture/bootstrap-execution-model.md) and [pinned Xray verification](xray-artifact-pin.md) contain the full contract. Hardware validation remains [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), so the true one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) is incomplete.
 
 Router-side checks:
 
@@ -149,7 +149,7 @@ python3 scripts/routerkit-plan.py --generated generated --json
 5. generate local config fragments with generator output suppressed;
 6. remove the private setup profiles and workspace immediately after generator termination;
 7. run a strict install plan;
-8. after explicit apply permission, run preflight, backup, install, and healthcheck.
+8. after explicit apply permission, optionally run the standalone bootstrap transaction, then run preflight, backup, install, and healthcheck.
 
 Plan-only setup is the default:
 
@@ -161,7 +161,7 @@ With no source option, setup reads the source through hidden input and prompts f
 
 For non-interactive input, pass only an environment-variable name or protected file path, never the raw source as an ordinary argument:
 
-Setup requires a valid dedicated `ROUTERKIT_*` name for `--source-env`. The profile-source child copies and removes that value before URL classification or DNS resolver worker creation; generator, strict plan, and every apply subprocess receive the normal environment with only that selected variable removed. The raw source is never copied to argv or output. Standalone `profile-source --source-env` retains compatibility with other valid environment names because it does not use setup's internal consume option.
+Setup requires a valid dedicated `ROUTERKIT_*` name for `--source-env`. The profile-source child copies and removes that value before URL classification or DNS resolver worker creation; generator, strict plan, integrated bootstrap, and every later apply subprocess receive the normal environment with only that selected variable removed. The raw source is never copied to argv or output. Standalone `profile-source --source-env` retains compatibility with other valid environment names because it does not use setup's internal consume option.
 
 ```sh
 ROUTERKIT_PROFILE_SOURCE='...' \
@@ -202,16 +202,25 @@ After the strict plan passes, setup asks `Proceed with router apply stages? [y/N
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
+Explicit runtime preparation is a distinct third mode:
+
+```sh
+python3 scripts/routerkit.py setup --apply --bootstrap-apply
+```
+
+After generation cleanup and a successful strict plan, setup prints the package/Xray warning and asks one visible `Proceed with bootstrap and router apply stages? [y/N]:` question. Once confirmed, it delegates exactly to the repository-default standalone `routerkit-bootstrap.py --apply --yes`, then continues through preflight, backup, install, and healthcheck. The internal `--yes` prevents a second bootstrap prompt; setup `--yes` suppresses only the one setup prompt. Bootstrap failure, cancellation, or an unproven rollback stops every later router stage and preserves the standalone exit code. Fixed package additions may remain; Xray replacement uses the standalone transaction's separate verified backup/rollback. No service restart or autostart occurs.
+
 Use dry-run to render an abstract secret-free flow with no source, reuse-file, secret-input, or environment-value read; no stdin prompt; and no DNS/HTTPS request, subprocess, private workspace, profile, generated file, write, or router action:
 
 ```sh
 python3 scripts/routerkit.py --dry-run setup
 python3 scripts/routerkit.py setup --apply --dry-run
+python3 scripts/routerkit.py setup --apply --bootstrap-apply --dry-run
 ```
 
 This setup dry-run contract differs from standalone `profile-source --dry-run`: standalone profile-source may still perform an HTTPS network read to validate selection, while setup dry-run performs no secret input or network access. Python module loading and repository-path resolution are outside the secret-input contract.
 
-This integration closes #20 and #24 but is not the end of epic #5. Standalone bootstrap apply is #28 under #13; setup integration remains #29, autostart #14, Netcraze proxy/policy automation #15, and hardware validation #16. `setup` does not invoke `bootstrap` in this release. Setup does not download or install Xray, enable autostart, discover devices, change Netcraze policies or the default policy, automate the Web UI, create firewall/TPROXY/REDIRECT rules, or call `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
+This integration functionally completes #29 and parent #13 but is not the end of epic #5. Autostart is #14, Netcraze proxy/policy automation #15, device discovery #21, and hardware validation #16. The path is not hardware-tested until #16 is complete. Plain `setup` and `setup --apply` do not bootstrap; only the explicit combined mode downloads or installs pinned Xray. No setup mode activates Entware, enables autostart, discovers devices, changes Netcraze policies or the default policy, automates the Web UI, creates firewall/TPROXY/REDIRECT rules, or calls `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
 
 ## Install command
 

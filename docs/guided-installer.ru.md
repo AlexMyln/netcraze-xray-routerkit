@@ -37,7 +37,7 @@ python3 scripts/routerkit.py bootstrap --apply --dry-run
 
 Apply запрашивает только отсутствующие top-level имена из фиксированного набора `ca-bundle`, `curl`, `unzip`, `coreutils-sha256sum` и `python3`; RouterKit не запрашивает upgrade или removal. Trusted dependencies и maintainer scripts остаются под управлением `opkg`, а additions могут остаться после частично неуспешного package install или более позднего сбоя, потому что автоматическое удаление небезопасно. Затем exact manifest URL stream-загружается через proxy-free HTTPS с per-hop destination/TLS validation и жёсткими limits, проверяется SHA-256, безопасно извлекается только root `xray`, а первая непустая строка version output обязана точно совпасть с pin. Существующий executable хэшируется и копируется в проверенный deterministic backup до same-filesystem atomic replacement. Ошибка post-install hash/version восстанавливает backup; failed clean install удаляет новый candidate. Restrictive receipt сохраняет non-secret provenance и разрешает idempotent no-network rerun только при совпадении всех identity fields.
 
-Manual Entware activation остаётся обязательной. Bootstrap не перезапускает services, не включает autostart, не устанавливает configs, не читает profile secrets, не вызывает `xkeen -start` и не меняет firewall/Web UI/policies. Ctrl-C на apply confirmation prompt не запускает transaction action. Во время mutable apply `SIGINT`, `SIGTERM` и `SIGHUP` останавливают forward progress; после replacement повторные catchable signals откладываются до завершения проверенного rollback или удаления clean-install candidate и cleanup staging. Проверенное SIGINT recovery завершается exit `130`; неподтверждённое recovery возвращает отдельный exit `3` с указанием сохранённого backup. `SIGKILL`, потеря питания, kernel failure и host crash остаются residual risks. `routerkit setup` не вызывает bootstrap; integration — #29. Полный contract описан в [ADR модели выполнения](architecture/bootstrap-execution-model.ru.md) и [проверке Xray pin](xray-artifact-pin.ru.md). Hardware validation остаётся [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), настоящий one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) не завершён.
+Manual Entware activation остаётся обязательной. Bootstrap не перезапускает services, не включает autostart, не устанавливает configs, не читает profile secrets, не вызывает `xkeen -start` и не меняет firewall/Web UI/policies. Ctrl-C на apply confirmation prompt не запускает transaction action. Во время mutable apply `SIGINT`, `SIGTERM` и `SIGHUP` останавливают forward progress; после replacement повторные catchable signals откладываются до завершения проверенного rollback или удаления clean-install candidate и cleanup staging. Проверенное SIGINT recovery завершается exit `130`; неподтверждённое recovery возвращает отдельный exit `3` с указанием сохранённого backup. `SIGKILL`, потеря питания, kernel failure и host crash остаются residual risks. Setup вызывает bootstrap только с явной парой `--apply --bootstrap-apply`. Полный contract описан в [ADR модели выполнения](architecture/bootstrap-execution-model.ru.md) и [проверке Xray pin](xray-artifact-pin.ru.md). Hardware validation остаётся [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), настоящий one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) не завершён.
 
 Проверки на стороне роутера:
 
@@ -149,7 +149,7 @@ python3 scripts/routerkit-plan.py --generated generated --json
 5. генерирует local config fragments с подавленным выводом generator;
 6. сразу после завершения generator удаляет private setup profiles и workspace;
 7. запускает strict install plan;
-8. после явного разрешения на apply запускает preflight, backup, install и healthcheck.
+8. после явного разрешения на apply при необходимости запускает standalone bootstrap transaction, затем preflight, backup, install и healthcheck.
 
 По умолчанию setup работает только в режиме плана:
 
@@ -161,7 +161,7 @@ python3 scripts/routerkit.py setup
 
 Для non-interactive input передавайте только имя environment variable или path защищённого file, но не raw source как обычный argument:
 
-Для `--source-env` setup требует валидное имя выделенной переменной `ROUTERKIT_*`. Дочерний процесс profile-source копирует и удаляет значение до классификации URL или создания DNS resolver worker; generator, strict plan и все apply subprocesses получают обычный environment без одной выбранной переменной. Raw source не копируется в argv или output. Standalone `profile-source --source-env` сохраняет совместимость с другими валидными именами environment variables, потому что не использует внутренний setup-only consume option.
+Для `--source-env` setup требует валидное имя выделенной переменной `ROUTERKIT_*`. Дочерний процесс profile-source копирует и удаляет значение до классификации URL или создания DNS resolver worker; generator, strict plan, integrated bootstrap и все последующие apply subprocesses получают обычный environment без одной выбранной переменной. Raw source не копируется в argv или output. Standalone `profile-source --source-env` сохраняет совместимость с другими валидными именами environment variables, потому что не использует внутренний setup-only consume option.
 
 ```sh
 ROUTERKIT_PROFILE_SOURCE='...' \
@@ -202,16 +202,25 @@ python3 scripts/routerkit.py setup --apply
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
+Явная подготовка runtime — отдельный третий режим:
+
+```sh
+python3 scripts/routerkit.py setup --apply --bootstrap-apply
+```
+
+После cleanup generated profiles и успешного strict plan setup печатает предупреждение о packages/Xray и задаёт один видимый вопрос `Proceed with bootstrap and router apply stages? [y/N]:`. После подтверждения он делегирует repository-default standalone-команде `routerkit-bootstrap.py --apply --yes`, затем выполняет preflight, backup, install и healthcheck. Внутренний `--yes` исключает второй bootstrap prompt; setup `--yes` подавляет только один setup prompt. Сбой, cancellation или неподтверждённый rollback bootstrap останавливает все последующие router stages с сохранением standalone exit code. Добавленные packages могут остаться; Xray replacement использует отдельный проверенный backup/rollback standalone transaction. Service restart и autostart не выполняются.
+
 Dry-run показывает абстрактный secret-free flow без чтения source, reuse file, secret input или environment value; без stdin prompt; и без DNS/HTTPS request, subprocess, private workspace, profiles, generated files, write или router actions:
 
 ```sh
 python3 scripts/routerkit.py --dry-run setup
 python3 scripts/routerkit.py setup --apply --dry-run
+python3 scripts/routerkit.py setup --apply --bootstrap-apply --dry-run
 ```
 
 Этот setup dry-run contract отличается от standalone `profile-source --dry-run`: standalone profile-source может выполнить HTTPS network read для validation selection, а setup dry-run не выполняет secret-input или network access. Загрузка Python modules и определение repository path не входят в secret-input contract.
 
-Эта integration закрывает #20 и #24, но не завершает epic #5. Standalone bootstrap apply — #28 под #13; setup integration остаётся #29, autostart — #14, Netcraze proxy/policy — #15, hardware validation — #16. `setup` в этом release не вызывает `bootstrap`. Setup не скачивает и не устанавливает Xray, не включает autostart, не обнаруживает devices, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
+Эта integration функционально завершает #29 и parent #13, но не epic #5. Autostart — #14, Netcraze proxy/policy — #15, device discovery — #21, hardware validation — #16. Path не считается hardware-tested до завершения #16. Обычный `setup` и `setup --apply` не запускают bootstrap; pinned Xray скачивается или устанавливается только в явном combined mode. Ни один setup mode не активирует Entware, не включает autostart, не обнаруживает devices, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
 
 ## Команда install
 

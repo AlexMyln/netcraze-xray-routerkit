@@ -7,10 +7,10 @@
 Перед запуском guided installer на роутере уже должны быть:
 
 - Entware/OPKG на USB-накопителе;
+- завершённая официальная activation Entware с доступным `/opt`;
 - рабочий SSH-доступ в Entware shell;
-- Xray binary по пути `/opt/sbin/xray`;
 - доступный для записи каталог `/opt/etc/xray/configs`;
-- базовые утилиты: `curl`, `jq`, `tar`.
+- Python 3 для запуска RouterKit.
 
 ## Что входит в область работы guided installer
 
@@ -22,11 +22,10 @@
 - принять subscription URLs через скрытый ввод или environment variables;
 - извлечь VLESS Reality/TCP ноды и показать их с маскировкой секретов;
 - сгенерировать Xray config fragments;
+- с явным `setup --apply --bootstrap-apply` установить фиксированный набор prerequisites и установить либо transactionally заменить manifest-pinned Xray binary;
 - установить `S23xray-direct`;
 - оставить `S24xray` выключенным;
-- запустить Xray напрямую без `xkeen -start`;
 - выполнить healthcheck;
-- предложить включить autostart после явного подтверждения;
 - вывести точные шаги для Web UI proxy connections и policies.
 
 ## Что не входит в первую версию guided installer
@@ -37,6 +36,7 @@
 - устанавливать компоненты прошивки Netcraze/Keenetic;
 - устанавливать Entware/OPKG с нуля;
 - слепо скачивать и устанавливать Xray из непроверенных источников;
+- перезапускать services, включать autostart или вызывать `xkeen -start`;
 - автоматически кликать Web UI;
 - менять default policy роутера;
 - создавать TPROXY/REDIRECT/firewall rules;
@@ -46,4 +46,4 @@
 
 Подготовка USB, установка Entware, компоненты прошивки и назначение Web UI policies зависят от модели, прошивки и конкретной домашней сети. Эти шаги могут быть разрушительными, если автоматизировать их вслепую.
 
-Установщик должен fail closed: если prerequisites не выполнены, он должен остановиться и вывести checklist, а не угадывать.
+Установщик должен fail closed: если prerequisites не выполнены, он должен остановиться, а не угадывать. Package additions явного bootstrap могут остаться, а Xray replacement имеет отдельную проверенную границу backup/rollback. Hardware validation остаётся в #16.

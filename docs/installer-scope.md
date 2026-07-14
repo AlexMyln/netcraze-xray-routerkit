@@ -7,10 +7,10 @@ The planned guided installer is a one-command core setup helper, not a bare-rout
 Before running the guided installer, the router must already have:
 
 - Entware/OPKG installed on USB storage;
+- official Entware activation completed with `/opt` available;
 - working SSH access to the Entware shell;
-- Xray binary available at `/opt/sbin/xray`;
 - writable `/opt/etc/xray/configs`;
-- basic tools such as `curl`, `jq`, and `tar`.
+- Python 3 available to run RouterKit.
 
 ## In scope for the guided installer
 
@@ -22,11 +22,10 @@ The guided installer may:
 - accept subscription URLs through hidden input or environment variables;
 - extract and mask VLESS Reality/TCP nodes;
 - generate Xray config fragments;
+- with explicit `setup --apply --bootstrap-apply`, install a fixed prerequisite set and install or transactionally replace the manifest-pinned Xray binary;
 - install `S23xray-direct`;
 - keep `S24xray` disabled;
-- start Xray directly without `xkeen -start`;
 - run healthcheck;
-- optionally enable autostart after explicit confirmation;
 - print exact Web UI steps for proxy connections and policies.
 
 ## Out of scope for the first guided installer
@@ -37,6 +36,7 @@ The first version will not:
 - install Netcraze/Keenetic firmware components;
 - install Entware/OPKG from scratch;
 - blindly download and install Xray from unverified sources;
+- restart services, enable autostart, or call `xkeen -start`;
 - automate Web UI clicks;
 - change default router policies;
 - create TPROXY/REDIRECT/firewall rules;
@@ -46,4 +46,4 @@ The first version will not:
 
 USB preparation, Entware installation, firmware components, and Web UI policy assignment are device-specific and can be destructive if automated blindly.
 
-The installer should fail closed: if prerequisites are missing, it must stop and print a checklist instead of guessing.
+The installer should fail closed: if prerequisites are missing, it must stop instead of guessing. Package additions made by explicit bootstrap may remain, while Xray replacement has a separate verified backup/rollback boundary. Hardware validation remains tracked in #16.

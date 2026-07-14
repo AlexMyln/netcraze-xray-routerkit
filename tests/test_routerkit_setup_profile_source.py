@@ -710,7 +710,16 @@ class SetupExecutionOrderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = workspace_under(Path(directory))
             args = cli.parse_args(
-                ["setup", "--source-env", source_name, "--primary-index", "1", "--apply", "--yes"]
+                [
+                    "setup",
+                    "--source-env",
+                    source_name,
+                    "--primary-index",
+                    "1",
+                    "--apply",
+                    "--bootstrap-apply",
+                    "--yes",
+                ]
             )
 
             def runner(command, **kwargs):
@@ -745,6 +754,7 @@ class SetupExecutionOrderTests(unittest.TestCase):
                 "routerkit-profile-source.py",
                 "generate-xray-profiles.py",
                 "routerkit-plan.py",
+                "routerkit-bootstrap.py",
                 "preflight.sh",
                 "backup.sh",
                 "install-xray-direct.sh",

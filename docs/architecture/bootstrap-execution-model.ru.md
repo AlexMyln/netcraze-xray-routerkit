@@ -1,8 +1,8 @@
 # ADR: модель выполнения bootstrap
 
-- Статус: принято для read-only planner и явно gated standalone apply
+- Статус: принято для read-only planner, явно gated standalone apply и явной setup integration
 - Дата: 2026-07-13
-- Issues: [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13), planner [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), standalone apply [#28](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/28), будущая setup integration [#29](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/29), epic [#5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5)
+- Issues: [#13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13), planner [#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18), standalone apply [#28](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/28), setup integration [#29](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/29), epic [#5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5)
 
 ## Вопрос
 
@@ -17,7 +17,7 @@
 3. после ручной activation Entware и подтверждения Python 3 управление передаётся Python CLI репозитория для строгой проверки manifest и планирования;
 4. `routerkit bootstrap` и standalone `--dry-run` остаются read-only. `routerkit bootstrap --apply` — отдельная write-capable transaction, требующая fresh live inventory, буквальный `/opt`, trusted fixed-path Entware `opkg`, Linux arm64 и явное подтверждение. `--yes` пропускает только prompt, а `--apply --dry-run` остаётся no-write preview;
 5. standalone transaction устанавливает только отсутствующие фиксированные prerequisites, получает только reviewed manifest artifact, проверяет private candidate, сохраняет verified rollback binary, выполняет atomic replacement, post-validation, rollback при ошибке и публикует non-secret provenance receipt;
-6. обычный `routerkit setup` не вызывает bootstrap. Эта integration остаётся #29.
+6. обычный `routerkit setup` и `routerkit setup --apply` не вызывают bootstrap. Только `routerkit setup --apply --bootstrap-apply` делегирует repository-default standalone transaction после strict plan и одного видимого setup confirmation, затем выполняет preflight, backup, install и healthcheck.
 
 Так trust decision, review pin и подтверждение оператора остаются на полноценном host, а проект не предполагает наличие Python на неподготовленном роутере.
 
@@ -95,7 +95,11 @@ Validated candidate копируется в exclusive `0755` file destination di
 
 ## Влияние на `routerkit setup`
 
-`routerkit bootstrap --apply` остаётся standalone. `routerkit setup` его не вызывает. #29 сможет добавить явный setup gate позже, сохранив confirmation/safety contract; скрытая package installation или Xray replacement недопустимы.
+`routerkit bootstrap --apply` остаётся доступным отдельно. Setup не добавляет manifest, inventory, package, artifact или target override: явный combined mode делегирует repository-default standalone apply с внутренним `--yes`, потому что setup уже завершил strict plan и одно видимое confirmation. Порядок стадий: source/reuse/wizard → private profiles → generator → cleanup private profiles → strict plan → confirmation → bootstrap → preflight → backup → install → healthcheck. Без обоих флагов `--apply` и `--bootstrap-apply` bootstrap не строится и не запускается.
+
+Выбранная setup source environment variable удаляется после profile acquisition и отсутствует в environment bootstrap и всех последующих child processes; unrelated variables и `PATH` сохраняются. Setup parent запускает bootstrap в отдельной session, пересылает перехватываемые `SIGINT`, `SIGTERM` и `SIGHUP` прямому bootstrap process, сохраняет первый parent signal, ждёт без recovery timeout и всегда reap дочерний процесс. Он не сигналит process group bootstrap и не использует force-kill lifecycle private workspace. Standalone bootstrap отвечает за coordination собственных children, binary recovery, cleanup и любые rollback claims. Его nonzero result, включая exit `3`, `129`, `130` или `143`, останавливает все последующие router stages и сохраняется; child zero после parent signal превращается в `128 + signal`, spawn failure возвращает `127`.
+
+Integrated setup dry-run показывает только абстрактную bootstrap stage. Он не читает source/environment value, не спрашивает input, не создаёт workspace, не запускает subprocess/network и не выполняет package, staging, candidate, backup, receipt, Xray или router write. Manual Entware activation остаётся обязательной, package additions могут остаться за пределами Xray rollback boundary, service restart и autostart не выполняются. Hardware validation остаётся #16.
 
 ## Не входит в задачу
 

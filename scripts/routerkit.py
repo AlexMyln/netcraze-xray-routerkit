@@ -46,6 +46,8 @@ SETUP_APPLY_TARGET_ROOT_MESSAGE = "setup --apply currently supports only --targe
 
 SETUP_YES_REQUIRES_APPLY_MESSAGE = "setup --yes requires --apply."
 
+SETUP_BOOTSTRAP_REQUIRES_APPLY_MESSAGE = "setup --bootstrap-apply requires --apply."
+
 MAX_REUSE_PROFILES_BYTES = 1024 * 1024
 
 SKIP_FLAGS_REQUIRE_APPLY_MESSAGE = (
@@ -67,6 +69,13 @@ class CommandStep:
     suppress_output: bool = False
     cwd: Optional[Path] = None
     remove_env_names: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SetupBootstrapResult:
+    returncode: int
+    first_signal: Optional[int] = None
+    spawn_failed: bool = False
 
 
 class SetupCleanupError(Exception):
@@ -283,6 +292,8 @@ def validate_install_args(args: argparse.Namespace) -> None:
 
 
 def validate_setup_args(args: argparse.Namespace) -> None:
+    if args.bootstrap_apply and not args.apply:
+        raise RouterkitCliError(SETUP_BOOTSTRAP_REQUIRES_APPLY_MESSAGE, exit_code=2)
     if args.source_env:
         validate_setup_source_env_name(args.source_env)
 
@@ -486,6 +497,23 @@ def build_router_apply_steps(
             )
         )
     return steps
+
+
+def build_setup_bootstrap_apply_step(
+    repo_root: Path,
+    *,
+    remove_env_names: Tuple[str, ...] = (),
+) -> CommandStep:
+    return CommandStep(
+        "bootstrap apply",
+        [
+            sys.executable,
+            _repo_script(Path(repo_root), "routerkit-bootstrap.py"),
+            "--apply",
+            "--yes",
+        ],
+        remove_env_names=remove_env_names,
+    )
 
 
 def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List[CommandStep]:
@@ -748,6 +776,11 @@ def render_setup_pipeline(args: argparse.Namespace) -> str:
         if not args.yes:
             lines.append(f"{index}. confirmation gate")
             index += 1
+        if args.bootstrap_apply:
+            lines.append(
+                f"{index}. bootstrap apply (fixed missing packages + pinned Xray transaction)"
+            )
+            index += 1
         for stage in ("preflight", "backup", "install", "healthcheck"):
             lines.append(f"{index}. {stage}")
             index += 1
@@ -760,6 +793,7 @@ def render_setup_steps(
     generated: str,
     include_apply: bool,
     include_confirmation: bool,
+    bootstrap_apply: bool = False,
 ) -> str:
     """Deprecated compatibility wrapper for callers using the older renderer."""
 
@@ -770,6 +804,7 @@ def render_setup_steps(
         legacy_wizard=False,
         deprecated_force_wizard=False,
         apply=include_apply,
+        bootstrap_apply=bootstrap_apply,
         yes=not include_confirmation,
         generated=generated,
         target_root="/opt",
@@ -777,9 +812,22 @@ def render_setup_steps(
     return render_setup_pipeline(args)
 
 
-def confirm_setup_apply(input_fn=input) -> bool:
-    answer = input_fn("Proceed with router apply stages? [y/N]: ").strip().lower()
+def confirm_setup_apply(input_fn=input, *, bootstrap_apply: bool = False) -> bool:
+    prompt = (
+        "Proceed with bootstrap and router apply stages? [y/N]: "
+        if bootstrap_apply
+        else "Proceed with router apply stages? [y/N]: "
+    )
+    answer = input_fn(prompt).strip().lower()
     return answer in {"y", "yes"}
+
+
+def print_setup_bootstrap_warning() -> None:
+    print("Bootstrap apply requested:")
+    print("- may install the fixed Entware prerequisite set;")
+    print("- may replace /opt/sbin/xray transactionally;")
+    print("- package additions are not automatically rolled back;")
+    print("- no service restart or autostart is performed.")
 
 
 def _print_setup_source_summary(mode: str) -> None:
@@ -798,16 +846,21 @@ def print_setup_plan_summary(mode: str = "source") -> None:
     print("Setup plan completed.")
     _print_setup_source_summary(mode)
     print("No router apply steps were executed.")
+    print("No bootstrap was executed.")
     print("Use --apply to continue through preflight, backup, install, and healthcheck.")
+    print("Use --apply --bootstrap-apply for explicit runtime preparation before router apply.")
     print(
-        "Bootstrap integration with setup, autostart, device discovery, and policy automation remain pending."
+        "Autostart, device discovery, and policy automation remain pending."
     )
 
 
-def print_setup_apply_summary(mode: str = "source") -> None:
+def print_setup_apply_summary(mode: str = "source", *, bootstrap_apply: bool = False) -> None:
     print("Setup apply completed.")
     _print_setup_source_summary(mode)
     print("Strict plan passed.")
+    if bootstrap_apply:
+        print("Bootstrap apply completed before preflight.")
+        print("Bootstrap performed no service restart or autostart.")
     print("Preflight passed.")
     print("Backup completed.")
     print("Install completed.")
@@ -816,6 +869,154 @@ def print_setup_apply_summary(mode: str = "source") -> None:
     print("Netcraze proxy connections, policies, and default policy were not changed.")
     print("Firewall rules were not changed.")
     print("xkeen -start was not called.")
+
+
+class SetupBootstrapSupervisor:
+    """Forward setup signals while allowing standalone bootstrap recovery to finish."""
+
+    def __init__(self) -> None:
+        self.child: Optional[subprocess.Popen] = None
+        self.first_signal: Optional[int] = None
+        self._pending_signals: List[int] = []
+        self._previous_handlers: Dict[int, object] = {}
+        self._previous_signal_mask = None
+
+    @staticmethod
+    def handled_signals() -> Tuple[int, ...]:
+        result = []
+        for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+            signum = getattr(signal, name, None)
+            if signum is not None and signum not in result:
+                result.append(signum)
+        return tuple(result)
+
+    def _handle_signal(self, signum: int, _frame: Optional[FrameType]) -> None:
+        if self.first_signal is None:
+            self.first_signal = signum
+        child = self.child
+        if child is None:
+            self._pending_signals.append(signum)
+            return
+        try:
+            child.send_signal(signum)
+        except OSError:
+            pass
+
+    def _block_signals(self) -> None:
+        if (
+            os.name == "posix"
+            and threading.current_thread() is threading.main_thread()
+            and hasattr(signal, "pthread_sigmask")
+        ):
+            self._previous_signal_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                self.handled_signals(),
+            )
+
+    def _restore_signal_mask(self) -> None:
+        if self._previous_signal_mask is None:
+            return
+        previous = self._previous_signal_mask
+        self._previous_signal_mask = None
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+    def _install_handlers(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for signum in self.handled_signals():
+            self._previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, self._handle_signal)
+
+    def _restore_handlers(self) -> None:
+        for signum, previous in self._previous_handlers.items():
+            signal.signal(signum, previous)
+        self._previous_handlers.clear()
+
+    @staticmethod
+    def _child_result(returncode: int, first_signal: Optional[int]) -> int:
+        if returncode < 0:
+            returncode = 128 + abs(returncode)
+        if first_signal is not None and returncode == 0:
+            return 128 + first_signal
+        return returncode
+
+    def run(self, step: CommandStep) -> SetupBootstrapResult:
+        child_env = None
+        if step.remove_env_names:
+            child_env = os.environ.copy()
+            for name in step.remove_env_names:
+                child_env.pop(name, None)
+
+        try:
+            self._block_signals()
+            self._install_handlers()
+            # Do not let the bootstrap child inherit the parent's temporary
+            # blocked mask. Signals in the remaining spawn window are recorded
+            # by the installed handlers and forwarded after child registration.
+            self._restore_signal_mask()
+            self.child = subprocess.Popen(
+                list(step.command),
+                cwd=str(step.cwd) if step.cwd is not None else None,
+                env=child_env,
+                start_new_session=os.name == "posix",
+            )
+            for signum in self._pending_signals:
+                try:
+                    self.child.send_signal(signum)
+                except OSError:
+                    pass
+            self._pending_signals.clear()
+            while True:
+                try:
+                    returncode = self.child.wait()
+                    break
+                except InterruptedError:
+                    continue
+            return SetupBootstrapResult(
+                self._child_result(returncode, self.first_signal),
+                first_signal=self.first_signal,
+            )
+        except (OSError, RuntimeError, ValueError):
+            return SetupBootstrapResult(127, first_signal=self.first_signal, spawn_failed=True)
+        finally:
+            try:
+                self._restore_signal_mask()
+            finally:
+                self._restore_handlers()
+                self.child = None
+
+
+def run_setup_bootstrap_apply(step: CommandStep) -> SetupBootstrapResult:
+    return SetupBootstrapSupervisor().run(step)
+
+
+def print_setup_bootstrap_failure(result: SetupBootstrapResult) -> None:
+    if result.spawn_failed:
+        print("routerkit: could not run bootstrap apply.", file=sys.stderr)
+        return
+    if result.first_signal is not None:
+        try:
+            signal_name = signal.Signals(result.first_signal).name
+        except ValueError:
+            signal_name = str(result.first_signal)
+        print(
+            f"routerkit: bootstrap apply ended after setup received {signal_name} "
+            f"(exit code {result.returncode}).",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"routerkit: bootstrap apply failed with exit code {result.returncode}.",
+            file=sys.stderr,
+        )
+    print(
+        "No preflight, backup, install, or healthcheck stage was started.",
+        file=sys.stderr,
+    )
+    print(
+        "Bootstrap package additions may remain; review the bootstrap output above.",
+        file=sys.stderr,
+    )
 
 
 def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
@@ -954,10 +1155,30 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         print_setup_plan_summary(mode)
         return 0
 
-    if not args.yes and not confirm_setup_apply(input_fn=input_fn):
-        print("Cancelled before router apply.")
+    if args.bootstrap_apply:
+        print_setup_bootstrap_warning()
+
+    if not args.yes and not confirm_setup_apply(
+        input_fn=input_fn,
+        bootstrap_apply=args.bootstrap_apply,
+    ):
+        if args.bootstrap_apply:
+            print("Cancelled before bootstrap and router apply.")
+        else:
+            print("Cancelled before router apply.")
         print("Generated local files may exist, but no router apply stages were started.")
         return 1
+
+    if args.bootstrap_apply:
+        bootstrap_result = run_setup_bootstrap_apply(
+            build_setup_bootstrap_apply_step(
+                repo_root,
+                remove_env_names=remove_env_names,
+            )
+        )
+        if bootstrap_result.returncode != 0 or bootstrap_result.first_signal is not None:
+            print_setup_bootstrap_failure(bootstrap_result)
+            return bootstrap_result.returncode
 
     apply_steps = build_router_apply_steps(
         args.generated,
@@ -966,7 +1187,7 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
     )
     code = run_steps(apply_steps)
     if code == 0:
-        print_setup_apply_summary(mode)
+        print_setup_apply_summary(mode, bootstrap_apply=args.bootstrap_apply)
     return code
 
 
@@ -1264,6 +1485,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--apply",
         action="store_true",
         help="Continue through confirmed preflight, backup, install, and healthcheck stages.",
+    )
+    setup.add_argument(
+        "--bootstrap-apply",
+        action="store_true",
+        help=(
+            "Before preflight, run the confirmed standalone pinned-Xray bootstrap transaction. "
+            "Requires --apply."
+        ),
     )
     setup.add_argument(
         "--yes",

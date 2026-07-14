@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Setup supervises and forwards catchable signals to the standalone bootstrap child so verified binary recovery is not abandoned.
 - Bootstrap now coordinates SIGINT through the same verified replacement-recovery boundary, closing the atomic-replacement cancellation gap.
 - Bootstrap now treats signal-time rollback as a recovery critical section and never suppresses an unproven binary rollback.
 - Bootstrap artifact acquisition is HTTPS-only, proxy-free, destination-validated, bounded, checksum-gated, and safely extracted.
@@ -12,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Explicit `routerkit setup --apply --bootstrap-apply` orchestration for the reviewed standalone bootstrap transaction.
 - Transactional standalone bootstrap apply for fixed Entware prerequisites and the manifest-pinned Xray artifact.
 - Verified existing-binary backup, atomic replacement, post-install validation, rollback, and provenance receipt.
 - Default setup integration for hidden/local/HTTPS profile sources and primary/fallback selection.
@@ -51,6 +53,7 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- Bootstrap remains opt-in inside setup and runs only after strict planning and the visible setup confirmation.
 - `routerkit bootstrap` remains read-only by default; writes require explicit `--apply` and confirmation.
 - `routerkit setup` no longer silently reuses a current-directory `profiles.json`.
 - Profile-source cancellation messaging no longer makes an unconditional no-write claim.
