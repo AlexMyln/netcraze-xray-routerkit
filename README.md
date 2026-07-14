@@ -357,8 +357,8 @@ Use the GitHub issue templates for sanitized bug reports and feature requests.
 
 ## Roadmap
 
-- Move toward a guided one-click installer after Entware/OPKG and Xray prerequisites are already in place: generate profiles, install configs, install `S23xray-direct`, run healthchecks, and print exact Netcraze Web UI steps. The guided installer assumes Entware, SSH, and Xray are already available.
-- Keep the from-zero path manual for USB storage, Entware/Xray setup, and Netcraze Web UI/device policy decisions; no ready-to-flash USB/router image is promised.
+- Move toward a guided one-click installer after supported USB storage, official Entware/OPKG activation, and private SSH access are available: generate profiles, optionally prepare the pinned Xray runtime through explicit `--bootstrap-apply`, install configs and `S23xray-direct`, run healthchecks, and print exact Netcraze Web UI steps. A pre-existing Xray binary is not required for the explicit bootstrap path.
+- Keep the from-zero path manual for USB preparation, official Entware activation, SSH access, and Netcraze Web UI/device-policy decisions; RouterKit does not provide a ready-to-flash USB/router image, and normal setup modes do not silently install Xray.
 - Extend dry-run install planning with optional masked previews.
 - Add optional config rendering previews with masked secrets.
 - Add sample Web UI naming checklists.
