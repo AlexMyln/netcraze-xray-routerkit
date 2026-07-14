@@ -8,7 +8,7 @@ Guided setup версии v0.2-alpha объединяет profile-source acquisi
 
 - Entware установлен на USB-накопитель;
 - SSH-доступ к Entware shell работает;
-- бинарник Xray доступен по пути `/opt/sbin/xray`;
+- `/opt/sbin` доступен; существующий `/opt/sbin/xray` можно заменить, но standalone bootstrap apply также поддерживает clean install;
 - `/opt` и `/opt/etc` доступны на роутере.
 
 ## Единый CLI
@@ -21,21 +21,23 @@ python3 scripts/routerkit.py generate --profiles profiles.json --out generated
 python3 scripts/routerkit.py plan --generated generated
 ```
 
-### Read-only bootstrap planner
+### Standalone bootstrap transaction
 
-Первый slice [bootstrap #13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13) ([#18](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/18)) проверяет prerequisites и repository-owned pinned Xray manifest:
+Read-only planner (#18) и отдельно gated standalone apply (#28) входят в [bootstrap #13](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/13):
 
 ```sh
 python3 scripts/routerkit.py bootstrap
-python3 scripts/routerkit.py bootstrap --json
 python3 scripts/routerkit.py bootstrap --dry-run
+python3 scripts/routerkit.py bootstrap --apply
+python3 scripts/routerkit.py bootstrap --apply --yes
+python3 scripts/routerkit.py bootstrap --apply --dry-run
 ```
 
-Начальный scope — только Linux `aarch64`/`arm64`. Обычный режим и `--dry-run` одинаково read-only. Planner не устанавливает Entware/packages, не скачивает и не заменяет Xray, не пишет в `/opt`, не управляет services/autostart, firewall или Netcraze policies. Для tests/development доступны offline inventory files.
+Поддерживается только Linux `aarch64`/`arm64`. Обычный режим и standalone `--dry-run` не выполняют package command, network, staging или запись. Apply требует буквальный `/opt`, свежий live inventory, trusted fixed-path Entware `opkg` и явное подтверждение; `--yes` пропускает только этот prompt. Apply dry-run — no-write preview без prompt. Synthetic inventory разрешён только для read-only tests/development и конфликтует с apply. Manifest репозитория используется по умолчанию; standalone `--manifest` — явный operator-controlled trust input, проходящий те же validation gates.
 
-Plan показывает явное соответствие команд пакетам Entware, включая `sha256sum -> coreutils-sha256sum`, а `ca-bundle` остаётся базовым требованием. Имена относятся к документированному начальному Entware-окружению arm64/aarch64 и требуют hardware validation. Режим остаётся read-only; установка пакетов относится к более позднему slice #13.
+Apply запрашивает только отсутствующие top-level имена из фиксированного набора `ca-bundle`, `curl`, `unzip`, `coreutils-sha256sum` и `python3`; RouterKit не запрашивает upgrade или removal. Trusted dependencies и maintainer scripts остаются под управлением `opkg`, а additions могут остаться после частично неуспешного package install или более позднего сбоя, потому что автоматическое удаление небезопасно. Затем exact manifest URL stream-загружается через proxy-free HTTPS с per-hop destination/TLS validation и жёсткими limits, проверяется SHA-256, безопасно извлекается только root `xray`, а первая непустая строка version output обязана точно совпасть с pin. Существующий executable хэшируется и копируется в проверенный deterministic backup до same-filesystem atomic replacement. Ошибка post-install hash/version восстанавливает backup; failed clean install удаляет новый candidate. Restrictive receipt сохраняет non-secret provenance и разрешает idempotent no-network rerun только при совпадении всех identity fields.
 
-Решение описано в [ADR модели выполнения](architecture/bootstrap-execution-model.ru.md), а evidence официального release/checksum и независимого hash — в [проверке Xray pin](xray-artifact-pin.ru.md). Hardware validation остаётся заблокирован [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), настоящий one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) не завершён.
+Manual Entware activation остаётся обязательной. Bootstrap не перезапускает services, не включает autostart, не устанавливает configs, не читает profile secrets, не вызывает `xkeen -start` и не меняет firewall/Web UI/policies. Ctrl-C на apply confirmation prompt не запускает transaction action. Во время mutable apply `SIGINT`, `SIGTERM` и `SIGHUP` останавливают forward progress; после replacement повторные catchable signals откладываются до завершения проверенного rollback или удаления clean-install candidate и cleanup staging. Проверенное SIGINT recovery завершается exit `130`; неподтверждённое recovery возвращает отдельный exit `3` с указанием сохранённого backup. `SIGKILL`, потеря питания, kernel failure и host crash остаются residual risks. `routerkit setup` не вызывает bootstrap; integration — #29. Полный contract описан в [ADR модели выполнения](architecture/bootstrap-execution-model.ru.md) и [проверке Xray pin](xray-artifact-pin.ru.md). Hardware validation остаётся [#16](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/16), настоящий one-command [epic #5](https://github.com/AlexMyln/netcraze-xray-routerkit/issues/5) не завершён.
 
 Проверки на стороне роутера:
 
@@ -209,7 +211,7 @@ python3 scripts/routerkit.py setup --apply --dry-run
 
 Этот setup dry-run contract отличается от standalone `profile-source --dry-run`: standalone profile-source может выполнить HTTPS network read для validation selection, а setup dry-run не выполняет secret-input или network access. Загрузка Python modules и определение repository path не входят в secret-input contract.
 
-Эта integration закрывает #20 и #24, но не завершает epic #5. Bootstrap apply остаётся в #13, autostart — в #14, Netcraze proxy/policy — в #15, hardware validation — в #16. `setup` в этом release не вызывает `bootstrap`. Setup не скачивает и не устанавливает Xray, не включает autostart, не обнаруживает devices, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
+Эта integration закрывает #20 и #24, но не завершает epic #5. Standalone bootstrap apply — #28 под #13; setup integration остаётся #29, autostart — #14, Netcraze proxy/policy — #15, hardware validation — #16. `setup` в этом release не вызывает `bootstrap`. Setup не скачивает и не устанавливает Xray, не включает autostart, не обнаруживает devices, не меняет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
 
 ## Команда install
 

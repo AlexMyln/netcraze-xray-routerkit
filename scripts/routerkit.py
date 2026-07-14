@@ -381,6 +381,8 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
             command.extend(["--target-root", args.target_root])
         if args.apply:
             command.append("--apply")
+        if args.yes:
+            command.append("--yes")
         return command
 
     if args.command == "wizard":
@@ -797,7 +799,9 @@ def print_setup_plan_summary(mode: str = "source") -> None:
     _print_setup_source_summary(mode)
     print("No router apply steps were executed.")
     print("Use --apply to continue through preflight, backup, install, and healthcheck.")
-    print("Bootstrap apply, autostart, device discovery, and policy automation remain pending.")
+    print(
+        "Bootstrap integration with setup, autostart, device discovery, and policy automation remain pending."
+    )
 
 
 def print_setup_apply_summary(mode: str = "source") -> None:
@@ -1285,8 +1289,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     bootstrap = subparsers.add_parser(
         "bootstrap",
-        help="Inspect prerequisites and print a read-only pinned-Xray bootstrap plan.",
-        description="Validate the pinned Xray manifest and inspect prerequisites without changing the system.",
+        help="Plan or explicitly apply the standalone pinned-Xray bootstrap transaction.",
+        description="Keep bootstrap read-only by default; use --apply for the confirmed standalone transaction.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     bootstrap.add_argument(
@@ -1306,7 +1310,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     bootstrap.add_argument(
         "--apply",
         action="store_true",
-        help="Reserved; delegated bootstrap will reject it without changes.",
+        help="Run the standalone package and pinned-Xray transaction after confirmation.",
+    )
+    bootstrap.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip only the bootstrap confirmation prompt; requires --apply.",
     )
     bootstrap.add_argument(
         "--dry-run",
