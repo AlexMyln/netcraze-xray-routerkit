@@ -37,11 +37,6 @@ INSTALL_PLAN_NOTICE = (
     "Use --apply to install generated configs and S23xray-direct."
 )
 
-AUTOSTART_RESERVED_MESSAGE = (
-    "Autostart enabling will be added after install apply flow is tested. "
-    "For now, run chmod manually after healthcheck."
-)
-
 INSTALL_APPLY_TARGET_ROOT_MESSAGE = "install --apply currently supports only --target-root /opt."
 
 SETUP_APPLY_TARGET_ROOT_MESSAGE = "setup --apply currently supports only --target-root /opt."
@@ -49,6 +44,14 @@ SETUP_APPLY_TARGET_ROOT_MESSAGE = "setup --apply currently supports only --targe
 SETUP_YES_REQUIRES_APPLY_MESSAGE = "setup --yes requires --apply."
 
 SETUP_BOOTSTRAP_REQUIRES_APPLY_MESSAGE = "setup --bootstrap-apply requires --apply."
+
+SETUP_AUTOSTART_REQUIRES_APPLY_MESSAGE = "setup --enable-autostart requires --apply."
+
+INSTALL_AUTOSTART_REQUIRES_APPLY_MESSAGE = "install --enable-autostart requires --apply."
+
+INSTALL_AUTOSTART_REQUIRES_HEALTHCHECK_MESSAGE = (
+    "install --enable-autostart conflicts with --skip-healthcheck."
+)
 
 MAX_REUSE_PROFILES_BYTES = 1024 * 1024
 
@@ -286,8 +289,10 @@ def _repo_script(repo_root: Path, name: str) -> str:
 
 
 def validate_install_args(args: argparse.Namespace) -> None:
-    if args.enable_autostart:
-        raise RouterkitCliError(AUTOSTART_RESERVED_MESSAGE, exit_code=2)
+    if args.enable_autostart and not args.apply:
+        raise RouterkitCliError(INSTALL_AUTOSTART_REQUIRES_APPLY_MESSAGE, exit_code=2)
+    if args.enable_autostart and args.skip_healthcheck:
+        raise RouterkitCliError(INSTALL_AUTOSTART_REQUIRES_HEALTHCHECK_MESSAGE, exit_code=2)
     if not args.apply and any((args.skip_preflight, args.skip_backup, args.skip_healthcheck)):
         raise RouterkitCliError(SKIP_FLAGS_REQUIRE_APPLY_MESSAGE, exit_code=2)
     if args.apply and args.target_root != "/opt":
@@ -297,6 +302,8 @@ def validate_install_args(args: argparse.Namespace) -> None:
 def validate_setup_args(args: argparse.Namespace) -> None:
     if args.bootstrap_apply and not args.apply:
         raise RouterkitCliError(SETUP_BOOTSTRAP_REQUIRES_APPLY_MESSAGE, exit_code=2)
+    if args.enable_autostart and not args.apply:
+        raise RouterkitCliError(SETUP_AUTOSTART_REQUIRES_APPLY_MESSAGE, exit_code=2)
     if args.source_env:
         validate_setup_source_env_name(args.source_env)
 
@@ -397,6 +404,26 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
             command.append("--apply")
         if args.yes:
             command.append("--yes")
+        return command
+
+    if args.command == "autostart":
+        command = [sys.executable, _repo_script(repo_root, "routerkit-autostart.py")]
+        if args.verify:
+            command.append("--verify")
+        if args.enable:
+            command.append("--enable")
+        if args.disable:
+            command.append("--disable")
+        if args.apply:
+            command.append("--apply")
+        if args.dry_run:
+            command.append("--dry-run")
+        if args.yes:
+            command.append("--yes")
+        if args.json:
+            command.append("--json")
+        if args.target_root != "/opt":
+            command.extend(["--target-root", args.target_root])
         return command
 
     if args.command == "wizard":
@@ -519,6 +546,24 @@ def build_setup_bootstrap_apply_step(
     )
 
 
+def build_setup_autostart_apply_step(
+    repo_root: Path,
+    *,
+    remove_env_names: Tuple[str, ...] = (),
+) -> CommandStep:
+    return CommandStep(
+        "autostart apply",
+        [
+            sys.executable,
+            _repo_script(Path(repo_root), "routerkit-autostart.py"),
+            "--enable",
+            "--apply",
+            "--yes",
+        ],
+        remove_env_names=remove_env_names,
+    )
+
+
 def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List[CommandStep]:
     validate_install_args(args)
 
@@ -546,6 +591,18 @@ def build_install_apply_steps(args: argparse.Namespace, repo_root: Path) -> List
             include_healthcheck=not args.skip_healthcheck,
         )
     )
+    if args.enable_autostart:
+        steps.append(
+            CommandStep(
+                "autostart apply",
+                [
+                    sys.executable,
+                    _repo_script(repo_root, "routerkit-autostart.py"),
+                    "--enable",
+                    "--apply",
+                ],
+            )
+        )
     return steps
 
 
@@ -787,6 +844,11 @@ def render_setup_pipeline(args: argparse.Namespace) -> str:
         for stage in ("preflight", "backup", "install", "healthcheck"):
             lines.append(f"{index}. {stage}")
             index += 1
+        if args.enable_autostart:
+            lines.append(
+                f"{index}. enable S23xray-direct autostart and restart-verify loopback listeners"
+            )
+            index += 1
     return "\n".join(lines)
 
 
@@ -808,6 +870,7 @@ def render_setup_steps(
         deprecated_force_wizard=False,
         apply=include_apply,
         bootstrap_apply=bootstrap_apply,
+        enable_autostart=False,
         yes=not include_confirmation,
         generated=generated,
         target_root="/opt",
@@ -815,12 +878,20 @@ def render_setup_steps(
     return render_setup_pipeline(args)
 
 
-def confirm_setup_apply(input_fn=input, *, bootstrap_apply: bool = False) -> bool:
-    prompt = (
-        "Proceed with bootstrap and router apply stages? [y/N]: "
-        if bootstrap_apply
-        else "Proceed with router apply stages? [y/N]: "
-    )
+def confirm_setup_apply(
+    input_fn=input,
+    *,
+    bootstrap_apply: bool = False,
+    enable_autostart: bool = False,
+) -> bool:
+    if bootstrap_apply and enable_autostart:
+        prompt = "Proceed with bootstrap, router apply, and autostart stages? [y/N]: "
+    elif bootstrap_apply:
+        prompt = "Proceed with bootstrap and router apply stages? [y/N]: "
+    elif enable_autostart:
+        prompt = "Proceed with router apply and autostart stages? [y/N]: "
+    else:
+        prompt = "Proceed with router apply stages? [y/N]: "
     answer = input_fn(prompt).strip().lower()
     return answer in {"y", "yes"}
 
@@ -831,6 +902,15 @@ def print_setup_bootstrap_warning() -> None:
     print("- may replace /opt/sbin/xray transactionally;")
     print("- package additions are not automatically rolled back;")
     print("- no service restart or autostart is performed.")
+
+
+def print_setup_autostart_warning() -> None:
+    print("Autostart enable requested:")
+    print("- runs only after install and healthcheck;")
+    print("- may restart xray-direct for strict verification;")
+    print("- enables only S23xray-direct;")
+    print("- keeps S24xray disabled;")
+    print("- no router reboot is performed.")
 
 
 def _print_setup_source_summary(mode: str) -> None:
@@ -852,12 +932,18 @@ def print_setup_plan_summary(mode: str = "source") -> None:
     print("No bootstrap was executed.")
     print("Use --apply to continue through preflight, backup, install, and healthcheck.")
     print("Use --apply --bootstrap-apply for explicit runtime preparation before router apply.")
+    print("Use --apply --enable-autostart for the explicit autostart stage after healthcheck.")
     print(
-        "Autostart, device discovery, and policy automation remain pending."
+        "No autostart was executed; #16 remains reboot/hardware proof."
     )
 
 
-def print_setup_apply_summary(mode: str = "source", *, bootstrap_apply: bool = False) -> None:
+def print_setup_apply_summary(
+    mode: str = "source",
+    *,
+    bootstrap_apply: bool = False,
+    enable_autostart: bool = False,
+) -> None:
     print("Setup apply completed.")
     _print_setup_source_summary(mode)
     print("Strict plan passed.")
@@ -868,7 +954,12 @@ def print_setup_apply_summary(mode: str = "source", *, bootstrap_apply: bool = F
     print("Backup completed.")
     print("Install completed.")
     print("Healthcheck passed.")
-    print("Autostart and device discovery were not enabled.")
+    if enable_autostart:
+        print("Autostart enabled and restart-verified.")
+        print("S24xray remains disabled.")
+        print("No reboot was performed; reboot verification remains #16.")
+    else:
+        print("Autostart was not enabled.")
     print("Netcraze proxy connections, policies, and default policy were not changed.")
     print("Firewall rules were not changed.")
     print("xkeen -start was not called.")
@@ -1098,8 +1189,16 @@ class SetupBootstrapSupervisor:
         )
 
 
+SetupTransactionalChildResult = SetupBootstrapResult
+SetupTransactionalChildSupervisor = SetupBootstrapSupervisor
+
+
 def run_setup_bootstrap_apply(step: CommandStep) -> SetupBootstrapResult:
-    return SetupBootstrapSupervisor().run(step)
+    return SetupTransactionalChildSupervisor().run(step)
+
+
+def run_setup_autostart_apply(step: CommandStep) -> SetupBootstrapResult:
+    return SetupTransactionalChildSupervisor().run(step)
 
 
 def print_setup_bootstrap_failure(result: SetupBootstrapResult) -> None:
@@ -1156,6 +1255,37 @@ def print_setup_bootstrap_failure(result: SetupBootstrapResult) -> None:
     )
     print(
         "Bootstrap package additions may remain; review the bootstrap output above.",
+        file=sys.stderr,
+    )
+
+
+def print_setup_autostart_failure(result: SetupBootstrapResult) -> None:
+    if result.spawn_failed:
+        print("routerkit: could not run autostart apply.", file=sys.stderr)
+        return
+    if result.supervision_failed:
+        print(
+            "routerkit: autostart supervision did not complete cleanly.",
+            file=sys.stderr,
+        )
+    if result.first_signal is not None:
+        try:
+            signal_name = signal.Signals(result.first_signal).name
+        except ValueError:
+            signal_name = str(result.first_signal)
+        print(
+            f"routerkit: autostart apply ended after setup received {signal_name} "
+            f"(exit code {result.returncode}).",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"routerkit: autostart apply failed with exit code {result.returncode}.",
+            file=sys.stderr,
+        )
+    print("Setup did not complete successfully.", file=sys.stderr)
+    print(
+        "Safe disable command: routerkit autostart --disable --apply --yes",
         file=sys.stderr,
     )
 
@@ -1298,13 +1428,20 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
 
     if args.bootstrap_apply:
         print_setup_bootstrap_warning()
+    if args.enable_autostart:
+        print_setup_autostart_warning()
 
     if not args.yes and not confirm_setup_apply(
         input_fn=input_fn,
         bootstrap_apply=args.bootstrap_apply,
+        enable_autostart=args.enable_autostart,
     ):
-        if args.bootstrap_apply:
+        if args.bootstrap_apply and args.enable_autostart:
+            print("Cancelled before bootstrap, router apply, and autostart.")
+        elif args.bootstrap_apply:
             print("Cancelled before bootstrap and router apply.")
+        elif args.enable_autostart:
+            print("Cancelled before router apply and autostart.")
         else:
             print("Cancelled before router apply.")
         print("Generated local files may exist, but no router apply stages were started.")
@@ -1332,8 +1469,30 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         remove_env_names=remove_env_names,
     )
     code = run_steps(apply_steps)
-    if code == 0:
-        print_setup_apply_summary(mode, bootstrap_apply=args.bootstrap_apply)
+    if code != 0:
+        return code
+
+    if args.enable_autostart:
+        autostart_result = run_setup_autostart_apply(
+            build_setup_autostart_apply_step(
+                repo_root,
+                remove_env_names=remove_env_names,
+            )
+        )
+        if (
+            autostart_result.returncode != 0
+            or autostart_result.first_signal is not None
+            or autostart_result.spawn_failed
+            or autostart_result.supervision_failed
+        ):
+            print_setup_autostart_failure(autostart_result)
+            return autostart_result.returncode if autostart_result.returncode != 0 else 1
+
+    print_setup_apply_summary(
+        mode,
+        bootstrap_apply=args.bootstrap_apply,
+        enable_autostart=args.enable_autostart,
+    )
     return code
 
 
@@ -1388,7 +1547,12 @@ def print_apply_summary(steps: Sequence[CommandStep]) -> None:
         print("- Healthcheck passed.")
     else:
         print("- Healthcheck was skipped.")
-    print("- Autostart was not enabled.")
+    if "autostart apply" in step_names:
+        print("- Autostart enabled and restart-verified.")
+        print("- S24xray remains disabled.")
+        print("- No reboot was performed; reboot verification remains #16.")
+    else:
+        print("- Autostart was not enabled.")
     print("- Web UI policies were not changed.")
     print("- Firewall rules were not changed.")
     print("- xkeen -start was not called.")
@@ -1641,6 +1805,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     setup.add_argument(
+        "--enable-autostart",
+        action="store_true",
+        help="After install healthcheck, enable S23xray-direct through the explicit autostart transaction.",
+    )
+    setup.add_argument(
         "--yes",
         action="store_true",
         help="Skip only the apply confirmation prompt; requires --apply.",
@@ -1700,6 +1869,22 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Explicit read-only planning; normal bootstrap mode is also read-only.",
     )
 
+    autostart = subparsers.add_parser(
+        "autostart",
+        help="Inspect, verify, enable, or disable S23xray-direct autostart.",
+        description="Standalone safe autostart transaction for /opt/etc/init.d/S23xray-direct.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    autostart_mode = autostart.add_mutually_exclusive_group()
+    autostart_mode.add_argument("--verify", action="store_true")
+    autostart_mode.add_argument("--enable", action="store_true")
+    autostart_mode.add_argument("--disable", action="store_true")
+    autostart.add_argument("--apply", action="store_true")
+    autostart.add_argument("--dry-run", dest="dry_run", action="store_true", default=argparse.SUPPRESS)
+    autostart.add_argument("--yes", action="store_true")
+    autostart.add_argument("--json", action="store_true")
+    autostart.add_argument("--target-root", default="/opt")
+
     plan = subparsers.add_parser(
         "plan",
         help="Preview install operations without changing router state.",
@@ -1738,7 +1923,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     install.add_argument(
         "--enable-autostart",
         action="store_true",
-        help="Reserved for a later explicit autostart flow.",
+        help="After healthcheck, run the standalone explicit autostart enable transaction.",
     )
     install.add_argument(
         "--skip-preflight",
@@ -1801,7 +1986,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(INSTALL_PLAN_NOTICE)
     # Bootstrap and profile-source own their dry-run semantics. Profile-source
     # must still parse and validate while guaranteeing that it writes nothing.
-    wrapper_dry_run = args.dry_run and args.command not in {"bootstrap", "profile-source"}
+    wrapper_dry_run = args.dry_run and args.command not in {"bootstrap", "profile-source", "autostart"}
     code = run_steps(steps, dry_run=wrapper_dry_run, repo_root=repo_root)
     if code == 0 and args.command == "install" and args.apply and not args.dry_run:
         print_apply_summary(steps)

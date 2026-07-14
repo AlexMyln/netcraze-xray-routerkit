@@ -5,20 +5,80 @@
 # Does not create firewall rules.
 # Intended for SOCKS-only localhost profiles.
 
+umask 077
+
 PROG="/opt/sbin/xray"
 CONF_DIR="/opt/etc/xray/configs"
 PIDFILE="/opt/var/run/xray-direct.pid"
 LOGFILE="/opt/var/log/xray-direct.log"
+LOCKDIR="/opt/var/run/xray-direct.lock"
 
 mkdir -p /opt/var/run /opt/var/log
 
-is_running() {
-    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+lock() {
+    i=0
+    while ! mkdir "$LOCKDIR" 2>/dev/null; do
+        i=$((i + 1))
+        if [ "$i" -ge 20 ]; then
+            echo "ERROR: xray-direct lock is busy." >&2
+            return 1
+        fi
+        sleep 1
+    done
 }
 
-start() {
+unlock() {
+    rmdir "$LOCKDIR" 2>/dev/null || true
+}
+
+safe_read_pid() {
+    [ -f "$PIDFILE" ] || return 1
+    [ ! -L "$PIDFILE" ] || return 1
+    pid="$(sed -n '1p' "$PIDFILE" 2>/dev/null | tr -d '[:space:]')" || return 1
+    case "$pid" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "$pid" -gt 1 ] 2>/dev/null || return 1
+    printf '%s\n' "$pid"
+}
+
+pid_matches_xray() {
+    pid="$1"
+    [ -d "/proc/$pid" ] || return 1
+    if [ -L "/proc/$pid/exe" ]; then
+        exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+        [ "$exe" = "$PROG" ] || return 1
+    fi
+    if [ -r "/proc/$pid/cmdline" ]; then
+        cmdline="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+        [ "$cmdline" = "$PROG run -confdir $CONF_DIR " ] || return 1
+    fi
+    kill -0 "$pid" 2>/dev/null
+}
+
+is_running() {
+    pid="$(safe_read_pid)" || return 1
+    pid_matches_xray "$pid"
+}
+
+cleanup_stale_pid() {
+    if [ -e "$PIDFILE" ] && ! is_running; then
+        [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
+    fi
+}
+
+publish_pid() {
+    pid="$1"
+    tmp="$PIDFILE.$$"
+    printf '%s\n' "$pid" > "$tmp"
+    chmod 600 "$tmp"
+    mv "$tmp" "$PIDFILE"
+}
+
+start_unlocked() {
+    cleanup_stale_pid
     if is_running; then
-        echo "xray-direct already running: $(cat "$PIDFILE")"
+        echo "xray-direct already running: $(safe_read_pid)"
         return 0
     fi
 
@@ -34,52 +94,88 @@ start() {
 
     echo "Starting xray-direct..."
     "$PROG" run -confdir "$CONF_DIR" >> "$LOGFILE" 2>&1 &
-    echo $! > "$PIDFILE"
+    child="$!"
+    publish_pid "$child"
 
     sleep 2
 
-    if is_running; then
-        echo "xray-direct started: $(cat "$PIDFILE")"
+    if pid_matches_xray "$child" && is_running; then
+        echo "xray-direct started: $child"
         return 0
     fi
 
-    echo "ERROR: xray-direct failed to start. Last log lines:" >&2
-    tail -40 "$LOGFILE" >&2 2>/dev/null || true
-    rm -f "$PIDFILE"
+    echo "ERROR: xray-direct failed to start. See $LOGFILE on the router." >&2
+    [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
     return 1
 }
 
-stop() {
-    if ! is_running; then
+stop_unlocked() {
+    pid="$(safe_read_pid)" || {
+        cleanup_stale_pid
         echo "xray-direct is not running"
-        rm -f "$PIDFILE"
+        return 0
+    }
+
+    if ! pid_matches_xray "$pid"; then
+        cleanup_stale_pid
+        echo "xray-direct is not running"
         return 0
     fi
 
-    PID="$(cat "$PIDFILE")"
-    echo "Stopping xray-direct: $PID"
-    kill "$PID" 2>/dev/null || true
+    echo "Stopping xray-direct: $pid"
+    kill "$pid" 2>/dev/null || true
 
     i=0
-    while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 10 ]; do
+    while pid_matches_xray "$pid" && [ "$i" -lt 10 ]; do
         sleep 1
         i=$((i + 1))
     done
 
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "Force stopping xray-direct: $PID"
-        kill -9 "$PID" 2>/dev/null || true
+    if pid_matches_xray "$pid"; then
+        echo "Force stopping verified xray-direct: $pid"
+        kill -9 "$pid" 2>/dev/null || true
     fi
 
-    rm -f "$PIDFILE"
+    if ! pid_matches_xray "$pid"; then
+        [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
+    fi
     echo "xray-direct stopped"
+}
+
+start() {
+    lock || return 1
+    start_unlocked
+    rc="$?"
+    unlock
+    return "$rc"
+}
+
+stop() {
+    lock || return 1
+    stop_unlocked
+    rc="$?"
+    unlock
+    return "$rc"
+}
+
+restart() {
+    lock || return 1
+    stop_unlocked
+    rc="$?"
+    if [ "$rc" -eq 0 ]; then
+        start_unlocked
+        rc="$?"
+    fi
+    unlock
+    return "$rc"
 }
 
 status() {
     if is_running; then
-        echo "xray-direct running: $(cat "$PIDFILE")"
+        echo "xray-direct running: $(safe_read_pid)"
         return 0
     fi
+    cleanup_stale_pid
     echo "xray-direct not running"
     return 3
 }
@@ -87,7 +183,7 @@ status() {
 case "${1:-}" in
     start) start ;;
     stop) stop ;;
-    restart) stop; start ;;
+    restart) restart ;;
     status) status ;;
     *)
         echo "Usage: $0 {start|stop|restart|status}"
