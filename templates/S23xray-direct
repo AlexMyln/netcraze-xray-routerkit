@@ -16,6 +16,7 @@ OWNERFILE="owner"
 LOCK_OWNED=0
 ACTIVE_CHILD_PID=""
 ACTIVE_CHILD_START=""
+SIGNAL_CLEANUP_DONE=0
 
 mkdir -p /opt/var/run /opt/var/log
 
@@ -119,12 +120,20 @@ write_lock_owner() {
 
 release_lock() {
     [ "$LOCK_OWNED" -eq 1 ] || return 0
-    current_start="$(proc_start_time "$$" 2>/dev/null)" || return 0
-    if read_lock_owner && [ "$OWNER_PID" = "$$" ] && [ "$OWNER_START" = "$current_start" ]; then
-        rm -f "$LOCKDIR/$OWNERFILE" 2>/dev/null || true
-        rmdir "$LOCKDIR" 2>/dev/null || true
+    if [ ! -e "$LOCKDIR" ]; then
+        LOCK_OWNED=0
+        return 0
     fi
-    LOCK_OWNED=0
+    current_start="$(proc_start_time "$$" 2>/dev/null)" || return 1
+    if read_lock_owner && [ "$OWNER_PID" = "$$" ] && [ "$OWNER_START" = "$current_start" ]; then
+        rm -f "$LOCKDIR/$OWNERFILE" 2>/dev/null || return 1
+        if [ -d "$LOCKDIR" ]; then
+            rmdir "$LOCKDIR" 2>/dev/null || return 1
+        fi
+        LOCK_OWNED=0
+        return 0
+    fi
+    return 1
 }
 
 direct_child_epoch_alive() {
@@ -139,11 +148,12 @@ direct_child_epoch_alive() {
 
 remove_active_pidfile() {
     [ -n "$ACTIVE_CHILD_PID" ] || return 0
-    [ -f "$PIDFILE" ] || return 0
-    [ ! -L "$PIDFILE" ] || return 0
-    recorded="$(sed -n '1p' "$PIDFILE" 2>/dev/null | tr -d '[:space:]')" || return 0
+    [ -e "$PIDFILE" ] || return 0
+    [ -f "$PIDFILE" ] || return 1
+    [ ! -L "$PIDFILE" ] || return 1
+    recorded="$(sed -n '1p' "$PIDFILE" 2>/dev/null | tr -d '[:space:]')" || return 1
     [ "$recorded" = "$ACTIVE_CHILD_PID" ] || return 0
-    rm -f "$PIDFILE" 2>/dev/null || true
+    rm -f "$PIDFILE" 2>/dev/null || return 1
 }
 
 terminate_exact_epoch_child() {
@@ -174,22 +184,55 @@ terminate_exact_epoch_child() {
 
 cleanup_active_child() {
     [ -n "$ACTIVE_CHILD_PID" ] || return 0
-    terminate_exact_epoch_child "$ACTIVE_CHILD_PID" "$ACTIVE_CHILD_START"
-    rc="$?"
-    remove_active_pidfile
+    terminate_exact_epoch_child "$ACTIVE_CHILD_PID" "$ACTIVE_CHILD_START" || return 1
+    remove_active_pidfile || return 1
     ACTIVE_CHILD_PID=""
     ACTIVE_CHILD_START=""
-    return "$rc"
+    return 0
+}
+
+manual_recovery_guidance() {
+    echo "ERROR: xray-direct cleanup could not be proven. Inspect xray-direct PID and lock state manually before retrying." >&2
+}
+
+lock_recovery_guidance() {
+    echo "ERROR: xray-direct lock release could not be proven. Inspect xray-direct lock state manually before retrying." >&2
 }
 
 signal_exit() {
-    rc="$1"
-    cleanup_active_child || true
-    release_lock
+    signal_rc="$1"
+    SIGNAL_CLEANUP_DONE=1
+    if ! cleanup_active_child; then
+        manual_recovery_guidance
+        release_lock || true
+        exit 3
+    fi
+    if ! release_lock; then
+        lock_recovery_guidance
+        exit 3
+    fi
+    exit "$signal_rc"
+}
+
+exit_trap() {
+    rc="$?"
+    trap - EXIT
+    if [ "$SIGNAL_CLEANUP_DONE" -eq 1 ]; then
+        exit "$rc"
+    fi
+    SIGNAL_CLEANUP_DONE=1
+    if ! cleanup_active_child; then
+        manual_recovery_guidance
+        [ "$rc" -eq 0 ] && rc=3
+    fi
+    if ! release_lock; then
+        lock_recovery_guidance
+        [ "$rc" -eq 0 ] && rc=3
+    fi
     exit "$rc"
 }
 
-trap 'cleanup_active_child || true; release_lock' EXIT
+trap 'exit_trap' EXIT
 trap 'signal_exit 130' INT
 trap 'signal_exit 143' TERM
 trap 'signal_exit 129' HUP
@@ -380,7 +423,10 @@ start() {
     lock || return 1
     start_unlocked
     rc="$?"
-    release_lock
+    if ! release_lock; then
+        lock_recovery_guidance
+        [ "$rc" -eq 0 ] && rc=3
+    fi
     return "$rc"
 }
 
@@ -388,7 +434,10 @@ stop() {
     lock || return 1
     stop_unlocked
     rc="$?"
-    release_lock
+    if ! release_lock; then
+        lock_recovery_guidance
+        [ "$rc" -eq 0 ] && rc=3
+    fi
     return "$rc"
 }
 
@@ -400,7 +449,10 @@ restart() {
         start_unlocked
         rc="$?"
     fi
-    release_lock
+    if ! release_lock; then
+        lock_recovery_guidance
+        [ "$rc" -eq 0 ] && rc=3
+    fi
     return "$rc"
 }
 

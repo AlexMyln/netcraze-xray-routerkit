@@ -147,6 +147,26 @@ class SetupAutostartIntegrationTests(unittest.TestCase):
             cli.print_apply_summary(steps)
         self.assertIn("Autostart enabled and restart-verified.", stdout.getvalue())
 
+    def test_install_autostart_failure_preserves_child_code_and_blocks_success_summary(self):
+        args = cli.parse_args(["install", "--apply", "--enable-autostart"])
+        steps = cli.build_install_apply_steps(args, ROOT)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with mock.patch.object(cli, "run_steps", return_value=0):
+            with mock.patch.object(
+                cli,
+                "run_setup_autostart_apply",
+                return_value=cli.SetupBootstrapResult(3, supervision_failed=True),
+            ):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = cli.run_install_apply_steps(steps)
+
+        self.assertEqual(code, 3)
+        self.assertNotIn("Apply summary:", stdout.getvalue())
+        self.assertIn("autostart supervision did not complete cleanly", stderr.getvalue())
+        self.assertIn("Safe disable command", stderr.getvalue())
+
     def test_install_autostart_conflicts_with_skip_healthcheck(self):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):

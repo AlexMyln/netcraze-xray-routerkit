@@ -645,7 +645,7 @@ class TransactionSignals:
         else:
             self.subsequent_signals.append(signum)
         child = self.child
-        if child is not None:
+        if child is not None and self._recovery_depth == 0:
             try:
                 if os.name == "posix":
                     os.killpg(child.pid, signum)
@@ -704,7 +704,8 @@ class TransactionSignals:
         try:
             yield
         finally:
-            self._recovery_depth -= 1
+            if self._recovery_depth > 0:
+                self._recovery_depth -= 1
 
     def signal_exit_code(self) -> int:
         if self.first_signal is None:

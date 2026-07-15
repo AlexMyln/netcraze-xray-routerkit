@@ -4,6 +4,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -144,6 +146,114 @@ class AutostartInitChildTests(unittest.TestCase):
         self.assertEqual(child.wait_calls, 1)
         self.assertEqual(child.signals, [])
         self.assertEqual(signals.first_signal, signal.SIGTERM)
+
+    @unittest.skipUnless(os.name == "posix", "process-group supervision is POSIX-specific")
+    def test_second_sigterm_during_recovery_child_is_deferred(self):
+        result = self._run_recovery_signal_probe(signal.SIGTERM)
+
+        self.assertIsNone(result["exception"])
+        self.assertEqual(result["child_returncode"], 0)
+        self.assertEqual(result["subsequent_signals"], [signal.SIGTERM])
+        self.assertIsNone(result["signals"].child)
+        self.assertEqual(result["signals"].signal_exit_code(), 130)
+
+    @unittest.skipUnless(os.name == "posix", "process-group supervision is POSIX-specific")
+    def test_second_sigint_during_recovery_child_is_deferred(self):
+        result = self._run_recovery_signal_probe(signal.SIGINT, first_signal=signal.SIGTERM)
+
+        self.assertIsNone(result["exception"])
+        self.assertEqual(result["child_returncode"], 0)
+        self.assertEqual(result["subsequent_signals"], [signal.SIGINT])
+        self.assertEqual(result["signals"].signal_exit_code(), 143)
+
+    @unittest.skipUnless(os.name == "posix", "process-group supervision is POSIX-specific")
+    def test_mixed_recovery_signals_are_recorded_without_replay(self):
+        result = self._run_recovery_signal_probe(signal.SIGTERM, extra_signal=signal.SIGHUP)
+
+        self.assertIsNone(result["exception"])
+        self.assertEqual(result["child_returncode"], 0)
+        self.assertEqual(result["subsequent_signals"], [signal.SIGTERM, signal.SIGHUP])
+        self.assertEqual(result["signals"].signal_exit_code(), 130)
+
+    @unittest.skipUnless(os.name == "posix", "process-group supervision is POSIX-specific")
+    def test_nested_recovery_context_keeps_signals_deferred(self):
+        result = self._run_recovery_signal_probe(signal.SIGTERM, nested=True)
+
+        self.assertIsNone(result["exception"])
+        self.assertEqual(result["child_returncode"], 0)
+        self.assertEqual(result["subsequent_signals"], [signal.SIGTERM])
+        self.assertEqual(result["signals"]._recovery_depth, 0)
+
+    def _run_recovery_signal_probe(
+        self,
+        second_signal,
+        *,
+        first_signal=signal.SIGINT,
+        extra_signal=None,
+        nested=False,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "opt"
+            init_dir = root / "etc" / "init.d"
+            init_dir.mkdir(parents=True)
+            ready = Path(directory) / "ready"
+            script = init_dir / "S23xray-direct"
+            script.write_text(
+                "#!/bin/sh\n"
+                "echo ready > \"{}\"\n"
+                "sleep 0.3\n".format(ready),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            paths = autostart.AutostartPaths(root)
+            signals = autostart.TransactionSignals()
+            signals.first_signal = first_signal
+            child_box = {}
+            original_popen = autostart.subprocess.Popen
+
+            def capture_popen(*args, **kwargs):
+                child = original_popen(*args, **kwargs)
+                child_box["child"] = child
+                return child
+
+            def send_later():
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if child_box.get("child") is not None and ready.exists():
+                        signals._handle(second_signal, None)
+                        if extra_signal is not None:
+                            signals._handle(extra_signal, None)
+                        return
+                    time.sleep(0.01)
+
+            sender = threading.Thread(target=send_later)
+            caught = None
+            with mock.patch.object(autostart.subprocess, "Popen", side_effect=capture_popen):
+                sender.start()
+                try:
+                    if nested:
+                        with signals.recovery_critical():
+                            with signals.recovery_critical():
+                                autostart._run_init(paths, "start", signals=signals)
+                    else:
+                        with signals.recovery_critical():
+                            autostart._run_init(paths, "start", signals=signals)
+                except Exception as exc:
+                    caught = exc
+                finally:
+                    sender.join(timeout=2)
+                    child = child_box.get("child")
+                    if child is not None and child.poll() is None:
+                        os.killpg(child.pid, signal.SIGTERM)
+                        child.wait(timeout=5)
+
+            child = child_box["child"]
+            return {
+                "exception": caught,
+                "child_returncode": child.returncode,
+                "subsequent_signals": list(signals.subsequent_signals),
+                "signals": signals,
+            }
 
     def test_json_mode_bounds_child_output_and_reaps(self):
         with tempfile.TemporaryDirectory() as directory:

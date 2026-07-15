@@ -316,6 +316,29 @@ class AutostartRuntimeTests(unittest.TestCase):
             self.assertFalse(paths.s24.stat().st_mode & stat.S_IXUSR)
             self.assertFalse(paths.s23.stat().st_mode & stat.S_IXUSR)
 
+    def test_rollback_failure_beats_original_signal_exit_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, proc = build_synthetic_runtime(Path(directory))
+            paths = autostart.AutostartPaths(opt)
+
+            def fail_restart_and_rollback(_paths, action, *, signals=None, **_kwargs):
+                if action == "restart":
+                    self.assertIsNotNone(signals)
+                    signals.first_signal = signal.SIGINT
+                    (proc / "4321" / "stat").unlink()
+                    raise autostart.AutostartError("transaction interrupted by signal 2", 130)
+                if action == "start":
+                    raise autostart.AutostartError("recovery child failed with exit code 7", 7)
+
+            with mock.patch.object(autostart, "DEFAULT_TARGET_ROOT", str(opt)):
+                with mock.patch.object(autostart.os, "uname", return_value=SimpleNamespace(sysname="Linux")):
+                    with mock.patch.object(autostart, "_run_init", side_effect=fail_restart_and_rollback):
+                        with self.assertRaises(autostart.AutostartError) as caught:
+                            autostart.enable_autostart(paths, proc_root=proc)
+
+            self.assertEqual(caught.exception.exit_code, autostart.ROLLBACK_UNPROVEN)
+            self.assertIn("rollback could not be proven", str(caught.exception))
+
     def test_preflight_rejects_symlink_config_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             opt, _proc = build_synthetic_runtime(Path(directory))

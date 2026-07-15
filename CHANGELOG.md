@@ -10,10 +10,11 @@ All notable changes to this project will be documented in this file.
 - Autostart enable now distinguishes runtime verification, restart performed, and restart verification; verified no-op paths no longer claim a restart.
 - Autostart rollback now attempts to restore prior running state or stop a transaction-started process, removes stale receipts, and returns exit `3` when rollback cannot be proven.
 - Autostart init child supervision now keeps ownership through pending signals, recovery-critical rollback, unexpected wait errors, and bounded JSON output capture before returning any signal result.
+- Autostart recovery-critical sections now defer repeated or mixed catchable signals instead of forwarding them to recovery children; the first signal remains the ordinary signal result only after verified recovery, while rollback failure exit `3` keeps precedence.
 - Autostart disable now defers catchable signals until `S24xray` and `S23xray-direct` are both verified non-executable and stale receipt state is removed.
 - Autostart preflight now rejects symlinked or identity-changing Xray config directories instead of following them.
 - `S23xray-direct` now fails closed on inaccessible proc identity, revalidates process epoch before TERM/KILL, uses owned lock directories, and cleans direct children after PID publication/start verification failures.
-- `S23xray-direct` traps now clean any active child from the current invocation through bounded exact-epoch TERM/KILL before releasing the owned lock.
+- `S23xray-direct` traps now clean any active child from the current invocation through bounded exact-epoch TERM/KILL before releasing the owned lock, and return exit `3` instead of ordinary signal codes when active-child cleanup or owned-lock release cannot be proven.
 - Autostart JSON apply output suppresses init-script stdout/stderr and emits one parseable JSON document without PID or command-line details.
 - Setup now retains bootstrap-child ownership through unexpected wait errors and fails closed after signal-state restoration errors.
 - Setup now snapshots bootstrap-supervisor signal state only after temporary handler teardown, preventing a late catchable signal from being lost before router apply stages.
