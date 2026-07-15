@@ -99,7 +99,7 @@ Apply queries the fixed package set `ca-bundle`, `curl`, `unzip`, `coreutils-sha
 
 Bootstrap apply does not activate Entware, restart or manage services, enable autostart, load configs, call `xkeen -start`, or change Web UI, firewall, proxy, or policy state. Ctrl-C at the confirmation prompt cancels before any package, network, staging, or write action. Inside the mutable transaction, `SIGINT` is coordinated with `SIGTERM`/`SIGHUP`: before replacement it stops forward progress and cleans staging; after replacement it verifies backup restoration or clean-install removal before conventional exit `130`. Repeated catchable signals are deferred through recovery and cleanup, and the first signal determines the eventual signal exit. Unproven recovery returns distinct exit `3` with retained-backup guidance instead of an ordinary signal result. `SIGKILL`, power loss, kernel failure, and host crash remain residual risks. Profile inputs and generated secrets are unrelated and are never consumed. Manual Entware activation is still required, and #16 must complete before this is described as hardware-tested. See the [execution-model ADR](docs/architecture/bootstrap-execution-model.md) and [artifact-pin evidence](docs/xray-artifact-pin.md).
 
-`setup` now uses the completed profile-source stack by default. It accepts a source through hidden input, a named environment variable, or a protected owner-only file; safely resolves HTTPS when needed; parses compatible nodes; and selects one primary plus up to two fallbacks. Setup writes the selected profiles only inside a unique private workspace, suppresses generator output, removes the temporary profiles immediately after generation, and then runs a strict plan. Generated config fragments persist locally and are secret-bearing. Plain `setup` stops there with no bootstrap or router apply. `setup --apply` preserves the existing confirmed preflight → backup → install → healthcheck flow and performs no bootstrap. Only `setup --apply --bootstrap-apply` adds the reviewed standalone bootstrap transaction, after strict planning and the one visible setup confirmation but before preflight; the internal `--yes` prevents a second prompt. Bootstrap failure, cancellation, any catchable signal observed by the setup bootstrap supervisor, or any internal bootstrap-supervision failure starts no later router stage. The setup supervisor keeps ownership of the direct bootstrap child through unexpected wait failures until the child is terminal and reaped. Fixed package additions may remain, while Xray replacement has its separate verified backup/rollback boundary. No service restart or autostart is performed.
+`setup` now uses the completed profile-source stack by default. It accepts a source through hidden input, a named environment variable, or a protected owner-only file; safely resolves HTTPS when needed; parses compatible nodes; and selects one primary plus up to two fallbacks. Setup writes the selected profiles only inside a unique private workspace, suppresses generator output, removes the temporary profiles immediately after generation, and then runs a strict plan. Generated config fragments persist locally and are secret-bearing. Plain `setup` stops there with no bootstrap or router apply. `setup --apply` preserves the existing confirmed preflight → backup → install → healthcheck flow and performs no bootstrap. Only `setup --apply --bootstrap-apply` adds the reviewed standalone bootstrap transaction, after strict planning and the one visible setup confirmation but before preflight; the internal `--yes` prevents a second prompt. Bootstrap failure, cancellation, any catchable signal observed by the setup bootstrap supervisor, or any internal bootstrap-supervision failure starts no later router stage. `setup --apply --enable-autostart` adds the explicit autostart transaction after healthcheck and uses the same transactional child supervisor. Fixed package additions may remain, while Xray replacement and autostart have separate verified rollback boundaries. No reboot proof, service management outside the reviewed init script, Web UI, firewall, or policy action is performed.
 
 While the private workspace exists, catchable `SIGTERM` and `SIGHUP` requests trigger coordinated source/generator process-group shutdown, child reaping, and workspace cleanup before setup exits. `SIGINT` keeps normal interactive cancellation behavior. `SIGKILL`, power loss, kernel failure, and host crashes cannot run in-process cleanup and may leave the owner-only workspace for manual removal.
 
@@ -234,7 +234,7 @@ Default apply pipeline:
 
 Backups may contain secret-bearing router files. Do not publish backup archives.
 
-`install --apply` does not automate Web UI policies, does not call `xkeen -start`, does not touch firewall rules, and does not enable autostart.
+`install --apply` does not automate Web UI policies, does not call `xkeen -start`, does not touch firewall rules, and does not enable autostart unless the explicit `--enable-autostart` flag is also provided.
 
 Advanced/debug skip flags are available: `--skip-preflight`, `--skip-backup`, and `--skip-healthcheck`. They are not recommended; the default apply flow runs all safety steps. Skipping backup means rollback may be harder.
 
@@ -244,7 +244,21 @@ Preview the apply pipeline without running it:
 python3 scripts/routerkit.py --dry-run install --generated generated --apply
 ```
 
-The `--enable-autostart` flag is reserved for a later explicit flow. Autostart remains manual after healthcheck.
+To enable autostart after healthcheck through the reviewed transaction:
+
+```sh
+python3 scripts/routerkit.py install --generated generated --apply --enable-autostart
+```
+
+The autostart stage runs only after healthcheck and keeps the standalone confirmation prompt. It disables `S24xray`, restarts through the reviewed `S23xray-direct` init script when a restart is needed, verifies stable process epoch plus loopback listener ownership, and then enables only `S23xray-direct`. If autostart is already enabled and runtime-verified, it reports a no-op and does not claim restart verification. Disable is explicit and does not stop the running process:
+
+```sh
+python3 scripts/routerkit.py autostart --verify
+python3 scripts/routerkit.py autostart --enable --apply
+python3 scripts/routerkit.py autostart --disable --apply
+```
+
+No reboot is performed or proven. After a real router reboot, run read-only `autostart --verify`. Hardware/reboot validation remains #16; device discovery #21, Netcraze policy automation #15, and epic #5 remain open. See [autostart execution model](docs/architecture/autostart-execution-model.md).
 
 ### Testing
 

@@ -26,6 +26,7 @@ The guided installer may:
 - install `S23xray-direct`;
 - keep `S24xray` disabled;
 - run healthcheck;
+- with explicit `setup --apply --enable-autostart` or `install --apply --enable-autostart`, enable `S23xray-direct` only after healthcheck and strict runtime verification;
 - print exact Web UI steps for proxy connections and policies.
 
 ## Out of scope for the first guided installer
@@ -36,7 +37,7 @@ The first version will not:
 - install Netcraze/Keenetic firmware components;
 - install Entware/OPKG from scratch;
 - blindly download and install Xray from unverified sources;
-- restart services, enable autostart, or call `xkeen -start`;
+- restart services outside the explicit autostart transaction, perform reboot proof, or call `xkeen -start`;
 - automate Web UI clicks;
 - change default router policies;
 - create TPROXY/REDIRECT/firewall rules;
@@ -46,4 +47,4 @@ The first version will not:
 
 USB preparation, Entware installation, firmware components, and Web UI policy assignment are device-specific and can be destructive if automated blindly.
 
-The installer should fail closed: if prerequisites are missing, it must stop instead of guessing. Package additions made by explicit bootstrap may remain, while Xray replacement has a separate verified backup/rollback boundary. Hardware validation remains tracked in #16.
+The installer should fail closed: if prerequisites are missing, it must stop instead of guessing. Package additions made by explicit bootstrap may remain, while Xray replacement has a separate verified backup/rollback boundary. Autostart enable is not a firewall, Web UI, policy, default-policy, device-discovery, or reboot-validation step. Hardware validation remains tracked in #16.

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Autostart apply no longer exposes a public `--proc-root` override; production status, verify, and apply inspect real `/proc` only.
+- Autostart runtime verification now requires stable PID start time, executable device/inode, exact command line, and listener ownership, and rejects PID reuse or identity changes during verification.
+- Autostart enable now distinguishes runtime verification, restart performed, and restart verification; verified no-op paths no longer claim a restart.
+- Autostart rollback now attempts to restore prior running state or stop a transaction-started process, removes stale receipts, and returns exit `3` when rollback cannot be proven.
+- Autostart init child supervision now keeps ownership through pending signals, recovery-critical rollback, unexpected wait errors, and bounded JSON output capture before returning any signal result.
+- Autostart recovery-critical sections now defer repeated or mixed catchable signals instead of forwarding them to recovery children; the first signal remains the ordinary signal result only after verified recovery, while rollback failure exit `3` keeps precedence.
+- Autostart disable now defers catchable signals until `S24xray` and `S23xray-direct` are both verified non-executable and stale receipt state is removed.
+- Autostart preflight now rejects symlinked or identity-changing Xray config directories instead of following them.
+- `S23xray-direct` now fails closed on inaccessible proc identity, revalidates process epoch before TERM/KILL, uses owned lock directories, and cleans direct children after PID publication/start verification failures.
+- `S23xray-direct` traps now clean any active child from the current invocation through bounded exact-epoch TERM/KILL before releasing the owned lock, and return exit `3` instead of ordinary signal codes when active-child cleanup or owned-lock release cannot be proven.
+- `S23xray-direct` owned-lock cleanup now rejects symlinked or otherwise unsafe lock paths, including dangling symlinks, and returns exit `3` when cleanup cannot be proven; hardware and reboot validation remain tracked by #16.
+- `S23xray-direct` now detects stale lock owners but does not automatically delete stale or unclear lock paths; operators must inspect the lock manually, avoiding POSIX shell path deletion that cannot be bound atomically to a previously proven inode identity.
+- Autostart JSON apply output suppresses init-script stdout/stderr and emits one parseable JSON document without PID or command-line details.
 - Setup now retains bootstrap-child ownership through unexpected wait errors and fails closed after signal-state restoration errors.
 - Setup now snapshots bootstrap-supervisor signal state only after temporary handler teardown, preventing a late catchable signal from being lost before router apply stages.
 - Setup supervises and forwards catchable signals to the standalone bootstrap child so verified binary recovery is not abandoned.
@@ -15,6 +28,8 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Explicit standalone `routerkit autostart` status/verify/enable/disable documentation and an autostart execution-model ADR in English and Russian.
+- Focused autostart transaction, signal-supervision, and `S23xray-direct` shell-contract tests, with CI syntax and focused-suite coverage.
 - Explicit `routerkit setup --apply --bootstrap-apply` orchestration for the reviewed standalone bootstrap transaction.
 - Transactional standalone bootstrap apply for fixed Entware prerequisites and the manifest-pinned Xray artifact.
 - Verified existing-binary backup, atomic replacement, post-install validation, rollback, and provenance receipt.
@@ -55,6 +70,8 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- `install --apply --enable-autostart` and `setup --apply --enable-autostart` run the explicit autostart stage after healthcheck through the transactional child supervisor; neither performs reboot proof or policy/firewall/Web UI work.
+- The unused autostart receipt is removed from the trust/idempotency boundary; stale receipt state is removed during enable/disable cleanup.
 - Bootstrap remains opt-in inside setup and runs only after strict planning and the visible setup confirmation.
 - `routerkit bootstrap` remains read-only by default; writes require explicit `--apply` and confirmation.
 - `routerkit setup` no longer silently reuses a current-directory `profiles.json`.

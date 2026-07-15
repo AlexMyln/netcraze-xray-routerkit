@@ -63,8 +63,8 @@ echo
 echo "To start manually:"
 echo "  sh $INIT_DEST start"
 echo
-echo "To enable autostart after tests:"
-echo "  chmod 755 $INIT_DEST"
+echo "To enable autostart after healthcheck:"
+echo "  python3 scripts/routerkit-autostart.py --enable --apply"
 echo
 echo "S24xray remains disabled:"
 ls -l /opt/etc/init.d/S24xray 2>/dev/null || true
