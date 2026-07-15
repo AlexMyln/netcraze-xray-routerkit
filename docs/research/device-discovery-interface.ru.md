@@ -51,13 +51,14 @@
 
 - fixture-first models и adapter states;
 - только protected local fixture input;
-- deterministic normalization, trusted-ID selection gating, sorting, JSON/text output, public-evidence redaction и fail-closed selection;
+- deterministic normalization, valid-unicast-MAC selection gating, sorting, JSON/text output, public-evidence redaction и fail-closed selection;
 - `routerkit devices` и `scripts/routerkit-devices.py`;
 - `routerkit setup --discover-devices` как explicit read-only stage после strict planning.
 
 Не сделано:
 
 - выполнение команд на реальном роутере;
+- reusable subprocess runner до hardware confirmation выбора CLI versus `/rci`;
 - active LAN scanning;
 - policy writes или device assignment;
 - proxy connection changes;

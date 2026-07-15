@@ -1,8 +1,7 @@
+import ast
 import os
-import signal
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,114 +15,53 @@ if str(SCRIPTS) not in sys.path:
 import routerkit_devices as devices
 
 
-class CommandRunnerTests(unittest.TestCase):
-    def test_runner_uses_exact_argv_allowlist_and_clean_environment(self):
-        argv = (sys.executable, "-c", "import os; print(os.environ.get('SECRET_MARKER', 'clean'))")
-        runner = devices.BoundedCommandRunner([argv])
+class DeviceDiscoveryExecutionGuardTests(unittest.TestCase):
+    def test_fixture_first_module_has_no_live_execution_primitive(self):
+        source_path = SCRIPTS / "routerkit_devices.py"
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(source_path))
 
-        result = runner.run(argv, timeout_seconds=5.0, env={})
+        imported_modules = set()
+        imported_names = set()
+        called_names = set()
+        attribute_names = set()
+        string_literals = set()
 
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), b"clean")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules.update(alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imported_modules.add(node.module.split(".", 1)[0])
+                imported_names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.Call):
+                target = node.func
+                if isinstance(target, ast.Name):
+                    called_names.add(target.id)
+                elif isinstance(target, ast.Attribute):
+                    attribute_names.add(target.attr)
+                    if isinstance(target.value, ast.Name):
+                        called_names.add("%s.%s" % (target.value.id, target.attr))
+            elif isinstance(node, ast.Attribute):
+                attribute_names.add(node.attr)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                string_literals.add(node.value)
 
-        with self.assertRaises(devices.CommandExecutionError) as caught:
-            runner.run((sys.executable, "-c", "print('not allowed')"), timeout_seconds=5.0)
-        self.assertEqual(caught.exception.state, devices.STATE_UNSUPPORTED)
-
-    def test_runner_maps_timeout_and_oversized_output(self):
-        timeout_argv = (sys.executable, "-c", "import time; time.sleep(2)")
-        runner = devices.BoundedCommandRunner([timeout_argv])
-
-        with self.assertRaises(devices.CommandExecutionError) as caught:
-            runner.run(timeout_argv, timeout_seconds=0.01)
-        self.assertEqual(caught.exception.state, devices.STATE_TIMEOUT)
-
-        output_argv = (sys.executable, "-c", "print('x' * 200)")
-        runner = devices.BoundedCommandRunner([output_argv])
-        with self.assertRaises(devices.CommandExecutionError) as caught:
-            runner.run(output_argv, timeout_seconds=5.0, maximum_output_bytes=10)
-        self.assertEqual(caught.exception.state, devices.STATE_OUTPUT_TOO_LARGE)
-
-    def test_runner_enforces_stdout_stderr_and_combined_output_limits(self):
-        exact_argv = (sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x' * 10)")
-        runner = devices.BoundedCommandRunner([exact_argv])
-        result = runner.run(exact_argv, timeout_seconds=5.0, maximum_output_bytes=10)
-        self.assertEqual(result.stdout, b"x" * 10)
-
-        stdout_argv = (sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x' * 11)")
-        stderr_argv = (sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'e' * 11)")
-        both_argv = (
-            sys.executable,
-            "-c",
-            "import sys; sys.stdout.buffer.write(b'x' * 6); sys.stdout.flush(); sys.stderr.buffer.write(b'e' * 6); sys.stderr.flush()",
-        )
-        runner = devices.BoundedCommandRunner([stdout_argv, stderr_argv, both_argv])
-        for argv in (stdout_argv, stderr_argv, both_argv):
-            with self.subTest(argv=argv), self.assertRaises(devices.CommandExecutionError) as caught:
-                runner.run(argv, timeout_seconds=5.0, maximum_output_bytes=10)
-            self.assertEqual(caught.exception.state, devices.STATE_OUTPUT_TOO_LARGE)
-
-    def test_runner_kills_term_ignoring_child_on_timeout(self):
-        argv = (
-            sys.executable,
-            "-c",
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
-        )
-        runner = devices.BoundedCommandRunner([argv])
-        start = time.monotonic()
-
-        with self.assertRaises(devices.CommandExecutionError) as caught:
-            runner.run(argv, timeout_seconds=0.05)
-
-        self.assertEqual(caught.exception.state, devices.STATE_TIMEOUT)
-        self.assertLess(time.monotonic() - start, 2.0)
-
-    @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
-    def test_runner_kills_descendants_on_timeout(self):
-        with tempfile.TemporaryDirectory() as directory:
-            pidfile = Path(directory) / "child.pid"
-            argv = (
-                sys.executable,
-                "-c",
-                (
-                    "import subprocess,sys,time;"
-                    "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']);"
-                    "open(%r,'w').write(str(p.pid));"
-                    "time.sleep(30)"
-                )
-                % str(pidfile),
+        self.assertFalse({"subprocess", "threading", "queue", "signal", "socket", "http", "urllib"} & imported_modules)
+        self.assertFalse({"Popen", "run"} & imported_names)
+        self.assertFalse({"Popen", "run", "system", "spawn", "execv", "execve", "killpg"} & called_names)
+        self.assertFalse({"Popen", "run", "killpg"} & attribute_names)
+        self.assertNotIn("shell=True", source)
+        self.assertNotIn("BoundedCommandRunner", source)
+        self.assertNotIn("CommandResult", source)
+        self.assertNotIn("CommandExecutionError", source)
+        self.assertNotIn("assignment_stable", source)
+        self.assertFalse(
+            any(
+                "ROUTERKIT" in literal and ("ENABLE" in literal or "ADAPTER" in literal or "VENDOR" in literal)
+                for literal in string_literals
             )
-            runner = devices.BoundedCommandRunner([argv])
-
-            with self.assertRaises(devices.CommandExecutionError) as caught:
-                runner.run(argv, timeout_seconds=0.2)
-
-            self.assertEqual(caught.exception.state, devices.STATE_TIMEOUT)
-            descendant_pid = int(pidfile.read_text(encoding="utf-8"))
-            for _ in range(20):
-                try:
-                    os.kill(descendant_pid, 0)
-                except OSError:
-                    break
-                time.sleep(0.05)
-            with self.assertRaises(OSError):
-                os.kill(descendant_pid, 0)
-
-    def test_runner_maps_permission_denied_return_code(self):
-        argv = (sys.executable, "-c", "raise SystemExit(126)")
-        runner = devices.BoundedCommandRunner([argv])
-
-        with self.assertRaises(devices.CommandExecutionError) as caught:
-            runner.run(argv, timeout_seconds=5.0)
-        self.assertEqual(caught.exception.state, devices.STATE_PERMISSION_DENIED)
-
-    def test_runner_maps_missing_executable(self):
-        argv = ("/definitely/missing/routerkit-device-adapter",)
-        runner = devices.BoundedCommandRunner([argv])
-
-        with self.assertRaises(devices.CommandExecutionError) as caught:
-            runner.run(argv, timeout_seconds=5.0)
-        self.assertEqual(caught.exception.state, devices.STATE_UNSUPPORTED)
+        )
 
 
 class InventoryFileTests(unittest.TestCase):

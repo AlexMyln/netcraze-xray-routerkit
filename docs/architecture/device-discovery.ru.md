@@ -19,15 +19,14 @@ protected fixture file
 
 ## Identity Rules
 
-Приоритет identity:
+Приоритет display/dedup identity:
 
-1. documented stable router identifier;
-2. normalized MAC/device identifier;
-3. explicitly reviewed assignment-stable vendor identifier;
-4. unproven vendor или unknown identifiers только как display/dedup hints;
-5. IP address только как weak display/correlation hint.
+1. valid normalized unicast MAC address;
+2. router identifier только как display/dedup hint, пока code-owned hardware contract не докажет assignment stability;
+3. vendor или unknown identifiers только как display/dedup hints;
+4. IP address только как weak display/correlation hint.
 
-Records объединяются только по display/dedup identity. Один IP с разными stable IDs остаётся разными devices. Одно имя само по себе никогда не объединяет devices. IP-only devices, unknown stable IDs и standalone unreviewed vendor record IDs показываются, но не могут быть выбраны для future assignment.
+Records объединяются только по display/dedup identity. Один IP с разными stable IDs остаётся разными devices. Одно имя само по себе никогда не объединяет devices. IP-only devices, router IDs, unknown stable IDs, standalone vendor record IDs и `vendor_record_id` stable identifiers показываются, но не могут быть выбраны для future assignment. Fixture data не может объявлять assignment trust. Selectable MAC обязан быть exactly 48 bits после normalization, unicast, не all-zero и не broadcast; locally administered unicast MACs остаются valid.
 
 ## Selection
 
@@ -62,4 +61,4 @@ Future vendor adapter обязан реализовать:
 - `collect()`;
 - `parse()`.
 
-External execution должен использовать injected runners, exact argv allowlists, no shell interpolation, clean environments, process groups, concurrent bounded stdout/stderr draining, monotonic deadlines, TERM/KILL cleanup для direct children и descendants, а также sanitized user-facing errors. Adapter states: `supported`, `unsupported`, `contract_unverified`, `malformed_output`, `permission_denied`, `timeout`, `output_too_large`, `source_missing`; fixture confidence values перечислены allowlist.
+Command execution намеренно отложен. Hardware probe сначала должен решить, использует ли target contract local CLI, `/rci`, другой structured interface или сочетание. Будущий adapter получит interface-specific, separately reviewed execution boundary; этот fixture-first PR не утверждает, что reusable subprocess runner готов. Adapter states: `supported`, `unsupported`, `contract_unverified`, `malformed_output`, `permission_denied`, `timeout`, `output_too_large`, `source_missing`; fixture confidence values перечислены allowlist.

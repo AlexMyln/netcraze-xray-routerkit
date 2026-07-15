@@ -4,24 +4,18 @@
 from __future__ import annotations
 
 import argparse
-import errno
 import hashlib
 import hmac
 import ipaddress
 import json
 import os
-import queue
 import re
 import secrets
-import signal
 import stat
-import subprocess
 import sys
-import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from routerkit_private_io import (
     PrivateFileEncodingError,
@@ -33,7 +27,6 @@ from routerkit_private_io import (
 FIXTURE_SCHEMA = "routerkit.devices.fixture.v1"
 DISCOVERY_SCHEMA = "routerkit.devices.discovery.v1"
 MAX_INVENTORY_BYTES = 256 * 1024
-MAX_ADAPTER_OUTPUT_BYTES = 256 * 1024
 
 STATE_SUPPORTED = "supported"
 STATE_UNSUPPORTED = "unsupported"
@@ -71,7 +64,6 @@ CONFIDENCE_VALUES = (
     "secondary_corroborated",
     "hardware_confirmation_required",
 )
-ASSIGNMENT_TRUSTED_IDENTIFIER_TYPES = ("mac", "router_id")
 SENSITIVITY_LOCAL = "local_sensitive"
 SENSITIVITY_PUBLIC = "public_evidence_redacted"
 
@@ -87,8 +79,6 @@ MAX_IDENTIFIER_LENGTH = 128
 MAX_SOURCE_RECORD_ID_LENGTH = 128
 MAX_OPTIONAL_FIELD_LENGTH = 128
 MAX_ERROR_COUNT = 64
-COMMAND_TERM_GRACE_SECONDS = 0.25
-COMMAND_READ_CHUNK_BYTES = 8192
 
 _RECORD_KEYS = {
     "source_record_id",
@@ -97,7 +87,6 @@ _RECORD_KEYS = {
     "stable_identifier",
     "stable_identifier_type",
     "vendor_record_id",
-    "assignment_stable",
     "online_state",
     "connection_type",
     "wifi_band",
@@ -129,202 +118,6 @@ class DeviceCliUsageError(DeviceDiscoveryError):
 
 
 @dataclass(frozen=True)
-class CommandResult:
-    argv: Tuple[str, ...]
-    returncode: int
-    stdout: bytes
-    stderr: bytes
-
-
-class CommandExecutionError(DeviceDiscoveryError):
-    pass
-
-
-class BoundedCommandRunner:
-    """Run exact allowlisted argv vectors without shell interpolation."""
-
-    def __init__(self, allowed_argv: Iterable[Sequence[str]]) -> None:
-        self.allowed_argv = {tuple(argv) for argv in allowed_argv}
-
-    def run(
-        self,
-        argv: Sequence[str],
-        *,
-        timeout_seconds: float,
-        maximum_output_bytes: int = MAX_ADAPTER_OUTPUT_BYTES,
-        env: Optional[Mapping[str, str]] = None,
-    ) -> CommandResult:
-        argv_tuple = tuple(argv)
-        if argv_tuple not in self.allowed_argv:
-            raise CommandExecutionError(
-                "Adapter command is not allowlisted.",
-                state=STATE_UNSUPPORTED,
-            )
-        if env is None:
-            env = {}
-        if maximum_output_bytes < 0:
-            raise CommandExecutionError(
-                "Adapter command output limit is invalid.",
-                state=STATE_UNSUPPORTED,
-            )
-        deadline = time.monotonic() + timeout_seconds
-        stream_queue: "queue.Queue[Tuple[str, Optional[bytes]]]" = queue.Queue()
-        stdout_chunks: List[bytes] = []
-        stderr_chunks: List[bytes] = []
-        total_output = 0
-        process: Optional[subprocess.Popen[bytes]] = None
-
-        def drain_stream(label: str, stream: Any) -> None:
-            try:
-                while True:
-                    chunk = os.read(stream.fileno(), COMMAND_READ_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    stream_queue.put((label, chunk))
-            finally:
-                stream.close()
-                stream_queue.put((label, None))
-
-        try:
-            process = subprocess.Popen(
-                list(argv_tuple),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=dict(env),
-                shell=False,
-                start_new_session=(os.name == "posix"),
-            )
-        except PermissionError:
-            raise CommandExecutionError(
-                "Adapter command permission denied.",
-                state=STATE_PERMISSION_DENIED,
-            ) from None
-        except FileNotFoundError:
-            raise CommandExecutionError(
-                "Adapter command is unavailable.",
-                state=STATE_UNSUPPORTED,
-            ) from None
-        except OSError:
-            raise CommandExecutionError(
-                "Adapter command could not be executed.",
-                state=STATE_UNSUPPORTED,
-            ) from None
-
-        assert process.stdout is not None
-        assert process.stderr is not None
-        threads = [
-            threading.Thread(target=drain_stream, args=("stdout", process.stdout)),
-            threading.Thread(target=drain_stream, args=("stderr", process.stderr)),
-        ]
-        for thread in threads:
-            thread.daemon = True
-            thread.start()
-
-        completed_streams = set()
-        failure_state: Optional[str] = None
-        while len(completed_streams) < 2:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                failure_state = STATE_TIMEOUT
-                self._terminate_process_group(process)
-                break
-            try:
-                label, chunk = stream_queue.get(timeout=min(0.05, remaining))
-            except queue.Empty:
-                if process.poll() is not None and len(completed_streams) == 2:
-                    break
-                continue
-            if chunk is None:
-                completed_streams.add(label)
-                continue
-            total_output += len(chunk)
-            if total_output > maximum_output_bytes:
-                failure_state = STATE_OUTPUT_TOO_LARGE
-                self._terminate_process_group(process)
-                break
-            if label == "stdout":
-                stdout_chunks.append(chunk)
-            else:
-                stderr_chunks.append(chunk)
-
-        if failure_state is None:
-            try:
-                returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                failure_state = STATE_TIMEOUT
-                self._terminate_process_group(process)
-                returncode = self._wait_reaped(process)
-        else:
-            returncode = self._wait_reaped(process)
-
-        for thread in threads:
-            thread.join(timeout=COMMAND_TERM_GRACE_SECONDS)
-
-        if failure_state == STATE_TIMEOUT:
-            raise CommandExecutionError(
-                "Adapter command timed out.",
-                state=STATE_TIMEOUT,
-            )
-        if failure_state == STATE_OUTPUT_TOO_LARGE:
-            raise CommandExecutionError(
-                "Adapter command output is too large.",
-                state=STATE_OUTPUT_TOO_LARGE,
-            )
-        if returncode == 126:
-            raise CommandExecutionError(
-                "Adapter command permission denied.",
-                state=STATE_PERMISSION_DENIED,
-            )
-        return CommandResult(
-            argv=argv_tuple,
-            returncode=int(returncode),
-            stdout=b"".join(stdout_chunks),
-            stderr=b"".join(stderr_chunks),
-        )
-
-    @staticmethod
-    def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
-        if process.poll() is not None:
-            return
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGTERM)
-            else:
-                process.terminate()
-        except OSError as exc:
-            if exc.errno != errno.ESRCH:
-                raise
-        try:
-            process.wait(timeout=COMMAND_TERM_GRACE_SECONDS)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-        except OSError as exc:
-            if exc.errno != errno.ESRCH:
-                raise
-
-    @staticmethod
-    def _wait_reaped(process: subprocess.Popen[bytes]) -> int:
-        while True:
-            try:
-                return int(process.wait(timeout=COMMAND_TERM_GRACE_SECONDS))
-            except subprocess.TimeoutExpired:
-                try:
-                    if os.name == "posix":
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
-                except OSError as exc:
-                    if exc.errno != errno.ESRCH:
-                        raise
-
-
-@dataclass(frozen=True)
 class DiscoverySource:
     name: str
     kind: str
@@ -342,7 +135,6 @@ class RawDeviceRecord:
     stable_identifier: Optional[str] = None
     stable_identifier_type: Optional[str] = None
     vendor_record_id: Optional[str] = None
-    assignment_stable: bool = False
     online_state: str = "unknown"
     connection_type: str = "unknown"
     wifi_band: Optional[str] = None
@@ -433,6 +225,13 @@ def _normalize_mac(value: str) -> str:
     compact = re.sub(r"[^0-9a-fA-F]", "", value)
     if len(compact) != 12 or not re.fullmatch(r"[0-9a-fA-F]{12}", compact):
         raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
+    raw = bytes.fromhex(compact)
+    if raw == b"\x00" * 6:
+        raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
+    if raw == b"\xff" * 6:
+        raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
+    if raw[0] & 0x01:
+        raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
     octets = [compact[index : index + 2].lower() for index in range(0, 12, 2)]
     return ":".join(octets)
 
@@ -490,12 +289,8 @@ def _display_identity(record: RawDeviceRecord) -> Optional[str]:
 
 
 def _assignment_identity(record: RawDeviceRecord) -> Optional[str]:
-    if record.stable_identifier and record.stable_identifier_type in ASSIGNMENT_TRUSTED_IDENTIFIER_TYPES:
-        return "%s:%s" % (record.stable_identifier_type, record.stable_identifier)
-    if record.assignment_stable and record.stable_identifier_type == "vendor_record_id" and record.stable_identifier:
-        return "vendor_record_id:%s" % record.stable_identifier
-    if record.assignment_stable and record.vendor_record_id:
-        return "vendor_record_id:%s" % record.vendor_record_id
+    if record.stable_identifier and record.stable_identifier_type == "mac":
+        return "mac:%s" % record.stable_identifier
     return None
 
 
@@ -602,7 +397,7 @@ def normalize_records(
         if not display_identity:
             reason = "stable identifier unavailable"
         elif not trusted_identity:
-            reason = "assignment-stable identifier unavailable"
+            reason = "selectable unicast MAC identity unavailable"
         elif conflict:
             reason = "conflicting stable identity"
         sources = tuple(sorted(set(record.source_kind for record in group)))
@@ -752,9 +547,6 @@ def _parse_record(source_name: str, source_kind: str, index: int, item: Any) -> 
         maximum_length=MAX_IDENTIFIER_LENGTH,
         description="vendor record id field",
     )
-    assignment_stable = item.get("assignment_stable", False)
-    if not isinstance(assignment_stable, bool):
-        raise DeviceDiscoveryError("Device inventory contains an unsupported assignment-stable field.")
     online_state = (
         _clean_text(
             item.get("online_state"),
@@ -794,7 +586,6 @@ def _parse_record(source_name: str, source_kind: str, index: int, item: Any) -> 
         stable_identifier=stable_identifier,
         stable_identifier_type=stable_identifier_type,
         vendor_record_id=vendor_record_id,
-        assignment_stable=assignment_stable,
         online_state=online_state,
         connection_type=connection_type,
         wifi_band=_clean_text(item.get("wifi_band"), description="wifi band field"),

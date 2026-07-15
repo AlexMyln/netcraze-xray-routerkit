@@ -19,15 +19,14 @@ protected fixture file
 
 ## Identity Rules
 
-Stable identity preference:
+Stable display/dedup identity preference:
 
-1. documented stable router identifier;
-2. normalized MAC/device identifier;
-3. explicitly reviewed assignment-stable vendor identifier;
-4. unproven vendor or unknown identifiers only as display/dedup hints;
-5. IP address only as a weak display/correlation hint.
+1. valid normalized unicast MAC address;
+2. router identifier as a display/dedup hint only until a code-owned hardware contract proves assignment stability;
+3. vendor or unknown identifiers only as display/dedup hints;
+4. IP address only as a weak display/correlation hint.
 
-Records merge only when they share display/dedup identity. Same IP with different stable IDs remains separate. Same name alone never merges. IP-only devices, unknown stable IDs, and standalone unreviewed vendor record IDs are shown but cannot be selected for future assignment.
+Records merge only when they share display/dedup identity. Same IP with different stable IDs remains separate. Same name alone never merges. IP-only devices, router IDs, unknown stable IDs, standalone vendor record IDs, and `vendor_record_id` stable identifiers are shown but cannot be selected for future assignment. Fixture data cannot declare assignment trust. A selectable MAC must be exactly 48 bits after normalization, unicast, not all-zero, and not broadcast; locally administered unicast MACs remain valid.
 
 ## Selection
 
@@ -62,4 +61,4 @@ The future vendor adapter must implement:
 - `collect()`;
 - `parse()`.
 
-External execution must use injected runners, exact argv allowlists, no shell interpolation, clean environments, process groups, concurrent bounded stdout/stderr draining, monotonic deadlines, TERM/KILL cleanup for direct children and descendants, and sanitized user-facing errors. Adapter states are `supported`, `unsupported`, `contract_unverified`, `malformed_output`, `permission_denied`, `timeout`, `output_too_large`, and `source_missing`; fixture confidence values are enumerated.
+Command execution is intentionally deferred. The hardware probe must first decide whether the target contract uses local CLI, `/rci`, another structured interface, or a combination. The eventual adapter will receive an interface-specific, separately reviewed execution boundary; this fixture-first PR does not claim that a reusable subprocess runner is ready. Adapter states are `supported`, `unsupported`, `contract_unverified`, `malformed_output`, `permission_denied`, `timeout`, `output_too_large`, and `source_missing`; fixture confidence values are enumerated.

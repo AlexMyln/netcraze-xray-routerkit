@@ -51,6 +51,23 @@ def supported_inventory_text(source_name="synthetic-supported", extra_record=Non
     )
 
 
+def inventory_with_records(records, source_name="synthetic-records"):
+    return json.dumps(
+        {
+            "schema": devices.FIXTURE_SCHEMA,
+            "sources": [
+                {
+                    "name": source_name,
+                    "kind": "dhcp_leases",
+                    "state": devices.STATE_SUPPORTED,
+                    "confidence": "fixture",
+                    "records": records,
+                }
+            ],
+        }
+    )
+
+
 def supported_result():
     return devices.parse_fixture_inventory(supported_inventory_text())
 
@@ -141,15 +158,146 @@ class DeviceNormalizationTests(unittest.TestCase):
         self.assertFalse(by_name["Unknown Identity"].selectable)
         self.assertEqual(
             by_name["Unknown Identity"].selection_block_reason,
-            "assignment-stable identifier unavailable",
+            "selectable unicast MAC identity unavailable",
         )
         self.assertFalse(by_name["Vendor Only"].selectable)
         self.assertEqual(
             by_name["Vendor Only"].selection_block_reason,
-            "assignment-stable identifier unavailable",
+            "selectable unicast MAC identity unavailable",
         )
         self.assertFalse(by_name["IP Only"].selectable)
         self.assertEqual(by_name["IP Only"].selection_block_reason, "stable identifier unavailable")
+
+    def test_fixture_assignment_stable_field_is_rejected(self):
+        result = devices.parse_fixture_inventory(
+            inventory_with_records(
+                [
+                    {
+                        "source_record_id": "vendor-only",
+                        "display_name": "Vendor Only",
+                        "vendor_record_id": "vendor-controlled-id",
+                        "assignment_stable": True,
+                    }
+                ],
+                source_name="synthetic-assignment-stable",
+            )
+        )
+
+        self.assertEqual(result.adapter_state, devices.STATE_MALFORMED_OUTPUT)
+        self.assertEqual(result.devices, ())
+        self.assertEqual(result.errors, ("malformed record skipped from source synthetic-assignment-stable",))
+
+    def test_router_id_is_display_and_dedup_only(self):
+        result = devices.parse_fixture_inventory(
+            inventory_with_records(
+                [
+                    {
+                        "source_record_id": "router-id-a",
+                        "display_name": "Router ID A",
+                        "addresses": ["192.0.2.82"],
+                        "stable_identifier": "router-owned-id",
+                        "stable_identifier_type": "router_id",
+                    },
+                    {
+                        "source_record_id": "router-id-b",
+                        "display_name": "Router ID B",
+                        "addresses": ["192.0.2.83"],
+                        "stable_identifier": "router-owned-id",
+                        "stable_identifier_type": "router_id",
+                    },
+                ],
+                source_name="synthetic-router-id",
+            )
+        )
+
+        self.assertEqual(result.adapter_state, devices.STATE_SUPPORTED)
+        self.assertEqual(len(result.devices), 1)
+        self.assertEqual(result.devices[0].stable_identifier_type, "router_id")
+        self.assertFalse(result.devices[0].selectable)
+        self.assertEqual(
+            result.devices[0].selection_block_reason,
+            "selectable unicast MAC identity unavailable",
+        )
+
+    def test_vendor_record_id_stable_identifier_is_not_selectable(self):
+        result = devices.parse_fixture_inventory(
+            inventory_with_records(
+                [
+                    {
+                        "source_record_id": "vendor-stable",
+                        "display_name": "Vendor Stable",
+                        "stable_identifier": "vendor-controlled-id",
+                        "stable_identifier_type": "vendor_record_id",
+                    }
+                ],
+                source_name="synthetic-vendor-stable",
+            )
+        )
+
+        self.assertEqual(result.adapter_state, devices.STATE_SUPPORTED)
+        self.assertEqual(len(result.devices), 1)
+        self.assertFalse(result.devices[0].selectable)
+        self.assertEqual(
+            result.devices[0].selection_block_reason,
+            "selectable unicast MAC identity unavailable",
+        )
+
+    def test_valid_unicast_macs_are_selectable_and_normalized(self):
+        result = devices.parse_fixture_inventory(
+            inventory_with_records(
+                [
+                    {
+                        "source_record_id": "global",
+                        "display_name": "Global Unicast",
+                        "stable_identifier": "00-11-22-AA-BB-CC",
+                        "stable_identifier_type": "mac",
+                    },
+                    {
+                        "source_record_id": "local",
+                        "display_name": "Local Unicast",
+                        "stable_identifier": "02.00.5E.00.00.10",
+                        "stable_identifier_type": "mac",
+                    },
+                ],
+                source_name="synthetic-valid-macs",
+            )
+        )
+
+        by_name = {item.display_name: item for item in result.devices}
+        self.assertEqual(result.adapter_state, devices.STATE_SUPPORTED)
+        self.assertEqual(by_name["Global Unicast"].stable_identifier, "00:11:22:aa:bb:cc")
+        self.assertEqual(by_name["Local Unicast"].stable_identifier, "02:00:5e:00:00:10")
+        self.assertTrue(by_name["Global Unicast"].selectable)
+        self.assertTrue(by_name["Local Unicast"].selectable)
+
+    def test_special_macs_are_malformed_and_block_nonzero_selection(self):
+        for label, mac in (
+            ("all-zero", "00:00:00:00:00:00"),
+            ("broadcast", "ff:ff:ff:ff:ff:ff"),
+            ("ipv4-multicast", "01:00:5e:00:00:01"),
+            ("ipv6-multicast", "33:33:00:00:00:01"),
+            ("other-group", "03:00:00:00:00:01"),
+        ):
+            with self.subTest(mac=mac):
+                result = devices.parse_fixture_inventory(
+                    supported_inventory_text(
+                        source_name="synthetic-%s" % label,
+                        extra_record={
+                            "source_record_id": label,
+                            "display_name": label,
+                            "stable_identifier": mac,
+                            "stable_identifier_type": "mac",
+                            "addresses": ["192.0.2.84"],
+                        },
+                    )
+                )
+
+                self.assertEqual(result.adapter_state, devices.STATE_MALFORMED_OUTPUT)
+                self.assertEqual(len(result.devices), 1)
+                selectable = next(index for index, item in enumerate(result.devices, start=1) if item.selectable)
+                with self.assertRaises(devices.DeviceSelectionError):
+                    devices.select_device(result, selectable)
+                self.assertFalse(devices.select_device(result, 0).selected)
 
     def test_malformed_source_errors_are_sanitized(self):
         result = mixed_result()

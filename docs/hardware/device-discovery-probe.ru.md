@@ -32,6 +32,8 @@
 
 Это candidates, а не executable RouterKit defaults, пока они не проверены на target hardware.
 
+Fixture-first software намеренно не содержит generic subprocess runner для этих candidates. После того как probe выберет CLI versus `/rci` versus другой structured interface, production adapter должен получить interface-specific execution boundary в отдельном reviewed change.
+
 ## Safety rules
 
 - no configuration mode;

@@ -51,13 +51,14 @@ This PR implements:
 
 - fixture-first core models and adapter states;
 - protected local fixture input only;
-- deterministic normalization, trusted-ID selection gating, sorting, JSON/text rendering, public-evidence redaction, and fail-closed selection;
+- deterministic normalization, valid-unicast-MAC selection gating, sorting, JSON/text rendering, public-evidence redaction, and fail-closed selection;
 - `routerkit devices` and `scripts/routerkit-devices.py`;
 - `routerkit setup --discover-devices` for explicit read-only selection after strict planning.
 
 It does not implement:
 
 - live router command execution;
+- a reusable subprocess runner before CLI versus `/rci` is hardware-confirmed;
 - active LAN scanning;
 - policy writes or device assignment;
 - proxy connection changes;

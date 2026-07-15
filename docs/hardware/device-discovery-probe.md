@@ -32,6 +32,8 @@ The official KeeneticOS CLI reference documents these as read-only candidates:
 
 They remain candidates, not executable RouterKit defaults, until verified on the target hardware.
 
+The fixture-first software intentionally contains no generic subprocess runner for these candidates. After this probe decides CLI versus `/rci` versus another structured interface, the production adapter needs an interface-specific execution boundary reviewed in that later change.
+
 ## Safety Rules
 
 - no configuration mode;

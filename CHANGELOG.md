@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
-- Hardened fixture-first device discovery selection: nonzero choices now fail closed on degraded/partial inventories, raw public-evidence output no longer exposes source names or errors, selection handles are ephemeral/internal only, and the command runner enforces streaming output/time/process bounds with process-group cleanup.
+- Hardened fixture-first device discovery selection: nonzero choices now fail closed on degraded/partial inventories, raw public-evidence output no longer exposes source names or errors, selection handles are ephemeral/internal only, fixture data cannot elevate identifier trust, only valid unicast MACs are assignment-selectable, and the premature generic command runner has been removed until the hardware contract chooses an interface-specific execution boundary.
 - Device discovery is fixture-first and read-only: live Netcraze/Keenetic command execution remains disabled as `contract_unverified`, protected inventory-file mode rejects symlinks/hardlinks/oversized/invalid UTF-8 input, IP-only devices cannot be selected, and public-evidence JSON redacts local identifiers.
 - Autostart apply no longer exposes a public `--proc-root` override; production status, verify, and apply inspect real `/proc` only.
 - Autostart runtime verification now requires stable PID start time, executable device/inode, exact command line, and listener ownership, and rejects PID reuse or identity changes during verification.
