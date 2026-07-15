@@ -233,6 +233,16 @@ python3 scripts/routerkit.py setup --apply --enable-autostart
 
 It runs only after healthcheck and uses the same transactional child supervisor as bootstrap integration. Autostart failure, signal observation, spawn failure, or supervision failure blocks the setup success summary and preserves the child result.
 
+Explicit device discovery is read-only and fixture-first:
+
+```sh
+python3 scripts/routerkit.py devices status
+python3 scripts/routerkit.py devices discover --inventory-file /protected/path/device-inventory.json
+python3 scripts/routerkit.py setup --discover-devices --device-inventory-file /protected/path/device-inventory.json
+```
+
+The live Netcraze/Keenetic adapter reports `contract_unverified` until the hardware probe confirms the target-firmware contract. The inventory-file mode is for synthetic offline validation only and requires an owner-only regular file with no symlink or hardlink. Selection always includes option `0` for no assignment; blank input and EOF also choose no assignment. The stage produces an in-memory selection token only. It writes no policy, creates no proxy connection, changes no default policy, performs no active scan, and does not persist real inventories.
+
 Use dry-run to render an abstract secret-free flow with no source, reuse-file, secret-input, or environment-value read; no stdin prompt; and no DNS/HTTPS request, subprocess, private workspace, profile, generated file, write, or router action:
 
 ```sh
@@ -243,7 +253,7 @@ python3 scripts/routerkit.py setup --apply --bootstrap-apply --dry-run
 
 This setup dry-run contract differs from standalone `profile-source --dry-run`: standalone profile-source may still perform an HTTPS network read to validate selection, while setup dry-run performs no secret input or network access. Python module loading and repository-path resolution are outside the secret-input contract.
 
-This integration functionally completes #29 and parent #13 but is not the end of epic #5. Autostart is #14, Netcraze proxy/policy automation #15, device discovery #21, and hardware validation #16. The path is not hardware-tested until #16 is complete. Plain `setup` and `setup --apply` do not bootstrap or enable autostart; only explicit flags add those stages. No setup mode activates Entware, proves reboot persistence, discovers devices, changes Netcraze policies or the default policy, automates the Web UI, creates firewall/TPROXY/REDIRECT rules, or calls `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
+This integration functionally completes #29 and parent #13 but is not the end of epic #5. Autostart is #14, Netcraze proxy/policy automation #15, read-only fixture-first device discovery is #21 software work with hardware contract confirmation still pending, and hardware validation is #16. The path is not hardware-tested until #16 is complete. Plain `setup` and `setup --apply` do not bootstrap, enable autostart, or discover devices; only explicit flags add those stages. No setup mode activates Entware, proves reboot persistence, writes Netcraze policies or the default policy, automates the Web UI, creates firewall/TPROXY/REDIRECT rules, or calls `xkeen -start`. Generated fragments remain secret-bearing local operational artifacts and must not be published.
 
 ## Install command
 

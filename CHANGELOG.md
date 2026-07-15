@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Device discovery is fixture-first and read-only: live Netcraze/Keenetic command execution remains disabled as `contract_unverified`, protected inventory-file mode rejects symlinks/hardlinks/oversized/invalid UTF-8 input, IP-only devices cannot be selected, and public-evidence JSON redacts local identifiers.
 - Autostart apply no longer exposes a public `--proc-root` override; production status, verify, and apply inspect real `/proc` only.
 - Autostart runtime verification now requires stable PID start time, executable device/inode, exact command line, and listener ownership, and rejects PID reuse or identity changes during verification.
 - Autostart enable now distinguishes runtime verification, restart performed, and restart verification; verified no-op paths no longer claim a restart.
@@ -28,6 +29,9 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Read-only `routerkit devices` and `scripts/routerkit-devices.py` with deterministic synthetic inventory normalization, stable-ID deduplication, text/JSON output, public-evidence redaction, and explicit no-assignment selection.
+- Explicit `routerkit setup --discover-devices` fixture/offline stage after strict planning, with no policy writes, proxy writes, active scanning, or device assignment.
+- Device-discovery architecture, interface research, read-only hardware probe packet, synthetic fixtures, focused tests, and CI fixture guards.
 - Explicit standalone `routerkit autostart` status/verify/enable/disable documentation and an autostart execution-model ADR in English and Russian.
 - Focused autostart transaction, signal-supervision, and `S23xray-direct` shell-contract tests, with CI syntax and focused-suite coverage.
 - Explicit `routerkit setup --apply --bootstrap-apply` orchestration for the reviewed standalone bootstrap transaction.
@@ -70,6 +74,7 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- The roadmap documentation now distinguishes fixture-first #21 software readiness from pending target-hardware discovery contract confirmation and #15 assignment writes.
 - `install --apply --enable-autostart` and `setup --apply --enable-autostart` run the explicit autostart stage after healthcheck through the transactional child supervisor; neither performs reboot proof or policy/firewall/Web UI work.
 - The unused autostart receipt is removed from the trust/idempotency boundary; stale receipt state is removed during enable/disable cleanup.
 - Bootstrap remains opt-in inside setup and runs only after strict planning and the visible setup confirmation.

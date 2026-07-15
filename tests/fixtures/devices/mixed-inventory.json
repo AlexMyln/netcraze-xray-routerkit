@@ -1,0 +1,151 @@
+{
+  "schema": "routerkit.devices.fixture.v1",
+  "generated_at": "2026-07-15T08:00:00Z",
+  "sources": [
+    {
+      "name": "synthetic-dhcp",
+      "kind": "dhcp_leases",
+      "state": "supported",
+      "records": [
+        {
+          "source_record_id": "dhcp-tv",
+          "display_name": "Living Room TV",
+          "addresses": ["192.0.2.10", "2001:db8::10"],
+          "stable_identifier": "02:00:5e:00:00:10",
+          "stable_identifier_type": "mac",
+          "online_state": "online",
+          "connection_type": "wifi",
+          "wifi_band": "5 GHz",
+          "interface": "WifiMaster0/AccessPoint0",
+          "existing_policy": "kids-media",
+          "stale": false
+        },
+        {
+          "source_record_id": "dhcp-office",
+          "display_name": "Office PC",
+          "addresses": ["198.51.100.20"],
+          "stable_identifier": "02:00:5e:00:00:20",
+          "stable_identifier_type": "mac",
+          "online_state": "unknown",
+          "connection_type": "ethernet",
+          "interface": "GigabitEthernet0/Vlan1",
+          "existing_policy": null,
+          "stale": false
+        },
+        {
+          "source_record_id": "dhcp-printer",
+          "display_name": "Study Printer",
+          "addresses": ["203.0.113.30"],
+          "stable_identifier": "02:00:5e:00:00:30",
+          "stable_identifier_type": "mac",
+          "online_state": "offline",
+          "connection_type": "ethernet",
+          "stale": true
+        },
+        {
+          "source_record_id": "dhcp-unnamed",
+          "addresses": ["192.0.2.40"],
+          "stable_identifier": "02:00:5e:00:00:40",
+          "stable_identifier_type": "mac",
+          "online_state": "unknown",
+          "connection_type": "unknown",
+          "stale": false
+        },
+        {
+          "source_record_id": "dhcp-ip-only",
+          "display_name": "Transient Lease",
+          "addresses": ["192.0.2.99"],
+          "online_state": "offline",
+          "connection_type": "unknown",
+          "stale": true
+        }
+      ]
+    },
+    {
+      "name": "synthetic-wifi",
+      "kind": "wifi_associations",
+      "state": "supported",
+      "records": [
+        {
+          "source_record_id": "wifi-tv",
+          "display_name": "Living Room TV",
+          "addresses": ["192.0.2.10"],
+          "stable_identifier": "02-00-5e-00-00-10",
+          "stable_identifier_type": "mac",
+          "online_state": "online",
+          "connection_type": "wifi",
+          "wifi_band": "5 GHz",
+          "interface": "WifiMaster0/AccessPoint0",
+          "stale": false
+        },
+        {
+          "source_record_id": "wifi-same-name",
+          "display_name": "Living Room TV",
+          "addresses": ["192.0.2.50"],
+          "stable_identifier": "02:00:5e:00:00:50",
+          "stable_identifier_type": "mac",
+          "online_state": "online",
+          "connection_type": "wifi",
+          "wifi_band": "2.4 GHz",
+          "interface": "WifiMaster1/AccessPoint0",
+          "stale": false
+        },
+        {
+          "source_record_id": "wifi-reused-ip",
+          "display_name": "Kitchen Speaker",
+          "addresses": ["192.0.2.10"],
+          "stable_identifier": "02:00:5e:00:00:60",
+          "stable_identifier_type": "mac",
+          "online_state": "online",
+          "connection_type": "wifi",
+          "wifi_band": "2.4 GHz",
+          "interface": "WifiMaster1/AccessPoint0",
+          "stale": false
+        }
+      ]
+    },
+    {
+      "name": "synthetic-ethernet",
+      "kind": "ethernet_fdb",
+      "state": "supported",
+      "records": [
+        {
+          "source_record_id": "eth-office",
+          "display_name": "Office PC",
+          "addresses": ["198.51.100.20", "198.51.100.21"],
+          "stable_identifier": "02:00:5e:00:00:20",
+          "stable_identifier_type": "mac",
+          "online_state": "online",
+          "connection_type": "ethernet",
+          "interface": "GigabitEthernet0/Vlan1",
+          "stale": false
+        }
+      ]
+    },
+    {
+      "name": "synthetic-policy",
+      "kind": "policy_bindings",
+      "state": "source_missing",
+      "confidence": "fixture",
+      "records": []
+    },
+    {
+      "name": "synthetic-permission",
+      "kind": "policy_bindings",
+      "state": "permission_denied",
+      "confidence": "fixture",
+      "records": []
+    },
+    {
+      "name": "synthetic-malformed",
+      "kind": "dhcp_leases",
+      "state": "supported",
+      "records": [
+        {
+          "source_record_id": "malformed-no-identity",
+          "display_name": "Malformed"
+        }
+      ]
+    }
+  ]
+}

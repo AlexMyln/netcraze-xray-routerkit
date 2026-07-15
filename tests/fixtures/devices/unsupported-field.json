@@ -1,0 +1,22 @@
+{
+  "schema": "routerkit.devices.fixture.v1",
+  "sources": [
+    {
+      "name": "synthetic-extra-field",
+      "kind": "dhcp_leases",
+      "state": "supported",
+      "records": [
+        {
+          "source_record_id": "extra",
+          "display_name": "Extra Field",
+          "addresses": ["192.0.2.80"],
+          "stable_identifier": "02:00:5e:00:00:80",
+          "stable_identifier_type": "mac",
+          "online_state": "online",
+          "connection_type": "wifi",
+          "unexpected": "unsupported"
+        }
+      ]
+    }
+  ]
+}
