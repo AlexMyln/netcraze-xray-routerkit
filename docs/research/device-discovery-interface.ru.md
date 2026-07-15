@@ -14,10 +14,10 @@
 
 | Evidence | Publisher | URL | Claim | Confidence |
 | --- | --- | --- | --- | --- |
-| Command Reference Guide, Hero KN-1011, OS 4.0 | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | CLI reference указывает, какие команды меняют настройки, и содержит раздел HTTP API `/rci`. | official_documented |
-| `show ip dhcp bindings` | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | Read-only команда с DHCP lease records: IP, MAC, expiry, hostname. | official_documented |
-| `show associations` | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | Read-only команда с Wi-Fi station association records: MAC, AP/interface, authentication, uptime, radio metrics. | official_documented |
-| `show ip hotspot summary` | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | Read-only summary registered hosts, active state и names для traffic counters. | official_documented |
+| Command Reference Guide, Hero KN-1011, OS 4.0 | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | CLI reference указывает metadata `Change settings` и содержит раздел HTTP API `/rci`. | official_documented |
+| `show ip dhcp bindings` | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | Section 3.146.52, guide p. 537, marked `Change settings No`; example содержит DHCP lease fields: IP, MAC, expiry, hostname. | official_documented |
+| `show associations` | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | Section 3.146.4, guide pp. 475-476, marked `Change settings No`; example содержит Wi-Fi station fields: MAC, AP/interface, authentication, uptime, radio metrics. | official_documented |
+| `show ip hotspot summary` | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | Section 3.146.57, guide pp. 542-543, marked `Change settings No`; summary registered hosts включает active state и names для traffic counters. | official_documented |
 | REST Core Interface | Keenetic Limited | https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf | `/rci` описан как HTTP API base для доступа к settings через HTTP methods. | official_documented |
 | Keenetic User Manual | Keenetic GmbH | https://support.keenetic.com/eu/titan/kn-1811/en/31111-keenetic-mobile-application.html | Manual index содержит Web Interface, Status, Traffic monitor и Wi-Fi monitor, но не фиксирует local client API schema. | official_documented |
 | KeeneticOS overview | Keenetic GmbH | https://keenetic.com/en/keenetic-os | KeeneticOS описан как modular OS для Keenetic products с monitoring и device-oriented management. | official_documented |
@@ -25,7 +25,7 @@
 ## Доказанные факты
 
 - Официальный CLI reference существует и различает команды, меняющие настройки, и read-only команды.
-- `show ip dhcp bindings`, `show associations` и `show ip hotspot summary` описаны как read-only.
+- `show ip dhcp bindings`, `show associations` и `show ip hotspot summary` описаны как candidate read-only commands с `Change settings No`.
 - Документированные поля покрывают часть #21: IP/MAC/hostname из DHCP, Wi-Fi association MAC/interface/radio state и hotspot active/name summaries.
 - `/rci` описан как REST Core Interface base, но local auth и точное mapping-to-command behavior нужно подтвердить на целевом устройстве.
 
@@ -51,7 +51,7 @@
 
 - fixture-first models и adapter states;
 - только protected local fixture input;
-- deterministic normalization, stable-ID deduplication, sorting, JSON/text output, redaction и selection;
+- deterministic normalization, trusted-ID selection gating, sorting, JSON/text output, public-evidence redaction и fail-closed selection;
 - `routerkit devices` и `scripts/routerkit-devices.py`;
 - `routerkit setup --discover-devices` как explicit read-only stage после strict planning.
 

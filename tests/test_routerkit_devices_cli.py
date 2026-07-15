@@ -17,13 +17,40 @@ if str(SCRIPTS) not in sys.path:
 import routerkit_devices as devices
 
 
-def private_inventory_copy(directory):
-    source = FIXTURES / "mixed-inventory.json"
+def private_inventory_copy(directory, text=None):
     destination = Path(directory) / "inventory.json"
-    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    if text is None:
+        text = (FIXTURES / "mixed-inventory.json").read_text(encoding="utf-8")
+    destination.write_text(text, encoding="utf-8")
     if os.name == "posix":
         destination.chmod(0o600)
     return destination
+
+
+def supported_inventory_text():
+    return json.dumps(
+        {
+            "schema": devices.FIXTURE_SCHEMA,
+            "sources": [
+                {
+                    "name": "synthetic-supported",
+                    "kind": "dhcp_leases",
+                    "state": devices.STATE_SUPPORTED,
+                    "records": [
+                        {
+                            "source_record_id": "dhcp-tv",
+                            "display_name": "Living Room TV",
+                            "addresses": ["192.0.2.10"],
+                            "stable_identifier": "02:00:5e:00:00:10",
+                            "stable_identifier_type": "mac",
+                            "online_state": "online",
+                            "connection_type": "wifi",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
 
 
 class DevicesCliTests(unittest.TestCase):
@@ -77,15 +104,28 @@ class DevicesCliTests(unittest.TestCase):
             self.assertIn("no device assignment", stdout)
             self.assertEqual(stderr, "")
 
+        with tempfile.TemporaryDirectory() as directory:
+            inventory = private_inventory_copy(directory, supported_inventory_text())
             code, stdout, stderr = self.run_cli(["select", "--inventory-file", str(inventory), "--choice", "1", "--json"])
             payload = json.loads(stdout)
             self.assertEqual(code, 0)
             self.assertTrue(payload["selected"])
-            self.assertIn("routerkit-device-selection-v1:", payload["selection_token"])
+            self.assertNotIn("selection_token", payload)
+            self.assertEqual(payload["selection_handle"], "internal-only")
+
+    def test_degraded_nonzero_selection_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory = private_inventory_copy(directory)
+
+            code, stdout, stderr = self.run_cli(["select", "--inventory-file", str(inventory), "--choice", "1"])
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("not complete and trusted", stderr)
 
     def test_select_invalid_index_fails_before_assignment(self):
         with tempfile.TemporaryDirectory() as directory:
-            inventory = private_inventory_copy(directory)
+            inventory = private_inventory_copy(directory, supported_inventory_text())
 
             code, stdout, stderr = self.run_cli(["select", "--inventory-file", str(inventory), "--choice", "99"])
 
@@ -112,6 +152,35 @@ class DevicesCliTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertNotIn("Living Room TV", stdout)
             self.assertNotIn("192.0.2.10", stdout)
+
+    def test_argument_matrix_rejects_invalid_combinations_before_inventory_read(self):
+        missing = "/definitely/missing/inventory.json"
+        cases = [
+            ["status", "--inventory-file", missing],
+            ["status", "--public-evidence"],
+            ["status", "--redaction-salt", "salt"],
+            ["status", "--choice", "0"],
+            ["discover", "--choice", "0", "--inventory-file", missing],
+            ["discover", "--redaction-salt", "salt", "--inventory-file", missing],
+            ["select", "--public-evidence", "--inventory-file", missing],
+            ["select", "--redaction-salt", "salt", "--inventory-file", missing],
+        ]
+        for argv in cases:
+            with self.subTest(argv=argv):
+                code, stdout, stderr = self.run_cli(argv)
+                self.assertEqual(code, 2)
+                self.assertEqual(stdout, "")
+                self.assertNotIn("missing", stderr)
+
+    def test_public_evidence_implies_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory = private_inventory_copy(directory)
+
+            code, stdout, stderr = self.run_cli(["discover", "--inventory-file", str(inventory), "--public-evidence"])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr, "")
+            self.assertEqual(json.loads(stdout)["sensitivity"], devices.SENSITIVITY_PUBLIC)
 
 
 if __name__ == "__main__":

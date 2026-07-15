@@ -30,7 +30,12 @@ from routerkit_private_io import (
     read_owner_only_text_file,
     write_private_text_exclusive,
 )
-from routerkit_devices import run_setup_selection_stage
+from routerkit_devices import (
+    DeviceCliUsageError,
+    accept_read_only_device_selection,
+    run_setup_selection_stage,
+    validate_args as validate_device_args,
+)
 from routerkit_profile_source import PayloadValidationError, validate_env_name
 
 INSTALL_PLAN_NOTICE = (
@@ -440,6 +445,10 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
         return command
 
     if args.command == "devices":
+        try:
+            validate_device_args(args)
+        except DeviceCliUsageError as exc:
+            raise RouterkitCliError(str(exc), exit_code=2) from None
         command = [sys.executable, _repo_script(repo_root, "routerkit-devices.py"), args.mode]
         if args.inventory_file:
             command.extend(["--inventory-file", args.inventory_file])
@@ -959,7 +968,25 @@ def _print_setup_source_summary(mode: str) -> None:
     print("Generated config fragments remain locally and may contain secrets; do not publish them.")
 
 
-def print_setup_plan_summary(mode: str = "source", *, discover_devices: bool = False) -> None:
+def _print_device_selection_summary(*, selected_for_future_planning: bool) -> None:
+    if selected_for_future_planning:
+        print(
+            "Read-only device discovery selected a device for future planning; "
+            "no Netcraze policy/device assignment was written."
+        )
+    else:
+        print(
+            "Read-only device discovery completed with no selected device; "
+            "no Netcraze policy/device assignment was written."
+        )
+
+
+def print_setup_plan_summary(
+    mode: str = "source",
+    *,
+    discover_devices: bool = False,
+    selected_for_future_planning: bool = False,
+) -> None:
     print("Setup plan completed.")
     _print_setup_source_summary(mode)
     print("No router apply steps were executed.")
@@ -971,7 +998,7 @@ def print_setup_plan_summary(mode: str = "source", *, discover_devices: bool = F
         "No autostart was executed; #16 remains reboot/hardware proof."
     )
     if discover_devices:
-        print("Read-only device selection ran, but no Netcraze policy/device assignment was written.")
+        _print_device_selection_summary(selected_for_future_planning=selected_for_future_planning)
 
 
 def print_setup_apply_summary(
@@ -980,6 +1007,7 @@ def print_setup_apply_summary(
     bootstrap_apply: bool = False,
     enable_autostart: bool = False,
     discover_devices: bool = False,
+    selected_for_future_planning: bool = False,
 ) -> None:
     print("Setup apply completed.")
     _print_setup_source_summary(mode)
@@ -998,7 +1026,7 @@ def print_setup_apply_summary(
     else:
         print("Autostart was not enabled.")
     if discover_devices:
-        print("Read-only device selection ran, but no Netcraze policy/device assignment was written.")
+        _print_device_selection_summary(selected_for_future_planning=selected_for_future_planning)
     print("Netcraze proxy connections, policies, and default policy were not changed.")
     print("Firewall rules were not changed.")
     print("xkeen -start was not called.")
@@ -1479,18 +1507,24 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
     if code != 0:
         return code
 
+    selected_for_future_planning = False
     if args.discover_devices:
         code, selected_device = run_setup_selection_stage(
             inventory_file=args.device_inventory_file,
             choice=args.device_choice,
             input_fn=input_fn,
         )
-        del selected_device
         if code != 0:
             return code
+        accept_read_only_device_selection(selected_device)
+        selected_for_future_planning = bool(selected_device and selected_device.selected)
 
     if not args.apply:
-        print_setup_plan_summary(mode, discover_devices=args.discover_devices)
+        print_setup_plan_summary(
+            mode,
+            discover_devices=args.discover_devices,
+            selected_for_future_planning=selected_for_future_planning,
+        )
         return 0
 
     if args.bootstrap_apply:
@@ -1560,6 +1594,7 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         bootstrap_apply=args.bootstrap_apply,
         enable_autostart=args.enable_autostart,
         discover_devices=args.discover_devices,
+        selected_for_future_planning=selected_for_future_planning,
     )
     return code
 
@@ -1971,7 +2006,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     devices = subparsers.add_parser(
         "devices",
         help="Run read-only local-device discovery status, fixture discovery, or selection.",
-        description="Fixture-first read-only device discovery. Vendor discovery is disabled until hardware-confirmed.",
+        description=(
+            "Fixture-first read-only device discovery. Vendor discovery is disabled until hardware-confirmed. "
+            "status accepts only --json; discover accepts public-evidence JSON; select rejects public-evidence."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     devices.add_argument(
@@ -1982,9 +2020,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     devices.add_argument("--inventory-file", metavar="PATH")
     devices.add_argument("--json", action="store_true")
-    devices.add_argument("--public-evidence", action="store_true")
-    devices.add_argument("--redaction-salt")
-    devices.add_argument("--choice", type=int)
+    devices.add_argument("--public-evidence", action="store_true", help="Discover mode only; implies JSON.")
+    devices.add_argument("--redaction-salt", help="Discover public-evidence only.")
+    devices.add_argument("--choice", type=int, help="Select mode only; 0 means no assignment.")
 
     plan = subparsers.add_parser(
         "plan",

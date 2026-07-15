@@ -4,19 +4,24 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import hmac
 import ipaddress
 import json
 import os
+import queue
 import re
 import secrets
+import signal
 import stat
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from routerkit_private_io import (
     PrivateFileEncodingError,
@@ -41,8 +46,49 @@ STATE_SOURCE_MISSING = "source_missing"
 
 ONLINE_STATES = ("online", "unknown", "offline")
 CONNECTION_TYPES = ("ethernet", "wifi", "unknown")
+ADAPTER_STATES = (
+    STATE_SUPPORTED,
+    STATE_UNSUPPORTED,
+    STATE_CONTRACT_UNVERIFIED,
+    STATE_MALFORMED_OUTPUT,
+    STATE_PERMISSION_DENIED,
+    STATE_TIMEOUT,
+    STATE_OUTPUT_TOO_LARGE,
+    STATE_SOURCE_MISSING,
+)
+SOURCE_KINDS = (
+    "dhcp_leases",
+    "wifi_associations",
+    "ethernet_fdb",
+    "policy_bindings",
+    "fixture",
+    "vendor",
+)
+CONFIDENCE_VALUES = (
+    "fixture",
+    "official_documented",
+    "official_inferred",
+    "secondary_corroborated",
+    "hardware_confirmation_required",
+)
+ASSIGNMENT_TRUSTED_IDENTIFIER_TYPES = ("mac", "router_id")
 SENSITIVITY_LOCAL = "local_sensitive"
 SENSITIVITY_PUBLIC = "public_evidence_redacted"
+
+MAX_SOURCE_COUNT = 16
+MAX_RECORDS_PER_SOURCE = 256
+MAX_TOTAL_RECORDS = 512
+MAX_NORMALIZED_DEVICES = 512
+MAX_ADDRESSES_PER_RECORD = 16
+MAX_ADDRESSES_PER_DEVICE = 32
+MAX_SOURCE_NAME_LENGTH = 64
+MAX_DISPLAY_NAME_LENGTH = 128
+MAX_IDENTIFIER_LENGTH = 128
+MAX_SOURCE_RECORD_ID_LENGTH = 128
+MAX_OPTIONAL_FIELD_LENGTH = 128
+MAX_ERROR_COUNT = 64
+COMMAND_TERM_GRACE_SECONDS = 0.25
+COMMAND_READ_CHUNK_BYTES = 8192
 
 _RECORD_KEYS = {
     "source_record_id",
@@ -51,6 +97,7 @@ _RECORD_KEYS = {
     "stable_identifier",
     "stable_identifier_type",
     "vendor_record_id",
+    "assignment_stable",
     "online_state",
     "connection_type",
     "wifi_band",
@@ -69,7 +116,15 @@ class DeviceDiscoveryError(Exception):
         self.state = state
 
 
+class DeviceInventorySchemaError(DeviceDiscoveryError):
+    pass
+
+
 class DeviceSelectionError(DeviceDiscoveryError):
+    pass
+
+
+class DeviceCliUsageError(DeviceDiscoveryError):
     pass
 
 
@@ -107,20 +162,38 @@ class BoundedCommandRunner:
             )
         if env is None:
             env = {}
+        if maximum_output_bytes < 0:
+            raise CommandExecutionError(
+                "Adapter command output limit is invalid.",
+                state=STATE_UNSUPPORTED,
+            )
+        deadline = time.monotonic() + timeout_seconds
+        stream_queue: "queue.Queue[Tuple[str, Optional[bytes]]]" = queue.Queue()
+        stdout_chunks: List[bytes] = []
+        stderr_chunks: List[bytes] = []
+        total_output = 0
+        process: Optional[subprocess.Popen[bytes]] = None
+
+        def drain_stream(label: str, stream: Any) -> None:
+            try:
+                while True:
+                    chunk = os.read(stream.fileno(), COMMAND_READ_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    stream_queue.put((label, chunk))
+            finally:
+                stream.close()
+                stream_queue.put((label, None))
+
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 list(argv_tuple),
-                check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=timeout_seconds,
                 env=dict(env),
+                shell=False,
+                start_new_session=(os.name == "posix"),
             )
-        except subprocess.TimeoutExpired:
-            raise CommandExecutionError(
-                "Adapter command timed out.",
-                state=STATE_TIMEOUT,
-            ) from None
         except PermissionError:
             raise CommandExecutionError(
                 "Adapter command permission denied.",
@@ -136,23 +209,119 @@ class BoundedCommandRunner:
                 "Adapter command could not be executed.",
                 state=STATE_UNSUPPORTED,
             ) from None
-        output_size = len(completed.stdout or b"") + len(completed.stderr or b"")
-        if output_size > maximum_output_bytes:
+
+        assert process.stdout is not None
+        assert process.stderr is not None
+        threads = [
+            threading.Thread(target=drain_stream, args=("stdout", process.stdout)),
+            threading.Thread(target=drain_stream, args=("stderr", process.stderr)),
+        ]
+        for thread in threads:
+            thread.daemon = True
+            thread.start()
+
+        completed_streams = set()
+        failure_state: Optional[str] = None
+        while len(completed_streams) < 2:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure_state = STATE_TIMEOUT
+                self._terminate_process_group(process)
+                break
+            try:
+                label, chunk = stream_queue.get(timeout=min(0.05, remaining))
+            except queue.Empty:
+                if process.poll() is not None and len(completed_streams) == 2:
+                    break
+                continue
+            if chunk is None:
+                completed_streams.add(label)
+                continue
+            total_output += len(chunk)
+            if total_output > maximum_output_bytes:
+                failure_state = STATE_OUTPUT_TOO_LARGE
+                self._terminate_process_group(process)
+                break
+            if label == "stdout":
+                stdout_chunks.append(chunk)
+            else:
+                stderr_chunks.append(chunk)
+
+        if failure_state is None:
+            try:
+                returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                failure_state = STATE_TIMEOUT
+                self._terminate_process_group(process)
+                returncode = self._wait_reaped(process)
+        else:
+            returncode = self._wait_reaped(process)
+
+        for thread in threads:
+            thread.join(timeout=COMMAND_TERM_GRACE_SECONDS)
+
+        if failure_state == STATE_TIMEOUT:
+            raise CommandExecutionError(
+                "Adapter command timed out.",
+                state=STATE_TIMEOUT,
+            )
+        if failure_state == STATE_OUTPUT_TOO_LARGE:
             raise CommandExecutionError(
                 "Adapter command output is too large.",
                 state=STATE_OUTPUT_TOO_LARGE,
             )
-        if completed.returncode == 126:
+        if returncode == 126:
             raise CommandExecutionError(
                 "Adapter command permission denied.",
                 state=STATE_PERMISSION_DENIED,
             )
         return CommandResult(
             argv=argv_tuple,
-            returncode=int(completed.returncode),
-            stdout=completed.stdout or b"",
-            stderr=completed.stderr or b"",
+            returncode=int(returncode),
+            stdout=b"".join(stdout_chunks),
+            stderr=b"".join(stderr_chunks),
         )
+
+    @staticmethod
+    def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                raise
+        try:
+            process.wait(timeout=COMMAND_TERM_GRACE_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                raise
+
+    @staticmethod
+    def _wait_reaped(process: subprocess.Popen[bytes]) -> int:
+        while True:
+            try:
+                return int(process.wait(timeout=COMMAND_TERM_GRACE_SECONDS))
+            except subprocess.TimeoutExpired:
+                try:
+                    if os.name == "posix":
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
+                except OSError as exc:
+                    if exc.errno != errno.ESRCH:
+                        raise
 
 
 @dataclass(frozen=True)
@@ -173,6 +342,7 @@ class RawDeviceRecord:
     stable_identifier: Optional[str] = None
     stable_identifier_type: Optional[str] = None
     vendor_record_id: Optional[str] = None
+    assignment_stable: bool = False
     online_state: str = "unknown"
     connection_type: str = "unknown"
     wifi_band: Optional[str] = None
@@ -228,10 +398,12 @@ class DeviceSelection:
         assert self.device is not None
         return {
             "selected": True,
-            "selection_token": self.token,
             "record_id": self.device.record_id,
+            "record_id_sensitivity": SENSITIVITY_LOCAL,
             "display_name": self.device.display_name,
             "display_name_sensitivity": SENSITIVITY_LOCAL,
+            "selection_handle": "internal-only",
+            "selection_handle_sensitivity": SENSITIVITY_LOCAL,
             "no_device_assignment": False,
         }
 
@@ -240,13 +412,20 @@ def _stable_hash(value: str, length: int = 16) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
-def _clean_text(value: Optional[Any]) -> Optional[str]:
+def _clean_text(
+    value: Optional[Any],
+    *,
+    maximum_length: int = MAX_OPTIONAL_FIELD_LENGTH,
+    description: str = "text field",
+) -> Optional[str]:
     if value is None:
         return None
     if not isinstance(value, str):
         raise DeviceDiscoveryError("Device inventory contains an unsupported text field.")
     cleaned = re.sub(r"[\x00-\x1f\x7f]+", " ", value)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) > maximum_length:
+        raise DeviceInventorySchemaError("Device inventory %s exceeds the maximum length." % description)
     return cleaned or None
 
 
@@ -262,8 +441,19 @@ def _normalize_stable_identifier(
     identifier: Optional[str],
     identifier_type: Optional[str],
 ) -> Tuple[Optional[str], Optional[str]]:
-    identifier = _clean_text(identifier)
-    identifier_type = (_clean_text(identifier_type) or "unknown").lower() if identifier else None
+    identifier = _clean_text(
+        identifier,
+        maximum_length=MAX_IDENTIFIER_LENGTH,
+        description="identifier field",
+    )
+    identifier_type = (
+        _clean_text(
+            identifier_type,
+            maximum_length=MAX_IDENTIFIER_LENGTH,
+            description="identifier type field",
+        )
+        or "unknown"
+    ).lower() if identifier else None
     if identifier is None:
         return None, None
     if identifier_type == "mac":
@@ -278,6 +468,8 @@ def _normalize_addresses(values: Any) -> Tuple[str, ...]:
         return ()
     if not isinstance(values, list):
         raise DeviceDiscoveryError("Device inventory contains an unsupported address field.")
+    if len(values) > MAX_ADDRESSES_PER_RECORD:
+        raise DeviceInventorySchemaError("Device inventory contains too many addresses.")
     addresses = []
     for value in values:
         if not isinstance(value, str):
@@ -289,10 +481,20 @@ def _normalize_addresses(values: Any) -> Tuple[str, ...]:
     return tuple(sorted(set(addresses), key=lambda item: (ipaddress.ip_address(item).version, ipaddress.ip_address(item).packed)))
 
 
-def _selection_identity(record: RawDeviceRecord) -> Optional[str]:
+def _display_identity(record: RawDeviceRecord) -> Optional[str]:
     if record.stable_identifier:
         return "%s:%s" % (record.stable_identifier_type or "unknown", record.stable_identifier)
     if record.vendor_record_id:
+        return "vendor_record_id:%s" % record.vendor_record_id
+    return None
+
+
+def _assignment_identity(record: RawDeviceRecord) -> Optional[str]:
+    if record.stable_identifier and record.stable_identifier_type in ASSIGNMENT_TRUSTED_IDENTIFIER_TYPES:
+        return "%s:%s" % (record.stable_identifier_type, record.stable_identifier)
+    if record.assignment_stable and record.stable_identifier_type == "vendor_record_id" and record.stable_identifier:
+        return "vendor_record_id:%s" % record.stable_identifier
+    if record.assignment_stable and record.vendor_record_id:
         return "vendor_record_id:%s" % record.vendor_record_id
     return None
 
@@ -301,12 +503,12 @@ def _record_sort_key(record: RawDeviceRecord) -> Tuple[str, str, str]:
     return (
         record.source,
         record.source_record_id,
-        _selection_identity(record) or ",".join(record.addresses),
+        _display_identity(record) or ",".join(record.addresses),
     )
 
 
 def _record_group_key(record: RawDeviceRecord) -> str:
-    identity = _selection_identity(record)
+    identity = _display_identity(record)
     if identity:
         return "stable|" + identity
     return "weak|%s|%s|%s" % (
@@ -352,6 +554,8 @@ def normalize_records(
     *,
     source_errors: Sequence[str] = (),
 ) -> DiscoveryResult:
+    if len(records) > MAX_TOTAL_RECORDS:
+        raise DeviceDiscoveryError("Device inventory contains too many records.")
     grouped: Dict[str, List[RawDeviceRecord]] = {}
     for record in sorted(records, key=_record_sort_key):
         grouped.setdefault(_record_group_key(record), []).append(record)
@@ -360,7 +564,7 @@ def normalize_records(
     for record in records:
         if record.vendor_record_id:
             vendor_identities.setdefault(record.vendor_record_id, set()).add(
-                _selection_identity(record) or "weak"
+                _display_identity(record) or "weak"
             )
     conflicting_vendor_ids = {
         vendor_id for vendor_id, identities in vendor_identities.items() if len(identities) > 1
@@ -369,10 +573,13 @@ def normalize_records(
     devices: List[NormalizedDevice] = []
     for key in sorted(grouped):
         group = grouped[key]
-        identity = _selection_identity(group[0])
+        display_identity = _display_identity(group[0])
+        trusted_identities = {_assignment_identity(record) for record in group}
+        trusted_identities.discard(None)
+        trusted_identity = next(iter(trusted_identities)) if len(trusted_identities) == 1 else None
         stable_identifier = group[0].stable_identifier
         stable_identifier_type = group[0].stable_identifier_type
-        seed = identity or "|".join(
+        seed = display_identity or "|".join(
             "%s:%s:%s" % (record.source, record.source_record_id, ",".join(record.addresses))
             for record in group
         )
@@ -387,11 +594,15 @@ def normalize_records(
                 key=lambda item: (ipaddress.ip_address(item).version, ipaddress.ip_address(item).packed),
             )
         )
+        if len(addresses) > MAX_ADDRESSES_PER_DEVICE:
+            raise DeviceDiscoveryError("Device inventory contains too many addresses.")
         conflict = any(record.vendor_record_id in conflicting_vendor_ids for record in group)
-        selectable = bool(identity and not conflict)
+        selectable = bool(trusted_identity and not conflict)
         reason = None
-        if not identity:
+        if not display_identity:
             reason = "stable identifier unavailable"
+        elif not trusted_identity:
+            reason = "assignment-stable identifier unavailable"
         elif conflict:
             reason = "conflicting stable identity"
         sources = tuple(sorted(set(record.source_kind for record in group)))
@@ -447,12 +658,14 @@ def normalize_records(
             disambiguated.append(device)
 
     sorted_devices = tuple(sorted(disambiguated, key=device_sort_key))
+    if len(sorted_devices) > MAX_NORMALIZED_DEVICES:
+        raise DeviceDiscoveryError("Device inventory contains too many normalized devices.")
     sources = tuple(sorted({DiscoverySource(record.source, record.source_kind) for record in records}, key=lambda source: source.name))
     return DiscoveryResult(
         adapter_state=STATE_SUPPORTED if not source_errors else STATE_MALFORMED_OUTPUT,
         sources=sources,
         devices=sorted_devices,
-        errors=tuple(source_errors),
+        errors=tuple(source_errors[:MAX_ERROR_COUNT]),
     )
 
 
@@ -471,25 +684,52 @@ def _parse_source(source: Any) -> Tuple[DiscoverySource, List[RawDeviceRecord], 
     allowed_source_keys = {"name", "kind", "state", "confidence", "records"}
     if set(source) - allowed_source_keys:
         raise DeviceDiscoveryError("Device inventory contains unsupported source schema.")
-    name = _clean_text(source.get("name"))
-    kind = _clean_text(source.get("kind"))
+    name = _clean_text(
+        source.get("name"),
+        maximum_length=MAX_SOURCE_NAME_LENGTH,
+        description="source name field",
+    )
+    kind = _clean_text(
+        source.get("kind"),
+        maximum_length=MAX_OPTIONAL_FIELD_LENGTH,
+        description="source kind field",
+    )
     if not name or not kind:
         raise DeviceDiscoveryError("Device inventory source is missing required metadata.")
-    state = _clean_text(source.get("state")) or STATE_SUPPORTED
-    confidence = _clean_text(source.get("confidence")) or "fixture"
+    if kind not in SOURCE_KINDS:
+        raise DeviceDiscoveryError("Device inventory source kind is unsupported.")
+    state = _clean_text(
+        source.get("state"),
+        maximum_length=MAX_OPTIONAL_FIELD_LENGTH,
+        description="source state field",
+    ) or STATE_SUPPORTED
+    confidence = _clean_text(
+        source.get("confidence"),
+        maximum_length=MAX_OPTIONAL_FIELD_LENGTH,
+        description="source confidence field",
+    ) or "fixture"
+    if state not in ADAPTER_STATES:
+        raise DeviceDiscoveryError("Device inventory source state is unsupported.")
+    if confidence not in CONFIDENCE_VALUES:
+        raise DeviceDiscoveryError("Device inventory source confidence is unsupported.")
     summary = DiscoverySource(name=name, kind=kind, state=state, confidence=confidence)
     if state != STATE_SUPPORTED:
         return summary, [], ["source %s reported %s" % (name, state)]
     records_value = source.get("records")
     if not isinstance(records_value, list):
         raise DeviceDiscoveryError("Device inventory source has no record list.")
+    if len(records_value) > MAX_RECORDS_PER_SOURCE:
+        raise DeviceDiscoveryError("Device inventory source contains too many records.")
     records = []
     errors = []
     for index, item in enumerate(records_value):
         try:
             records.append(_parse_record(name, kind, index, item))
+        except DeviceInventorySchemaError:
+            raise
         except DeviceDiscoveryError:
-            errors.append("malformed record skipped from source %s" % name)
+            if len(errors) < MAX_ERROR_COUNT:
+                errors.append("malformed record skipped from source %s" % name)
     return summary, records, errors
 
 
@@ -498,37 +738,70 @@ def _parse_record(source_name: str, source_kind: str, index: int, item: Any) -> 
         raise DeviceDiscoveryError("Device inventory contains a malformed record.")
     if set(item) - _RECORD_KEYS:
         raise DeviceDiscoveryError("Device inventory contains unsupported record schema.")
-    source_record_id = _clean_text(item.get("source_record_id")) or "%s-%d" % (source_name, index + 1)
+    source_record_id = _clean_text(
+        item.get("source_record_id"),
+        maximum_length=MAX_SOURCE_RECORD_ID_LENGTH,
+        description="source record id field",
+    ) or "%s-%d" % (source_name, index + 1)
     stable_identifier, stable_identifier_type = _normalize_stable_identifier(
         item.get("stable_identifier"),
         item.get("stable_identifier_type"),
     )
-    vendor_record_id = _clean_text(item.get("vendor_record_id"))
-    online_state = (_clean_text(item.get("online_state")) or "unknown").lower()
-    connection_type = (_clean_text(item.get("connection_type")) or "unknown").lower()
+    vendor_record_id = _clean_text(
+        item.get("vendor_record_id"),
+        maximum_length=MAX_IDENTIFIER_LENGTH,
+        description="vendor record id field",
+    )
+    assignment_stable = item.get("assignment_stable", False)
+    if not isinstance(assignment_stable, bool):
+        raise DeviceDiscoveryError("Device inventory contains an unsupported assignment-stable field.")
+    online_state = (
+        _clean_text(
+            item.get("online_state"),
+            maximum_length=MAX_OPTIONAL_FIELD_LENGTH,
+            description="online state field",
+        )
+        or "unknown"
+    ).lower()
+    connection_type = (
+        _clean_text(
+            item.get("connection_type"),
+            maximum_length=MAX_OPTIONAL_FIELD_LENGTH,
+            description="connection type field",
+        )
+        or "unknown"
+    ).lower()
     if online_state not in ONLINE_STATES:
         raise DeviceDiscoveryError("Device inventory contains an unsupported online state.")
     if connection_type not in CONNECTION_TYPES:
         raise DeviceDiscoveryError("Device inventory contains an unsupported connection type.")
     addresses = _normalize_addresses(item.get("addresses", []))
+    stale = item.get("stale", False)
+    if not isinstance(stale, bool):
+        raise DeviceDiscoveryError("Device inventory contains an unsupported stale field.")
     if not (stable_identifier or vendor_record_id or addresses):
         raise DeviceDiscoveryError("Device inventory record has no assignable or display identity.")
     return RawDeviceRecord(
         source=source_name,
         source_kind=source_kind,
         source_record_id=source_record_id,
-        display_name=_clean_text(item.get("display_name")),
+        display_name=_clean_text(
+            item.get("display_name"),
+            maximum_length=MAX_DISPLAY_NAME_LENGTH,
+            description="display name field",
+        ),
         addresses=addresses,
         stable_identifier=stable_identifier,
         stable_identifier_type=stable_identifier_type,
         vendor_record_id=vendor_record_id,
+        assignment_stable=assignment_stable,
         online_state=online_state,
         connection_type=connection_type,
-        wifi_band=_clean_text(item.get("wifi_band")),
-        interface=_clean_text(item.get("interface")),
-        existing_policy=_clean_text(item.get("existing_policy")),
-        last_seen=_clean_text(item.get("last_seen")),
-        stale=bool(item.get("stale", False)),
+        wifi_band=_clean_text(item.get("wifi_band"), description="wifi band field"),
+        interface=_clean_text(item.get("interface"), description="interface field"),
+        existing_policy=_clean_text(item.get("existing_policy"), description="policy field"),
+        last_seen=_clean_text(item.get("last_seen"), description="last-seen field"),
+        stale=stale,
     )
 
 
@@ -547,6 +820,8 @@ def parse_fixture_inventory(text: str) -> DiscoveryResult:
     sources_value = document.get("sources")
     if not isinstance(sources_value, list):
         raise DeviceDiscoveryError("Device inventory sources must be a list.")
+    if len(sources_value) > MAX_SOURCE_COUNT:
+        raise DeviceDiscoveryError("Device inventory contains too many sources.")
     all_sources: List[DiscoverySource] = []
     records: List[RawDeviceRecord] = []
     errors: List[str] = []
@@ -554,14 +829,18 @@ def parse_fixture_inventory(text: str) -> DiscoveryResult:
         source, source_records, source_errors = _parse_source(source_value)
         all_sources.append(source)
         records.extend(source_records)
-        errors.extend(source_errors)
+        if len(records) > MAX_TOTAL_RECORDS:
+            raise DeviceDiscoveryError("Device inventory contains too many records.")
+        for source_error in source_errors:
+            if len(errors) < MAX_ERROR_COUNT:
+                errors.append(source_error)
     result = normalize_records(records, source_errors=errors)
     return DiscoveryResult(
         adapter_state=result.adapter_state,
         sources=tuple(all_sources),
         devices=result.devices,
         errors=result.errors,
-        generated_at=_clean_text(document.get("generated_at")),
+        generated_at=_clean_text(document.get("generated_at"), description="generated-at field"),
     )
 
 
@@ -721,6 +1000,30 @@ def _hash_sensitive(value: Optional[str], salt: bytes) -> Optional[str]:
     return "hmac-sha256:%s" % digest[:24]
 
 
+def _public_error_code(error: str) -> str:
+    if "malformed record skipped" in error:
+        return "malformed_record_skipped"
+    if STATE_SOURCE_MISSING in error:
+        return STATE_SOURCE_MISSING
+    if STATE_PERMISSION_DENIED in error:
+        return STATE_PERMISSION_DENIED
+    if STATE_TIMEOUT in error:
+        return STATE_TIMEOUT
+    if STATE_OUTPUT_TOO_LARGE in error:
+        return STATE_OUTPUT_TOO_LARGE
+    if STATE_CONTRACT_UNVERIFIED in error or "hardware confirmation required" in error:
+        return STATE_CONTRACT_UNVERIFIED
+    return "source_error"
+
+
+def _public_error_summary(errors: Sequence[str]) -> List[Dict[str, Any]]:
+    counts: Dict[str, int] = {}
+    for error in errors[:MAX_ERROR_COUNT]:
+        code = _public_error_code(error)
+        counts[code] = counts.get(code, 0) + 1
+    return [{"code": code, "count": counts[code]} for code in sorted(counts)]
+
+
 def result_to_jsonable(
     result: DiscoveryResult,
     *,
@@ -743,6 +1046,7 @@ def result_to_jsonable(
                     "connection_type": device.connection_type,
                     "source_types": list(device.sources),
                     "selectable": device.selectable,
+                    "selection_readiness": selection_readiness(result)[0],
                     "stale": device.stale,
                 }
             )
@@ -752,9 +1056,18 @@ def result_to_jsonable(
             "redaction_note": "Redaction masks local fields for public evidence; it is not an anonymity guarantee.",
             "adapter_state": result.adapter_state,
             "device_count": len(result.devices),
-            "sources": [source.__dict__ for source in result.sources],
+            "sources": [
+                {
+                    "source_index": index,
+                    "kind": source.kind,
+                    "state": source.state,
+                    "confidence": source.confidence,
+                }
+                for index, source in enumerate(result.sources, start=1)
+            ],
             "devices": devices,
-            "errors": list(result.errors),
+            "error_count": len(result.errors),
+            "errors": _public_error_summary(result.errors),
         }
 
     return {
@@ -762,6 +1075,7 @@ def result_to_jsonable(
         "sensitivity": SENSITIVITY_LOCAL,
         "adapter_state": result.adapter_state,
         "generated_at": result.generated_at,
+        "sources_sensitivity": SENSITIVITY_LOCAL,
         "sources": [source.__dict__ for source in result.sources],
         "devices": [
             {
@@ -786,6 +1100,7 @@ def result_to_jsonable(
             }
             for device in result.devices
         ],
+        "errors_sensitivity": SENSITIVITY_LOCAL if result.errors else None,
         "errors": list(result.errors),
     }
 
@@ -807,22 +1122,35 @@ def render_json(
     )
 
 
-def selection_token(device: NormalizedDevice) -> str:
-    seed = "%s|%s|%s" % (
-        device.record_id,
-        device.stable_identifier_type or "",
-        device.stable_identifier or "",
-    )
-    return "routerkit-device-selection-v1:%s" % _stable_hash(seed, length=32)
+def selection_readiness(result: DiscoveryResult) -> Tuple[bool, str]:
+    if result.adapter_state != STATE_SUPPORTED:
+        return False, "device evidence is not complete and trusted"
+    if result.errors:
+        return False, "device evidence contains sanitized adapter errors"
+    if any(source.state != STATE_SUPPORTED for source in result.sources):
+        return False, "device evidence includes degraded sources"
+    return True, "device evidence is complete and trusted"
+
+
+def selection_token(device: NormalizedDevice, token_factory: Callable[[int], str] = secrets.token_urlsafe) -> str:
+    del device
+    return "routerkit-device-selection-v1:%s" % token_factory(32)
 
 
 def select_device(
     result: DiscoveryResult,
     choice: Optional[int],
+    *,
+    token_factory: Callable[[int], str] = secrets.token_urlsafe,
 ) -> DeviceSelection:
     if choice is None or choice == 0:
         return DeviceSelection(selected=False, reason="no device assignment")
-    if choice < 0 or choice > len(result.devices):
+    if choice < 0:
+        raise DeviceSelectionError("Device selection index is out of range.")
+    ready, reason = selection_readiness(result)
+    if not ready:
+        raise DeviceSelectionError("Device selection is unavailable: %s." % reason)
+    if choice > len(result.devices):
         raise DeviceSelectionError("Device selection index is out of range.")
     device = result.devices[choice - 1]
     if not device.selectable:
@@ -831,24 +1159,29 @@ def select_device(
         )
     return DeviceSelection(
         selected=True,
-        token=selection_token(device),
+        token=selection_token(device, token_factory=token_factory),
         device=device,
         reason="explicit device selected",
     )
 
 
-def prompt_for_selection(result: DiscoveryResult, input_fn=input) -> DeviceSelection:
+def prompt_for_selection(
+    result: DiscoveryResult,
+    input_fn=input,
+    *,
+    token_factory: Callable[[int], str] = secrets.token_urlsafe,
+) -> DeviceSelection:
     try:
         value = input_fn("Select device number [0]: ")
     except EOFError:
-        return select_device(result, 0)
+        return select_device(result, 0, token_factory=token_factory)
     if value is None or value.strip() == "":
-        return select_device(result, 0)
+        return select_device(result, 0, token_factory=token_factory)
     try:
         choice = int(value.strip())
     except ValueError:
         raise DeviceSelectionError("Device selection must be a number.") from None
-    return select_device(result, choice)
+    return select_device(result, choice, token_factory=token_factory)
 
 
 def render_selection(selection: DeviceSelection) -> str:
@@ -857,12 +1190,10 @@ def render_selection(selection: DeviceSelection) -> str:
     assert selection.device is not None
     return (
         "Device selection: %s (%s).\n"
-        "Selection token: %s\n"
         "No policy or device assignment was written."
         % (
             selection.device.display_name,
             selection.device.record_id,
-            selection.token,
         )
     )
 
@@ -907,9 +1238,19 @@ def run_setup_selection_stage(
     return 0, selection
 
 
+def accept_read_only_device_selection(selection: Optional[DeviceSelection]) -> None:
+    """Reviewed no-op boundary for future #15 assignment planning."""
+    del selection
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Read-only RouterKit local-device discovery.",
+        epilog=(
+            "Argument contract: status accepts only --json; discover accepts inventory, "
+            "--json, --public-evidence, and --redaction-salt; select accepts inventory, "
+            "--choice, and --json. --public-evidence implies JSON and is never valid for select."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -928,18 +1269,46 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--public-evidence",
         action="store_true",
-        help="Render redacted public-evidence JSON.",
+        help="Discover mode only: render redacted public-evidence JSON.",
     )
     parser.add_argument(
         "--redaction-salt",
-        help="Caller-provided salt for deterministic public-evidence hashes.",
+        help="Discover public-evidence only: caller-provided salt for deterministic hashes.",
     )
     parser.add_argument(
         "--choice",
         type=int,
-        help="Non-interactive selection index for select mode; 0 means no assignment.",
+        help="Select mode only: non-interactive selection index; 0 means no assignment.",
     )
     return parser.parse_args(argv)
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.mode == "status":
+        if args.inventory_file:
+            raise DeviceCliUsageError("status does not accept --inventory-file.")
+        if args.choice is not None:
+            raise DeviceCliUsageError("status does not accept --choice.")
+        if args.public_evidence:
+            raise DeviceCliUsageError("status does not accept --public-evidence.")
+        if args.redaction_salt:
+            raise DeviceCliUsageError("status does not accept --redaction-salt.")
+        return
+    if args.mode == "discover":
+        if args.choice is not None:
+            raise DeviceCliUsageError("discover does not accept --choice.")
+        if args.redaction_salt and not args.public_evidence:
+            raise DeviceCliUsageError("--redaction-salt requires --public-evidence.")
+        if args.public_evidence:
+            args.json = True
+        return
+    if args.mode == "select":
+        if args.public_evidence:
+            raise DeviceCliUsageError("select does not accept --public-evidence.")
+        if args.redaction_salt:
+            raise DeviceCliUsageError("select does not accept --redaction-salt.")
+        return
+    raise DeviceCliUsageError("unsupported device discovery mode.")
 
 
 def main(
@@ -954,6 +1323,11 @@ def main(
     if error is None:
         error = sys.stderr
     args = parse_args(argv)
+    try:
+        validate_args(args)
+    except DeviceCliUsageError as exc:
+        _write_line(error, "routerkit: %s" % exc)
+        return 2
     try:
         result = _load_result_for_args(args)
     except DeviceDiscoveryError as exc:

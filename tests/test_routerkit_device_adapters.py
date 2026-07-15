@@ -1,6 +1,8 @@
 import os
+import signal
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -41,6 +43,71 @@ class CommandRunnerTests(unittest.TestCase):
         with self.assertRaises(devices.CommandExecutionError) as caught:
             runner.run(output_argv, timeout_seconds=5.0, maximum_output_bytes=10)
         self.assertEqual(caught.exception.state, devices.STATE_OUTPUT_TOO_LARGE)
+
+    def test_runner_enforces_stdout_stderr_and_combined_output_limits(self):
+        exact_argv = (sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x' * 10)")
+        runner = devices.BoundedCommandRunner([exact_argv])
+        result = runner.run(exact_argv, timeout_seconds=5.0, maximum_output_bytes=10)
+        self.assertEqual(result.stdout, b"x" * 10)
+
+        stdout_argv = (sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x' * 11)")
+        stderr_argv = (sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'e' * 11)")
+        both_argv = (
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * 6); sys.stdout.flush(); sys.stderr.buffer.write(b'e' * 6); sys.stderr.flush()",
+        )
+        runner = devices.BoundedCommandRunner([stdout_argv, stderr_argv, both_argv])
+        for argv in (stdout_argv, stderr_argv, both_argv):
+            with self.subTest(argv=argv), self.assertRaises(devices.CommandExecutionError) as caught:
+                runner.run(argv, timeout_seconds=5.0, maximum_output_bytes=10)
+            self.assertEqual(caught.exception.state, devices.STATE_OUTPUT_TOO_LARGE)
+
+    def test_runner_kills_term_ignoring_child_on_timeout(self):
+        argv = (
+            sys.executable,
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+        )
+        runner = devices.BoundedCommandRunner([argv])
+        start = time.monotonic()
+
+        with self.assertRaises(devices.CommandExecutionError) as caught:
+            runner.run(argv, timeout_seconds=0.05)
+
+        self.assertEqual(caught.exception.state, devices.STATE_TIMEOUT)
+        self.assertLess(time.monotonic() - start, 2.0)
+
+    @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
+    def test_runner_kills_descendants_on_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "child.pid"
+            argv = (
+                sys.executable,
+                "-c",
+                (
+                    "import subprocess,sys,time;"
+                    "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']);"
+                    "open(%r,'w').write(str(p.pid));"
+                    "time.sleep(30)"
+                )
+                % str(pidfile),
+            )
+            runner = devices.BoundedCommandRunner([argv])
+
+            with self.assertRaises(devices.CommandExecutionError) as caught:
+                runner.run(argv, timeout_seconds=0.2)
+
+            self.assertEqual(caught.exception.state, devices.STATE_TIMEOUT)
+            descendant_pid = int(pidfile.read_text(encoding="utf-8"))
+            for _ in range(20):
+                try:
+                    os.kill(descendant_pid, 0)
+                except OSError:
+                    break
+                time.sleep(0.05)
+            with self.assertRaises(OSError):
+                os.kill(descendant_pid, 0)
 
     def test_runner_maps_permission_denied_return_code(self):
         argv = (sys.executable, "-c", "raise SystemExit(126)")

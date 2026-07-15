@@ -1,6 +1,6 @@
 # Device Discovery Architecture
 
-RouterKit #21 is intentionally read-only. The implemented path accepts only synthetic protected fixture inventories and produces deterministic text/JSON output plus an optional in-memory selection token. It never runs router commands, scans the LAN, changes policies, or assigns devices.
+RouterKit #21 is intentionally read-only. The implemented path accepts only synthetic protected fixture inventories and produces deterministic text/JSON output plus an optional in-memory selection object with an ephemeral internal handle. It never runs router commands, scans the LAN, changes policies, persists selections, or assigns devices.
 
 ## Data Flow
 
@@ -11,7 +11,8 @@ protected fixture file
 -> NormalizedDevice
 -> sorted DiscoveryResult
 -> text/JSON/redacted output
--> optional DeviceSelection token
+-> optional DeviceSelection object
+-> no-op read-only selection handoff boundary
 ```
 
 `routerkit devices status` reports `contract_unverified` until the hardware probe confirms the production adapter contract. `routerkit devices discover --inventory-file PATH` and `routerkit devices select --inventory-file PATH` are for offline validation and demos only.
@@ -22,10 +23,11 @@ Stable identity preference:
 
 1. documented stable router identifier;
 2. normalized MAC/device identifier;
-3. explicit vendor record ID;
-4. IP address only as a weak display/correlation hint.
+3. explicitly reviewed assignment-stable vendor identifier;
+4. unproven vendor or unknown identifiers only as display/dedup hints;
+5. IP address only as a weak display/correlation hint.
 
-Records merge only when they share stable identity. Same IP with different stable IDs remains separate. Same name alone never merges. IP-only devices are shown but cannot be selected for future assignment.
+Records merge only when they share display/dedup identity. Same IP with different stable IDs remains separate. Same name alone never merges. IP-only devices, unknown stable IDs, and standalone unreviewed vendor record IDs are shown but cannot be selected for future assignment.
 
 ## Selection
 
@@ -34,8 +36,9 @@ Selection is explicit:
 - option `0` is always no device assignment;
 - blank input and EOF also produce no assignment;
 - invalid indexes fail safely;
-- weak or conflicting identities cannot be selected;
-- the selection token is an opaque `routerkit-device-selection-v1` hash, not a router command.
+- nonzero selection requires adapter state `supported`, no sanitized errors, all sources `supported`, and a selectable device;
+- weak, untrusted, degraded, malformed, or conflicting identities cannot be selected;
+- selection handles are ephemeral, identity-independent, internal only, and never persisted or printed.
 
 The setup integration is explicit:
 
@@ -47,7 +50,7 @@ Plain `routerkit setup`, `setup --dry-run`, `setup --apply`, `setup --apply --bo
 
 ## Privacy
 
-Normal local interactive output may show local-sensitive device names, addresses, and stable IDs needed by the administrator. JSON labels those fields with `local_sensitive`. Public-evidence mode masks addresses, replaces local names and record IDs with counters, hashes local identifiers with an ephemeral or caller-provided salt, and states that this is not anonymity.
+Normal local interactive output may show local-sensitive device names, addresses, source names, raw sanitized errors, and stable IDs needed by the administrator. JSON labels those fields with `local_sensitive`. Public-evidence mode is discover-only JSON: it masks addresses, replaces local names and record IDs with counters, hashes local identifiers with an ephemeral or caller-provided salt, emits only schema-controlled source categories, and reports generic error codes/counts rather than raw source names or error text.
 
 Committed fixtures use only RFC 5737 IPv4 documentation networks, `2001:db8::/32`, locally administered unicast MAC addresses, and fictional names. CI checks the fixture set for this property.
 
@@ -59,4 +62,4 @@ The future vendor adapter must implement:
 - `collect()`;
 - `parse()`.
 
-External execution must use injected runners, exact argv allowlists, no shell interpolation, bounded stdout/stderr, timeouts, output-size limits, and a sanitized environment. Adapter states are `supported`, `unsupported`, `contract_unverified`, `malformed_output`, `permission_denied`, `timeout`, and `output_too_large`.
+External execution must use injected runners, exact argv allowlists, no shell interpolation, clean environments, process groups, concurrent bounded stdout/stderr draining, monotonic deadlines, TERM/KILL cleanup for direct children and descendants, and sanitized user-facing errors. Adapter states are `supported`, `unsupported`, `contract_unverified`, `malformed_output`, `permission_denied`, `timeout`, `output_too_large`, and `source_missing`; fixture confidence values are enumerated.
