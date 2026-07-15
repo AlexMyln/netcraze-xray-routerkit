@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - Autostart preflight now rejects symlinked or identity-changing Xray config directories instead of following them.
 - `S23xray-direct` now fails closed on inaccessible proc identity, revalidates process epoch before TERM/KILL, uses owned lock directories, and cleans direct children after PID publication/start verification failures.
 - `S23xray-direct` traps now clean any active child from the current invocation through bounded exact-epoch TERM/KILL before releasing the owned lock, and return exit `3` instead of ordinary signal codes when active-child cleanup or owned-lock release cannot be proven.
+- `S23xray-direct` owned-lock cleanup now rejects symlinked or otherwise unsafe lock paths, including dangling symlinks, and returns exit `3` when cleanup cannot be proven; hardware and reboot validation remain tracked by #16.
 - Autostart JSON apply output suppresses init-script stdout/stderr and emits one parseable JSON document without PID or command-line details.
 - Setup now retains bootstrap-child ownership through unexpected wait errors and fails closed after signal-state restoration errors.
 - Setup now snapshots bootstrap-supervisor signal state only after temporary handler teardown, preventing a late catchable signal from being lost before router apply stages.
