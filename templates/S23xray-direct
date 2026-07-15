@@ -5,20 +5,365 @@
 # Does not create firewall rules.
 # Intended for SOCKS-only localhost profiles.
 
+umask 077
+
 PROG="/opt/sbin/xray"
 CONF_DIR="/opt/etc/xray/configs"
 PIDFILE="/opt/var/run/xray-direct.pid"
 LOGFILE="/opt/var/log/xray-direct.log"
+LOCKDIR="/opt/var/run/xray-direct.lock"
+OWNERFILE="owner"
+LOCK_OWNED=0
+ACTIVE_CHILD_PID=""
+ACTIVE_CHILD_START=""
+SIGNAL_CLEANUP_DONE=0
 
 mkdir -p /opt/var/run /opt/var/log
 
-is_running() {
-    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+proc_start_time() {
+    pid="$1"
+    [ -r "/proc/$pid/stat" ] || return 1
+    line="$(sed -n '1p' "/proc/$pid/stat" 2>/dev/null)" || return 1
+    rest="${line##*) }"
+    set -- $rest
+    [ "$#" -ge 20 ] || return 1
+    i=1
+    for field in "$@"; do
+        if [ "$i" -eq 20 ]; then
+            case "$field" in
+                ""|*[!0-9]*) return 1 ;;
+            esac
+            printf '%s\n' "$field"
+            return 0
+        fi
+        i=$((i + 1))
+    done
+    return 1
 }
 
-start() {
+cmdline_matches_xray() {
+    pid="$1"
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    cmdline="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" || return 1
+    [ "$cmdline" = "$PROG run -confdir $CONF_DIR " ]
+}
+
+exe_matches_xray() {
+    pid="$1"
+    [ -L "/proc/$pid/exe" ] || return 1
+    exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || return 1
+    [ "$exe" = "$PROG" ]
+}
+
+pid_epoch_matches_xray() {
+    pid="$1"
+    start="$2"
+    [ -d "/proc/$pid" ] || return 1
+    [ "$(proc_start_time "$pid" 2>/dev/null)" = "$start" ] || return 1
+    exe_matches_xray "$pid" || return 1
+    cmdline_matches_xray "$pid" || return 1
+    [ "$(proc_start_time "$pid" 2>/dev/null)" = "$start" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+pid_matches_xray() {
+    pid="$1"
+    start="$(proc_start_time "$pid" 2>/dev/null)" || return 1
+    pid_epoch_matches_xray "$pid" "$start"
+}
+
+safe_read_pid() {
+    [ -f "$PIDFILE" ] || return 1
+    [ ! -L "$PIDFILE" ] || return 1
+    pid="$(sed -n '1p' "$PIDFILE" 2>/dev/null | tr -d '[:space:]')" || return 1
+    case "$pid" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "$pid" -gt 1 ] 2>/dev/null || return 1
+    printf '%s\n' "$pid"
+}
+
+lock_path_is_real_dir() {
+    [ ! -L "$LOCKDIR" ] || return 1
+    [ -d "$LOCKDIR" ] || return 1
+}
+
+lock_dir_identity() {
+    lock_path_is_real_dir || return 1
+    set -- $(ls -di "$LOCKDIR" 2>/dev/null) || return 1
+    case "$1" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s\n' "$1"
+}
+
+lock_owner_file_is_safe() {
+    lock_path_is_real_dir || return 1
+    [ ! -L "$LOCKDIR/$OWNERFILE" ] || return 1
+    [ -f "$LOCKDIR/$OWNERFILE" ] || return 1
+}
+
+lock_owner_identity() {
+    lock_owner_file_is_safe || return 1
+    set -- $(ls -i "$LOCKDIR/$OWNERFILE" 2>/dev/null) || return 1
+    case "$1" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s\n' "$1"
+}
+
+read_lock_owner() {
+    lock_owner_file_is_safe || return 1
+    set -- $(sed -n '1p' "$LOCKDIR/$OWNERFILE" 2>/dev/null)
+    [ "$#" -eq 2 ] || return 1
+    case "$1:$2" in
+        *[!0-9:]*|":"*) return 1 ;;
+    esac
+    OWNER_PID="$1"
+    OWNER_START="$2"
+    return 0
+}
+
+owner_is_alive() {
+    read_lock_owner || return 2
+    [ "$(proc_start_time "$OWNER_PID" 2>/dev/null)" = "$OWNER_START" ] || return 1
+    kill -0 "$OWNER_PID" 2>/dev/null
+}
+
+stale_lock_owner_is_confirmed() {
+    lock_path_is_real_dir || return 1
+    lock_owner_file_is_safe || return 1
+    read_lock_owner || return 1
+    owner_is_alive
+    [ "$?" -eq 1 ] || return 1
+}
+
+write_lock_owner() {
+    start="$(proc_start_time "$$" 2>/dev/null)" || return 1
+    tmp="$LOCKDIR/$OWNERFILE.$$"
+    printf '%s %s\n' "$$" "$start" > "$tmp" || return 1
+    chmod 600 "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    mv "$tmp" "$LOCKDIR/$OWNERFILE" || {
+        rm -f "$tmp"
+        return 1
+    }
+}
+
+release_lock() {
+    [ "$LOCK_OWNED" -eq 1 ] || return 0
+    [ ! -L "$LOCKDIR" ] || return 1
+    if [ ! -e "$LOCKDIR" ]; then
+        LOCK_OWNED=0
+        return 0
+    fi
+    lock_identity="$(lock_dir_identity)" || return 1
+    owner_identity="$(lock_owner_identity)" || return 1
+    current_start="$(proc_start_time "$$" 2>/dev/null)" || return 1
+
+    read_lock_owner || return 1
+    [ "$OWNER_PID" = "$$" ] || return 1
+    [ "$OWNER_START" = "$current_start" ] || return 1
+
+    [ "$(lock_dir_identity)" = "$lock_identity" ] || return 1
+    [ "$(lock_owner_identity)" = "$owner_identity" ] || return 1
+    read_lock_owner || return 1
+    [ "$OWNER_PID" = "$$" ] || return 1
+    [ "$OWNER_START" = "$current_start" ] || return 1
+
+    rm -f "$LOCKDIR/$OWNERFILE" 2>/dev/null || return 1
+
+    [ ! -L "$LOCKDIR" ] || return 1
+    if [ ! -e "$LOCKDIR" ]; then
+        LOCK_OWNED=0
+        return 0
+    fi
+    [ "$(lock_dir_identity)" = "$lock_identity" ] || return 1
+    rmdir "$LOCKDIR" 2>/dev/null || return 1
+
+    [ ! -L "$LOCKDIR" ] || return 1
+    [ ! -e "$LOCKDIR" ] || return 1
+    LOCK_OWNED=0
+    return 0
+}
+
+direct_child_epoch_alive() {
+    pid="$1"
+    start="$2"
+    [ -n "$pid" ] || return 1
+    [ -n "$start" ] || return 1
+    [ -d "/proc/$pid" ] || return 1
+    [ "$(proc_start_time "$pid" 2>/dev/null)" = "$start" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+remove_active_pidfile() {
+    [ -n "$ACTIVE_CHILD_PID" ] || return 0
+    [ -e "$PIDFILE" ] || return 0
+    [ -f "$PIDFILE" ] || return 1
+    [ ! -L "$PIDFILE" ] || return 1
+    recorded="$(sed -n '1p' "$PIDFILE" 2>/dev/null | tr -d '[:space:]')" || return 1
+    [ "$recorded" = "$ACTIVE_CHILD_PID" ] || return 0
+    rm -f "$PIDFILE" 2>/dev/null || return 1
+}
+
+terminate_exact_epoch_child() {
+    child="$1"
+    start="$2"
+    [ -n "$child" ] || return 1
+    [ -n "$start" ] || return 1
+    direct_child_epoch_alive "$child" "$start" && kill "$child" 2>/dev/null || true
+    i=0
+    while direct_child_epoch_alive "$child" "$start" && [ "$i" -lt 10 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if direct_child_epoch_alive "$child" "$start"; then
+        direct_child_epoch_alive "$child" "$start" && kill -9 "$child" 2>/dev/null || true
+        i=0
+        while direct_child_epoch_alive "$child" "$start" && [ "$i" -lt 5 ]; do
+            sleep 1
+            i=$((i + 1))
+        done
+    fi
+    if direct_child_epoch_alive "$child" "$start"; then
+        return 1
+    fi
+    wait "$child" 2>/dev/null || true
+    return 0
+}
+
+cleanup_active_child() {
+    [ -n "$ACTIVE_CHILD_PID" ] || return 0
+    terminate_exact_epoch_child "$ACTIVE_CHILD_PID" "$ACTIVE_CHILD_START" || return 1
+    remove_active_pidfile || return 1
+    ACTIVE_CHILD_PID=""
+    ACTIVE_CHILD_START=""
+    return 0
+}
+
+manual_recovery_guidance() {
+    echo "ERROR: xray-direct cleanup could not be proven. Inspect xray-direct PID and lock state manually before retrying." >&2
+}
+
+lock_recovery_guidance() {
+    echo "ERROR: xray-direct lock release could not be proven. Inspect xray-direct lock state manually before retrying." >&2
+}
+
+signal_exit() {
+    signal_rc="$1"
+    SIGNAL_CLEANUP_DONE=1
+    if ! cleanup_active_child; then
+        manual_recovery_guidance
+        release_lock || true
+        exit 3
+    fi
+    if ! release_lock; then
+        lock_recovery_guidance
+        exit 3
+    fi
+    exit "$signal_rc"
+}
+
+exit_trap() {
+    rc="$?"
+    trap - EXIT
+    if [ "$SIGNAL_CLEANUP_DONE" -eq 1 ]; then
+        exit "$rc"
+    fi
+    SIGNAL_CLEANUP_DONE=1
+    if ! cleanup_active_child; then
+        manual_recovery_guidance
+        [ "$rc" -eq 0 ] && rc=3
+    fi
+    if ! release_lock; then
+        lock_recovery_guidance
+        rc=3
+    fi
+    exit "$rc"
+}
+
+trap 'exit_trap' EXIT
+trap 'signal_exit 130' INT
+trap 'signal_exit 143' TERM
+trap 'signal_exit 129' HUP
+
+lock() {
+    i=0
+    while :; do
+        if [ -L "$LOCKDIR" ]; then
+            echo "ERROR: xray-direct lock path is unsafe; inspect $LOCKDIR manually." >&2
+            return 1
+        fi
+        if mkdir "$LOCKDIR" 2>/dev/null; then
+            if write_lock_owner; then
+                LOCK_OWNED=1
+                return 0
+            fi
+            rmdir "$LOCKDIR" 2>/dev/null || true
+            echo "ERROR: xray-direct lock owner could not be recorded." >&2
+            return 1
+        fi
+
+        owner_is_alive
+        owner_state="$?"
+        if [ "$owner_state" -eq 0 ]; then
+            i=$((i + 1))
+            if [ "$i" -ge 20 ]; then
+                echo "ERROR: xray-direct lock is busy." >&2
+                return 1
+            fi
+            sleep 1
+            continue
+        fi
+        if [ "$owner_state" -eq 1 ]; then
+            if stale_lock_owner_is_confirmed; then
+                echo "ERROR: xray-direct lock owner appears stale; inspect $LOCKDIR manually." >&2
+                return 1
+            fi
+        fi
+        echo "ERROR: xray-direct lock ownership is unclear; inspect $LOCKDIR manually." >&2
+        return 1
+    done
+}
+
+cleanup_stale_pid() {
+    if [ -e "$PIDFILE" ] && ! is_running; then
+        [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
+    fi
+}
+
+publish_pid() {
+    pid="$1"
+    tmp="$LOCKDIR/xray-direct.pid.$$"
+    printf '%s\n' "$pid" > "$tmp" || return 1
+    chmod 600 "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    mv "$tmp" "$PIDFILE" || {
+        rm -f "$tmp"
+        return 1
+    }
+}
+
+terminate_direct_child() {
+    child="$1"
+    start="$2"
+    terminate_exact_epoch_child "$child" "$start"
+}
+
+is_running() {
+    pid="$(safe_read_pid)" || return 1
+    pid_matches_xray "$pid"
+}
+
+start_unlocked() {
+    cleanup_stale_pid
     if is_running; then
-        echo "xray-direct already running: $(cat "$PIDFILE")"
+        echo "xray-direct already running: $(safe_read_pid)"
         return 0
     fi
 
@@ -34,52 +379,141 @@ start() {
 
     echo "Starting xray-direct..."
     "$PROG" run -confdir "$CONF_DIR" >> "$LOGFILE" 2>&1 &
-    echo $! > "$PIDFILE"
+    child="$!"
+    child_start="$(proc_start_time "$child" 2>/dev/null)" || {
+        kill "$child" 2>/dev/null || true
+        sleep 1
+        kill -9 "$child" 2>/dev/null || true
+        wait "$child" 2>/dev/null || true
+        echo "ERROR: xray-direct child identity could not be recorded." >&2
+        return 1
+    }
+    ACTIVE_CHILD_PID="$child"
+    ACTIVE_CHILD_START="$child_start"
+    if ! publish_pid "$child"; then
+        terminate_direct_child "$child" "$child_start" || {
+            echo "ERROR: xray-direct PID publication cleanup could not be proven." >&2
+            return 1
+        }
+        ACTIVE_CHILD_PID=""
+        ACTIVE_CHILD_START=""
+        echo "ERROR: xray-direct PID could not be published." >&2
+        return 1
+    fi
 
     sleep 2
 
-    if is_running; then
-        echo "xray-direct started: $(cat "$PIDFILE")"
+    if pid_matches_xray "$child" && is_running; then
+        ACTIVE_CHILD_PID=""
+        ACTIVE_CHILD_START=""
+        echo "xray-direct started: $child"
         return 0
     fi
 
-    echo "ERROR: xray-direct failed to start. Last log lines:" >&2
-    tail -40 "$LOGFILE" >&2 2>/dev/null || true
-    rm -f "$PIDFILE"
+    terminate_direct_child "$child" "$child_start" || {
+        remove_active_pidfile
+        ACTIVE_CHILD_PID=""
+        ACTIVE_CHILD_START=""
+        echo "ERROR: xray-direct failed to start and cleanup could not be proven." >&2
+        return 1
+    }
+    ACTIVE_CHILD_PID=""
+    ACTIVE_CHILD_START=""
+    [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
+    echo "ERROR: xray-direct failed to start. Inspect the router log." >&2
     return 1
 }
 
-stop() {
-    if ! is_running; then
+stop_unlocked() {
+    pid="$(safe_read_pid)" || {
+        cleanup_stale_pid
         echo "xray-direct is not running"
-        rm -f "$PIDFILE"
+        return 0
+    }
+
+    start="$(proc_start_time "$pid" 2>/dev/null)" || {
+        cleanup_stale_pid
+        echo "xray-direct is not running"
+        return 0
+    }
+    if ! pid_epoch_matches_xray "$pid" "$start"; then
+        cleanup_stale_pid
+        echo "xray-direct is not running"
         return 0
     fi
 
-    PID="$(cat "$PIDFILE")"
-    echo "Stopping xray-direct: $PID"
-    kill "$PID" 2>/dev/null || true
+    echo "Stopping xray-direct: $pid"
+    pid_epoch_matches_xray "$pid" "$start" && kill "$pid" 2>/dev/null || true
 
     i=0
-    while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 10 ]; do
+    while pid_epoch_matches_xray "$pid" "$start" && [ "$i" -lt 10 ]; do
         sleep 1
         i=$((i + 1))
     done
 
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "Force stopping xray-direct: $PID"
-        kill -9 "$PID" 2>/dev/null || true
+    if pid_epoch_matches_xray "$pid" "$start"; then
+        echo "Force stopping verified xray-direct: $pid"
+        pid_epoch_matches_xray "$pid" "$start" && kill -9 "$pid" 2>/dev/null || true
+        i=0
+        while pid_epoch_matches_xray "$pid" "$start" && [ "$i" -lt 5 ]; do
+            sleep 1
+            i=$((i + 1))
+        done
     fi
 
-    rm -f "$PIDFILE"
+    if pid_epoch_matches_xray "$pid" "$start"; then
+        echo "ERROR: xray-direct process did not stop." >&2
+        return 1
+    fi
+
+    [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
     echo "xray-direct stopped"
+    return 0
+}
+
+start() {
+    lock || return 1
+    start_unlocked
+    rc="$?"
+    if ! release_lock; then
+        lock_recovery_guidance
+        rc=3
+    fi
+    return "$rc"
+}
+
+stop() {
+    lock || return 1
+    stop_unlocked
+    rc="$?"
+    if ! release_lock; then
+        lock_recovery_guidance
+        rc=3
+    fi
+    return "$rc"
+}
+
+restart() {
+    lock || return 1
+    stop_unlocked
+    rc="$?"
+    if [ "$rc" -eq 0 ]; then
+        start_unlocked
+        rc="$?"
+    fi
+    if ! release_lock; then
+        lock_recovery_guidance
+        rc=3
+    fi
+    return "$rc"
 }
 
 status() {
     if is_running; then
-        echo "xray-direct running: $(cat "$PIDFILE")"
+        echo "xray-direct running: $(safe_read_pid)"
         return 0
     fi
+    cleanup_stale_pid
     echo "xray-direct not running"
     return 3
 }
@@ -87,7 +521,7 @@ status() {
 case "${1:-}" in
     start) start ;;
     stop) stop ;;
-    restart) stop; start ;;
+    restart) restart ;;
     status) status ;;
     *)
         echo "Usage: $0 {start|stop|restart|status}"
