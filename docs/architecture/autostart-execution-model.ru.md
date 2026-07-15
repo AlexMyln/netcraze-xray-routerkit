@@ -62,7 +62,9 @@ Disable поддерживает только буквальный `/opt`. Он 
 
 `S23xray-direct` fail-closed при process evidence. Он требует `/proc/<pid>`, readable `exe`, `cmdline` и `stat`, stable start time, exact executable/cmdline evidence и `kill -0`. Перед TERM и KILL он повторно проверяет PID plus start time plus executable/cmdline, bounded waits после каждого signal и возвращает failure, если original process epoch выжил.
 
-Script публикует PID через owner-only temp file внутри private lock directory. Он отслеживает active direct child PID plus start time для текущего invocation. PID publication failure, start verification failure и catchable signal traps очищают этот active child через bounded exact-epoch TERM/KILL, удаляют только matching active PID file и не печатают success, если cleanup нельзя доказать. Signal traps возвращают `3` вместо `129`, `130` или `143`, когда active-child cleanup нельзя доказать. Lock path обязан быть real directory, записывает owner PID and start time, устанавливает catchable signal traps, освобождает только lock текущего invocation, удаляет только proven stale locks и fail-closed, если ownership unclear. Owned-lock cleanup отклоняет symlinked или иначе unsafe lock paths, включая dangling symlinks; unproven lock cleanup возвращает `3` из signal и EXIT cleanup и не считается clean stop.
+Script публикует PID через owner-only temp file внутри private lock directory. Он отслеживает active direct child PID plus start time для текущего invocation. PID publication failure, start verification failure и catchable signal traps очищают этот active child через bounded exact-epoch TERM/KILL, удаляют только matching active PID file и не печатают success, если cleanup нельзя доказать. Signal traps возвращают `3` вместо `129`, `130` или `143`, когда active-child cleanup нельзя доказать.
+
+Lock path обязан быть real directory, записывает owner PID and start time, устанавливает catchable signal traps и освобождает только lock текущего invocation. Cleanup lock текущего invocation остаётся automatic, но identity-checked до и после удаления owner file. Stale lock owners обнаруживаются, повторно проверяются и сообщаются оператору, но stale или unclear locks fail-closed и требуют operator inspection. Init script намеренно не делает automatic stale-lock deletion, потому что POSIX shell path operations не могут атомарно привязать `rm` или `rmdir` к ранее доказанной inode identity. Stale lock не допускает mutable start/stop/restart actions и оставляет lock evidence intact. Owned-lock cleanup отклоняет symlinked или иначе unsafe lock paths, включая dangling symlinks; unproven lock cleanup возвращает `3` из signal и EXIT cleanup и не считается clean stop.
 
 ## Signals And JSON
 
@@ -82,4 +84,4 @@ Reboot не выполняется и не доказывается. После 
 python3 scripts/routerkit.py autostart --verify
 ```
 
-Hardware canary, idempotency, reboot persistence и rollback matrix validation остаются в #16.
+Hardware canary, idempotency, reboot persistence, stale-lock operator handling и rollback matrix validation остаются в #16.

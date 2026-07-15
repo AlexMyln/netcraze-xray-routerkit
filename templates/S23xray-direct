@@ -130,6 +130,14 @@ owner_is_alive() {
     kill -0 "$OWNER_PID" 2>/dev/null
 }
 
+stale_lock_owner_is_confirmed() {
+    lock_path_is_real_dir || return 1
+    lock_owner_file_is_safe || return 1
+    read_lock_owner || return 1
+    owner_is_alive
+    [ "$?" -eq 1 ] || return 1
+}
+
 write_lock_owner() {
     start="$(proc_start_time "$$" 2>/dev/null)" || return 1
     tmp="$LOCKDIR/$OWNERFILE.$$"
@@ -311,10 +319,9 @@ lock() {
             continue
         fi
         if [ "$owner_state" -eq 1 ]; then
-            if read_lock_owner && [ ! -L "$LOCKDIR" ]; then
-                rm -f "$LOCKDIR/$OWNERFILE" 2>/dev/null || true
-                rmdir "$LOCKDIR" 2>/dev/null || true
-                continue
+            if stale_lock_owner_is_confirmed; then
+                echo "ERROR: xray-direct lock owner appears stale; inspect $LOCKDIR manually." >&2
+                return 1
             fi
         fi
         echo "ERROR: xray-direct lock ownership is unclear; inspect $LOCKDIR manually." >&2

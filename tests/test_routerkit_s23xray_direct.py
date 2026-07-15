@@ -436,6 +436,356 @@ class S23XrayDirectTemplateTests(unittest.TestCase):
                 self.assertIn("rc=3", block)
         self.assertIn("status) status ;;", self.text)
 
+    def test_stale_owner_branch_has_no_path_cleanup_or_retry(self):
+        lock_block = self.function_block("lock")
+        start = lock_block.index('if [ "$owner_state" -eq 1 ]; then')
+        end = lock_block.index('echo "ERROR: xray-direct lock ownership is unclear')
+        stale_branch = lock_block[start:end]
+        self.assertIn("stale_lock_owner_is_confirmed", stale_branch)
+        self.assertIn("lock owner appears stale", stale_branch)
+        self.assertNotIn('rm -f "$LOCKDIR/$OWNERFILE"', stale_branch)
+        self.assertNotIn('rmdir "$LOCKDIR"', stale_branch)
+        self.assertNotIn("continue", stale_branch)
+
+    def test_lock_acquires_when_absent(self):
+        completed = self.run_lock_case("")
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "0")
+        self.assertEqual(result["LOCK_OWNED"], "1")
+        self.assertEqual(result["is_dir"], "yes")
+        self.assertEqual(result["owner_file"], "yes")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+
+    def test_lock_live_owner_waits_boundedly_and_preserves_lock(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "111 555\\n" > "$LOCKDIR/$OWNERFILE"\n',
+            extra_functions='kill() { [ "$1" = "-0" ] && [ "$2" = "111" ] && return 0; command kill "$@"; }\n',
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["LOCK_OWNED"], "0")
+        self.assertEqual(result["owner_line"], "111 555")
+        self.assertEqual(result["mkdir_lock_calls"], "20")
+        self.assertEqual(result["sleep_calls"], "19")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock is busy", completed.stderr)
+
+    def test_lock_dead_owner_fails_closed_and_preserves_metadata(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n'
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["LOCK_OWNED"], "0")
+        self.assertEqual(result["is_dir"], "yes")
+        self.assertEqual(result["owner_file"], "yes")
+        self.assertEqual(result["owner_line"], "999999 12345")
+        self.assertEqual(result["mkdir_lock_calls"], "1")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock owner appears stale", completed.stderr)
+
+    def test_lock_owner_replacement_after_first_proof_is_preserved(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n',
+            extra_functions=self.owner_alive_replacement_hook(
+                'printf "424242 22222\\n" > "$LOCKDIR/$OWNERFILE"\n'
+            ),
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["owner_line"], "424242 22222")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock owner appears stale", completed.stderr)
+
+    def test_lock_directory_replacement_after_first_proof_is_preserved(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n',
+            extra_functions=self.owner_alive_replacement_hook(
+                'mv "$LOCKDIR" "$base/original-lock"\n'
+                'command mkdir "$LOCKDIR"\n'
+                'printf "424242 22222\\n" > "$LOCKDIR/$OWNERFILE"\n'
+            ),
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["owner_line"], "424242 22222")
+        self.assertEqual(result["original_owner_saved"], "yes")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+
+    def test_lock_directory_replaced_with_dangling_symlink_fails_unclear(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n',
+            extra_functions=self.owner_alive_replacement_hook(
+                'mv "$LOCKDIR" "$base/original-lock"\n'
+                'ln -s "$base/missing" "$LOCKDIR"\n'
+            ),
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["is_link"], "yes")
+        self.assertEqual(result["original_owner_saved"], "yes")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock ownership is unclear", completed.stderr)
+
+    def test_lock_directory_replaced_with_symlink_to_directory_fails_unclear(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n',
+            extra_functions=self.owner_alive_replacement_hook(
+                'command mkdir "$base/target"\n'
+                'printf "424242 22222\\n" > "$base/target/$OWNERFILE"\n'
+                'mv "$LOCKDIR" "$base/original-lock"\n'
+                'ln -s "$base/target" "$LOCKDIR"\n'
+            ),
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["is_link"], "yes")
+        self.assertEqual(result["target_owner"], "yes")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock ownership is unclear", completed.stderr)
+
+    def test_lock_owner_replaced_with_symlink_fails_unclear(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n',
+            extra_functions=self.owner_alive_replacement_hook(
+                'command rm -f "$LOCKDIR/$OWNERFILE"\n'
+                'printf "424242 22222\\n" > "$base/owner-target"\n'
+                'ln -s "$base/owner-target" "$LOCKDIR/$OWNERFILE"\n'
+            ),
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["owner_link"], "yes")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock ownership is unclear", completed.stderr)
+
+    def test_lock_owner_replaced_with_regular_file_is_preserved(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n',
+            extra_functions=self.owner_alive_replacement_hook(
+                'command rm -f "$LOCKDIR/$OWNERFILE"\n'
+                'printf "424242 22222\\n" > "$LOCKDIR/$OWNERFILE"\n'
+            ),
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["owner_line"], "424242 22222")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock owner appears stale", completed.stderr)
+
+    def test_lock_malformed_owner_fails_unclear_without_deletion(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "bad-owner\\n" > "$LOCKDIR/$OWNERFILE"\n'
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["owner_line"], "bad-owner")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock ownership is unclear", completed.stderr)
+
+    def test_lock_missing_owner_fails_unclear_without_deletion(self):
+        completed = self.run_lock_case('mkdir "$LOCKDIR"\n')
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["is_dir"], "yes")
+        self.assertEqual(result["owner_exists"], "no")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock ownership is unclear", completed.stderr)
+
+    def test_lock_fifo_owner_fails_unclear_without_deletion(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'mkfifo "$LOCKDIR/$OWNERFILE"\n'
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["owner_fifo"], "yes")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+        self.assertIn("lock ownership is unclear", completed.stderr)
+
+    def test_lock_unreadable_owner_fails_without_deletion(self):
+        completed = self.run_lock_case(
+            'mkdir "$LOCKDIR"\n'
+            'printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"\n'
+            'chmod 000 "$LOCKDIR/$OWNERFILE"\n'
+        )
+        result = self.parse_kv(completed.stdout)
+        self.assertEqual(result["lock_rc"], "1")
+        self.assertEqual(result["owner_file"], "yes")
+        self.assertEqual(result["rm_calls"], "0")
+        self.assertEqual(result["rmdir_calls"], "0")
+
+    def test_stale_lock_blocks_start_stop_restart_without_child_action(self):
+        for name in ("start", "stop", "restart"):
+            with self.subTest(name=name):
+                completed = self.run_shell_harness(
+                    textwrap.dedent(
+                        """
+                        OWNERFILE="owner"
+                        LOCK_OWNED=0
+                        SIGNAL_CLEANUP_DONE=0
+                        proc_start_time() { [ "$1" = "$$" ] && printf '%s\\n' 77777 || return 1; }
+                        """
+                    )
+                    + self.lock_acquisition_blocks()
+                    + self.function_block("lock_recovery_guidance")
+                    + self.function_block("start")
+                    + self.function_block("stop")
+                    + self.function_block("restart")
+                    + textwrap.dedent(
+                        f"""
+                        start_unlocked() {{ echo unexpected-start; return 0; }}
+                        stop_unlocked() {{ echo unexpected-stop; return 0; }}
+                        release_lock() {{ echo unexpected-release; return 0; }}
+                        base="${{TMPDIR:-/tmp}}/routerkit-action-lock-$$"
+                        LOCKDIR="$base/lock"
+                        mkdir -p "$LOCKDIR"
+                        printf "999999 12345\\n" > "$LOCKDIR/$OWNERFILE"
+                        {name}
+                        rc="$?"
+                        printf 'action_rc=%s\\n' "$rc"
+                        printf 'owner_line=%s\\n' "$(sed -n '1p' "$LOCKDIR/$OWNERFILE")"
+                        command rm -rf "$base"
+                        exit 0
+                        """
+                    )
+                )
+                result = self.parse_kv(completed.stdout)
+                self.assertEqual(result["action_rc"], "1")
+                self.assertEqual(result["owner_line"], "999999 12345")
+                self.assertNotIn("unexpected-", completed.stdout)
+                self.assertIn("lock owner appears stale", completed.stderr)
+
+    def lock_acquisition_blocks(self):
+        return (
+            self.function_block("lock_path_is_real_dir")
+            + self.function_block("lock_owner_file_is_safe")
+            + self.function_block("read_lock_owner")
+            + self.function_block("owner_is_alive")
+            + self.function_block("stale_lock_owner_is_confirmed")
+            + self.function_block("write_lock_owner")
+            + self.function_block("lock")
+        )
+
+    def owner_alive_replacement_hook(self, replacement):
+        return textwrap.dedent(
+            f"""
+            owner_is_alive() {{
+                count_file="$base/owner-alive-count"
+                count="$(cat "$count_file" 2>/dev/null || printf 0)"
+                count=$((count + 1))
+                printf '%s\\n' "$count" > "$count_file"
+                read_lock_owner || return 2
+                owner_result=1
+                if [ "$(proc_start_time "$OWNER_PID" 2>/dev/null)" = "$OWNER_START" ]; then
+                    kill -0 "$OWNER_PID" 2>/dev/null && owner_result=0
+                fi
+                if [ "$count" -eq 1 ]; then
+                    {replacement}
+                fi
+                return "$owner_result"
+            }}
+            """
+        )
+
+    def run_lock_case(self, setup, *, extra_functions=""):
+        completed = self.run_shell_harness(
+            textwrap.dedent(
+                """
+                OWNERFILE="owner"
+                LOCK_OWNED=0
+                proc_start_time() {
+                    case "$1" in
+                        "$$") printf '%s\\n' 77777 ;;
+                        "111") printf '%s\\n' 555 ;;
+                        *) return 1 ;;
+                    esac
+                }
+                """
+            )
+            + self.lock_acquisition_blocks()
+            + extra_functions
+            + textwrap.dedent(
+                f"""
+                base="${{TMPDIR:-/tmp}}/routerkit-lock-$$"
+                LOCKDIR="$base/lock"
+                mkdir -p "$base"
+                {setup}
+                RM_CALLS=0
+                RMDIR_CALLS=0
+                MKDIR_LOCK_CALLS=0
+                SLEEP_CALLS=0
+                rm() {{ RM_CALLS=$((RM_CALLS + 1)); command rm "$@"; }}
+                rmdir() {{ RMDIR_CALLS=$((RMDIR_CALLS + 1)); command rmdir "$@"; }}
+                mkdir() {{
+                    if [ "$#" -eq 1 ] && [ "$1" = "$LOCKDIR" ]; then
+                        MKDIR_LOCK_CALLS=$((MKDIR_LOCK_CALLS + 1))
+                    fi
+                    command mkdir "$@"
+                }}
+                sleep() {{ SLEEP_CALLS=$((SLEEP_CALLS + 1)); return 0; }}
+
+                lock
+                rc="$?"
+                if [ -L "$LOCKDIR" ]; then is_link=yes; else is_link=no; fi
+                if [ -e "$LOCKDIR" ]; then exists=yes; else exists=no; fi
+                if [ -d "$LOCKDIR" ] && [ ! -L "$LOCKDIR" ]; then is_dir=yes; else is_dir=no; fi
+                if [ -e "$LOCKDIR/$OWNERFILE" ]; then owner_exists=yes; else owner_exists=no; fi
+                if [ -f "$LOCKDIR/$OWNERFILE" ] && [ ! -L "$LOCKDIR/$OWNERFILE" ]; then owner_file=yes; else owner_file=no; fi
+                if [ -L "$LOCKDIR/$OWNERFILE" ]; then owner_link=yes; else owner_link=no; fi
+                if [ -p "$LOCKDIR/$OWNERFILE" ]; then owner_fifo=yes; else owner_fifo=no; fi
+                owner_line=""
+                if [ -f "$LOCKDIR/$OWNERFILE" ] && [ ! -L "$LOCKDIR/$OWNERFILE" ] && [ -r "$LOCKDIR/$OWNERFILE" ]; then
+                    owner_line="$(sed -n '1p' "$LOCKDIR/$OWNERFILE")"
+                fi
+                if [ -e "$base/original-lock/$OWNERFILE" ]; then original_owner_saved=yes; else original_owner_saved=no; fi
+                if [ -e "$base/target/$OWNERFILE" ]; then target_owner=yes; else target_owner=no; fi
+                printf 'lock_rc=%s\\n' "$rc"
+                printf 'LOCK_OWNED=%s\\n' "$LOCK_OWNED"
+                printf 'is_link=%s\\n' "$is_link"
+                printf 'exists=%s\\n' "$exists"
+                printf 'is_dir=%s\\n' "$is_dir"
+                printf 'owner_exists=%s\\n' "$owner_exists"
+                printf 'owner_file=%s\\n' "$owner_file"
+                printf 'owner_link=%s\\n' "$owner_link"
+                printf 'owner_fifo=%s\\n' "$owner_fifo"
+                printf 'owner_line=%s\\n' "$owner_line"
+                printf 'original_owner_saved=%s\\n' "$original_owner_saved"
+                printf 'target_owner=%s\\n' "$target_owner"
+                printf 'rm_calls=%s\\n' "$RM_CALLS"
+                printf 'rmdir_calls=%s\\n' "$RMDIR_CALLS"
+                printf 'mkdir_lock_calls=%s\\n' "$MKDIR_LOCK_CALLS"
+                printf 'sleep_calls=%s\\n' "$SLEEP_CALLS"
+                chmod -R u+rwX "$base" 2>/dev/null || true
+                command rm -rf "$base"
+                exit 0
+                """
+            )
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return completed
+
     def lock_function_blocks(self):
         return (
             self.function_block("lock_path_is_real_dir")
@@ -512,7 +862,7 @@ class S23XrayDirectTemplateTests(unittest.TestCase):
 
     def function_block(self, name):
         marker = f"{name}() {{"
-        start = self.text.index(marker)
+        start = self.text.index("\n" + marker) + 1
         depth = 0
         lines = []
         for line in self.text[start:].splitlines():

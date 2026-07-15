@@ -62,7 +62,9 @@ Disable supports only literal `/opt`. It uses `lstat`/lexists semantics so dangl
 
 `S23xray-direct` fails closed on process evidence. It requires `/proc/<pid>`, readable `exe`, `cmdline`, and `stat`, stable start time, exact executable/cmdline evidence, and `kill -0`. It revalidates PID plus start time plus executable/cmdline before TERM and KILL, waits boundedly after each signal, and fails if the original process epoch survives.
 
-The script publishes the PID through an owner-only temp file inside the private lock directory. It tracks the active direct child PID plus start time for the current invocation. PID publication failure, start verification failure, and catchable signal traps clean that active child through bounded exact-epoch TERM/KILL, remove only the matching active PID file, and never claim success if cleanup cannot be proven. Signal traps return `3` instead of `129`, `130`, or `143` when active-child cleanup cannot be proven. The lock path must be a real directory, records owner PID and start time, installs catchable signal traps, releases only locks owned by the current invocation, removes only proven stale locks, and fails closed when ownership is unclear. Owned-lock cleanup rejects symlinked or otherwise unsafe lock paths, including dangling symlinks; unproven lock cleanup returns `3` from signal and EXIT cleanup and is not reported as a clean stop.
+The script publishes the PID through an owner-only temp file inside the private lock directory. It tracks the active direct child PID plus start time for the current invocation. PID publication failure, start verification failure, and catchable signal traps clean that active child through bounded exact-epoch TERM/KILL, remove only the matching active PID file, and never claim success if cleanup cannot be proven. Signal traps return `3` instead of `129`, `130`, or `143` when active-child cleanup cannot be proven.
+
+The lock path must be a real directory, records owner PID and start time, installs catchable signal traps, and releases only locks owned by the current invocation. Current-invocation lock cleanup remains automatic but identity-checked before and after owner-file removal. Stale lock owners are detected, revalidated, and reported, but stale or unclear locks fail closed and require operator inspection. The init script intentionally avoids automatic stale-lock deletion because POSIX shell path operations cannot atomically bind `rm` or `rmdir` to a previously proven inode identity. A stale lock prevents entry into mutable start/stop/restart actions and leaves lock evidence intact. Owned-lock cleanup rejects symlinked or otherwise unsafe lock paths, including dangling symlinks; unproven lock cleanup returns `3` from signal and EXIT cleanup and is not reported as a clean stop.
 
 ## Signals And JSON
 
@@ -82,4 +84,4 @@ No reboot is performed or proven. After a real reboot, run:
 python3 scripts/routerkit.py autostart --verify
 ```
 
-Hardware canary, idempotency, reboot persistence, and rollback matrix validation remain tracked by #16.
+Hardware canary, idempotency, reboot persistence, stale-lock operator handling, and rollback matrix validation remain tracked by #16.
