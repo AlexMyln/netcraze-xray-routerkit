@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import stat
 import sys
 import tempfile
@@ -271,6 +272,63 @@ class AutostartRuntimeTests(unittest.TestCase):
             self.assertTrue(result.changed_s23_mode)
             self.assertTrue(paths.pid_file.exists())
             self.assertFalse(paths.s23.stat().st_mode & stat.S_IXUSR)
+
+    def test_disable_defers_signal_between_s24_and_s23_until_safe_final_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, _proc = build_synthetic_runtime(Path(directory))
+            paths = autostart.AutostartPaths(opt)
+            paths.s23.chmod(0o755)
+            paths.s24.chmod(0o755)
+            original_disable = autostart._disable_executable
+
+            class FakeSignals:
+                def __init__(self):
+                    self.first_signal = None
+                    self.teardown_failure = None
+
+                def __enter__(self):
+                    active["signals"] = self
+                    return self
+
+                def __exit__(self, *_exc):
+                    return None
+
+                def restore_mask(self):
+                    return None
+
+                def signal_exit_code(self):
+                    return 0 if self.first_signal is None else 128 + self.first_signal
+
+            active = {}
+
+            def interrupt_after_s24(path, description):
+                changed = original_disable(path, description)
+                if path == paths.s24:
+                    active["signals"].first_signal = signal.SIGINT
+                return changed
+
+            with mock.patch.object(autostart, "DEFAULT_TARGET_ROOT", str(opt)):
+                with mock.patch.object(autostart, "TransactionSignals", FakeSignals):
+                    with mock.patch.object(autostart, "_disable_executable", side_effect=interrupt_after_s24):
+                        result = autostart.disable_autostart(paths)
+
+            self.assertEqual(result.exit_code, 130)
+            self.assertFalse(paths.s24.stat().st_mode & stat.S_IXUSR)
+            self.assertFalse(paths.s23.stat().st_mode & stat.S_IXUSR)
+
+    def test_preflight_rejects_symlink_config_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, _proc = build_synthetic_runtime(Path(directory))
+            paths = autostart.AutostartPaths(opt)
+            real_conf = paths.conf_dir
+            replacement = opt / "safe-configs"
+            real_conf.rename(replacement)
+            paths.conf_dir.symlink_to(replacement)
+            with mock.patch.object(autostart, "DEFAULT_TARGET_ROOT", str(opt)):
+                with mock.patch.object(autostart.os, "uname", return_value=SimpleNamespace(sysname="Linux")):
+                    with self.assertRaises(autostart.AutostartError) as caught:
+                        autostart._preflight_apply(paths)
+            self.assertIn("symlink", str(caught.exception))
 
 
 if __name__ == "__main__":

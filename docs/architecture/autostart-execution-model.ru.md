@@ -23,7 +23,7 @@ Runtime verification fail-closed. RouterKit читает PID file без followi
 
 ## Enable Contract
 
-Enable apply поддерживает только буквальный `/opt` на Linux. Он отклоняет symlink, non-regular files, hardlinked init scripts, unsafe `S23xray-direct`, unsafe `S24xray`, missing executable Xray, missing config directory и executable Xray init conflicts.
+Enable apply поддерживает только буквальный `/opt` на Linux. Он отклоняет symlink, non-regular files, hardlinked init scripts, unsafe `S23xray-direct`, unsafe `S24xray`, missing executable Xray, missing/symlinked/non-directory Xray config directory, identity change config directory во время inspection и executable Xray init conflicts.
 
 Если `S23xray-direct` уже enabled, `S24xray` disabled, installed template совпадает и runtime verification проходит, enable является verified no-op:
 
@@ -52,23 +52,23 @@ Autostart already enabled and runtime-verified; no restart was performed.
 - если Xray был verified running до transaction, RouterKit делает одну bounded попытку start через проверенный `S23xray-direct` и требует runtime verification;
 - если Xray был verified not running до transaction, но transaction его запустила, RouterKit останавливает через проверенный init script и требует, чтобы matching runtime verification больше не проходила.
 
-Если rollback нельзя доказать, enable выходит с `3` и печатает safe manual disable guidance. Rollback failures не понижаются до ordinary signal или generic failure.
+Rollback start/stop выполняется как recovery-critical section. Исходный catchable signal остаётся recorded, но не может отменить recovery child; новые catchable signals записываются и forward-ятся. Если rollback нельзя доказать, enable выходит с `3` и печатает safe manual disable guidance. Rollback failures не понижаются до ordinary signal или generic failure.
 
 ## Disable Contract
 
-Disable поддерживает только буквальный `/opt`. Он использует `lstat`/lexists semantics, поэтому dangling symlinks и special files отклоняются. Он сначала выключает `S24xray`, затем `S23xray-direct`, проверяет оба final modes, удаляет stale receipt state только после safe mode state и не останавливает runtime.
+Disable поддерживает только буквальный `/opt`. Он использует `lstat`/lexists semantics, поэтому dangling symlinks и special files отклоняются. После начала disable apply catchable signals записываются и откладываются, пока RouterKit не выключит `S24xray`, затем `S23xray-direct`, не проверит оба final modes, не удалит stale receipt state и не восстановит signal lifecycle state. После этого возвращается deferred signal code, если signal был recorded. Disable не останавливает runtime.
 
 ## Init Script
 
 `S23xray-direct` fail-closed при process evidence. Он требует `/proc/<pid>`, readable `exe`, `cmdline` и `stat`, stable start time, exact executable/cmdline evidence и `kill -0`. Перед TERM и KILL он повторно проверяет PID plus start time plus executable/cmdline, bounded waits после каждого signal и возвращает failure, если original process epoch выжил.
 
-Script публикует PID через owner-only temp file внутри private lock directory и очищает direct child, который сам запустил, если PID publication или start verification failed. Lock path обязан быть real directory, записывает owner PID and start time, устанавливает catchable signal traps, освобождает только lock текущего invocation, удаляет только proven stale locks и fail-closed, если ownership unclear.
+Script публикует PID через owner-only temp file внутри private lock directory. Он отслеживает active direct child PID plus start time для текущего invocation. PID publication failure, start verification failure и catchable signal traps очищают этот active child через bounded exact-epoch TERM/KILL, удаляют только matching active PID file и не печатают success, если cleanup нельзя доказать. Lock path обязан быть real directory, записывает owner PID and start time, устанавливает catchable signal traps, освобождает только lock текущего invocation, удаляет только proven stale locks и fail-closed, если ownership unclear.
 
 ## Signals And JSON
 
-Python apply владеет direct init child с `start_new_session=True` на POSIX, записывает первый catchable signal, forwards `SIGINT`, `SIGTERM` и `SIGHUP` и сохраняет ownership до terminal/reaped child. Cleanup и rollback завершаются до final signal exit; rollback failure exit `3` имеет priority.
+Python apply владеет direct init child с `start_new_session=True` на POSIX, записывает первый catchable signal, forwards `SIGINT`, `SIGTERM` и `SIGHUP` и сохраняет ownership до terminal/reaped child. Parent blocks handled signals during handler install and child spawn; child restores previous mask before exec. Cleanup, rollback и signal handler/mask teardown завершаются до final signal exit; rollback failure exit `3` имеет priority перед ordinary signal codes.
 
-`--json` apply захватывает init stdout/stderr и выводит ровно один JSON document в stdout. JSON не содержит raw logs, config content, endpoints, command lines или PIDs.
+`--json` apply захватывает init stdout/stderr через bounded drain и выводит ровно один JSON document в stdout. JSON не содержит raw logs, config content, endpoints, command lines или PIDs. Если child output превышает bound, transaction fails safely после reaped child.
 
 ## Receipt Decision
 

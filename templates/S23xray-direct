@@ -14,6 +14,8 @@ LOGFILE="/opt/var/log/xray-direct.log"
 LOCKDIR="/opt/var/run/xray-direct.lock"
 OWNERFILE="owner"
 LOCK_OWNED=0
+ACTIVE_CHILD_PID=""
+ACTIVE_CHILD_START=""
 
 mkdir -p /opt/var/run /opt/var/log
 
@@ -125,10 +127,72 @@ release_lock() {
     LOCK_OWNED=0
 }
 
-trap 'release_lock' EXIT
-trap 'release_lock; exit 130' INT
-trap 'release_lock; exit 143' TERM
-trap 'release_lock; exit 129' HUP
+direct_child_epoch_alive() {
+    pid="$1"
+    start="$2"
+    [ -n "$pid" ] || return 1
+    [ -n "$start" ] || return 1
+    [ -d "/proc/$pid" ] || return 1
+    [ "$(proc_start_time "$pid" 2>/dev/null)" = "$start" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+remove_active_pidfile() {
+    [ -n "$ACTIVE_CHILD_PID" ] || return 0
+    [ -f "$PIDFILE" ] || return 0
+    [ ! -L "$PIDFILE" ] || return 0
+    recorded="$(sed -n '1p' "$PIDFILE" 2>/dev/null | tr -d '[:space:]')" || return 0
+    [ "$recorded" = "$ACTIVE_CHILD_PID" ] || return 0
+    rm -f "$PIDFILE" 2>/dev/null || true
+}
+
+terminate_exact_epoch_child() {
+    child="$1"
+    start="$2"
+    [ -n "$child" ] || return 1
+    [ -n "$start" ] || return 1
+    direct_child_epoch_alive "$child" "$start" && kill "$child" 2>/dev/null || true
+    i=0
+    while direct_child_epoch_alive "$child" "$start" && [ "$i" -lt 10 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if direct_child_epoch_alive "$child" "$start"; then
+        direct_child_epoch_alive "$child" "$start" && kill -9 "$child" 2>/dev/null || true
+        i=0
+        while direct_child_epoch_alive "$child" "$start" && [ "$i" -lt 5 ]; do
+            sleep 1
+            i=$((i + 1))
+        done
+    fi
+    if direct_child_epoch_alive "$child" "$start"; then
+        return 1
+    fi
+    wait "$child" 2>/dev/null || true
+    return 0
+}
+
+cleanup_active_child() {
+    [ -n "$ACTIVE_CHILD_PID" ] || return 0
+    terminate_exact_epoch_child "$ACTIVE_CHILD_PID" "$ACTIVE_CHILD_START"
+    rc="$?"
+    remove_active_pidfile
+    ACTIVE_CHILD_PID=""
+    ACTIVE_CHILD_START=""
+    return "$rc"
+}
+
+signal_exit() {
+    rc="$1"
+    cleanup_active_child || true
+    release_lock
+    exit "$rc"
+}
+
+trap 'cleanup_active_child || true; release_lock' EXIT
+trap 'signal_exit 130' INT
+trap 'signal_exit 143' TERM
+trap 'signal_exit 129' HUP
 
 lock() {
     i=0
@@ -192,10 +256,8 @@ publish_pid() {
 
 terminate_direct_child() {
     child="$1"
-    kill "$child" 2>/dev/null || true
-    wait "$child" 2>/dev/null || true
-    kill -9 "$child" 2>/dev/null || true
-    wait "$child" 2>/dev/null || true
+    start="$2"
+    terminate_exact_epoch_child "$child" "$start"
 }
 
 is_running() {
@@ -223,8 +285,23 @@ start_unlocked() {
     echo "Starting xray-direct..."
     "$PROG" run -confdir "$CONF_DIR" >> "$LOGFILE" 2>&1 &
     child="$!"
+    child_start="$(proc_start_time "$child" 2>/dev/null)" || {
+        kill "$child" 2>/dev/null || true
+        sleep 1
+        kill -9 "$child" 2>/dev/null || true
+        wait "$child" 2>/dev/null || true
+        echo "ERROR: xray-direct child identity could not be recorded." >&2
+        return 1
+    }
+    ACTIVE_CHILD_PID="$child"
+    ACTIVE_CHILD_START="$child_start"
     if ! publish_pid "$child"; then
-        terminate_direct_child "$child"
+        terminate_direct_child "$child" "$child_start" || {
+            echo "ERROR: xray-direct PID publication cleanup could not be proven." >&2
+            return 1
+        }
+        ACTIVE_CHILD_PID=""
+        ACTIVE_CHILD_START=""
         echo "ERROR: xray-direct PID could not be published." >&2
         return 1
     fi
@@ -232,11 +309,21 @@ start_unlocked() {
     sleep 2
 
     if pid_matches_xray "$child" && is_running; then
+        ACTIVE_CHILD_PID=""
+        ACTIVE_CHILD_START=""
         echo "xray-direct started: $child"
         return 0
     fi
 
-    terminate_direct_child "$child"
+    terminate_direct_child "$child" "$child_start" || {
+        remove_active_pidfile
+        ACTIVE_CHILD_PID=""
+        ACTIVE_CHILD_START=""
+        echo "ERROR: xray-direct failed to start and cleanup could not be proven." >&2
+        return 1
+    }
+    ACTIVE_CHILD_PID=""
+    ACTIVE_CHILD_START=""
     [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && rm -f "$PIDFILE"
     echo "ERROR: xray-direct failed to start. Inspect the router log." >&2
     return 1

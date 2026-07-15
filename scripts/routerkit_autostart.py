@@ -16,15 +16,17 @@ import errno
 import hashlib
 import json
 import os
+import selectors
 import signal
 import stat
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import BinaryIO, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 
 EXPECTED_PORTS = (1082, 1083, 1084)
@@ -35,6 +37,9 @@ MAX_PID_FILE_BYTES = 32
 USAGE_ERROR = 2
 ROLLBACK_UNPROVEN = 3
 SPAWN_ERROR = 127
+MAX_INIT_OUTPUT_BYTES = 64 * 1024
+SUPERVISION_BACKOFF_SECONDS = 0.05
+SUPERVISION_FAIL_CLOSED_SECONDS = 10.0
 
 
 class AutostartError(Exception):
@@ -176,6 +181,7 @@ class TransactionResult:
     restart_verified: bool = False
     noop: bool = False
     rollback_unproven: bool = False
+    exit_code: int = 0
     message: str = ""
 
     def to_json(self) -> Dict[str, object]:
@@ -188,6 +194,7 @@ class TransactionResult:
             "restart_verified": self.restart_verified,
             "noop": self.noop,
             "rollback_unproven": self.rollback_unproven,
+            "exit_code": self.exit_code,
             "message": self.message,
         }
 
@@ -259,6 +266,24 @@ def _require_regular_nonsymlink(path: Path, description: str, *, allow_missing: 
     if getattr(metadata, "st_nlink", 1) > 1:
         raise AutostartError(f"{description} has unexpected hardlinks and was rejected.")
     return metadata
+
+
+def _require_directory_nonsymlink(path: Path, description: str) -> os.stat_result:
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise AutostartError(f"{description} could not be inspected: {exc}") from None
+    if stat.S_ISLNK(before.st_mode):
+        raise AutostartError(f"{description} is a symlink and was rejected.")
+    if not stat.S_ISDIR(before.st_mode):
+        raise AutostartError(f"{description} is not a directory.")
+    try:
+        after = path.stat()
+    except OSError as exc:
+        raise AutostartError(f"{description} identity could not be verified: {exc}") from None
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise AutostartError(f"{description} changed identity during inspection.")
+    return before
 
 
 def _safe_chmod(path: Path, mode: int, description: str) -> None:
@@ -598,9 +623,12 @@ def _confirm(prompt: str, input_fn=input) -> bool:
 class TransactionSignals:
     def __init__(self) -> None:
         self.first_signal: Optional[int] = None
+        self.subsequent_signals: List[int] = []
         self.previous: Dict[int, object] = {}
         self.child: Optional[subprocess.Popen] = None
         self._previous_signal_mask = None
+        self._recovery_depth = 0
+        self.teardown_failure: Optional[str] = None
 
     @staticmethod
     def handled_signals() -> Tuple[int, ...]:
@@ -614,8 +642,10 @@ class TransactionSignals:
     def _handle(self, signum: int, _frame: Optional[FrameType]) -> None:
         if self.first_signal is None:
             self.first_signal = signum
+        else:
+            self.subsequent_signals.append(signum)
         child = self.child
-        if child is not None and child.poll() is None:
+        if child is not None:
             try:
                 if os.name == "posix":
                     os.killpg(child.pid, signum)
@@ -637,36 +667,205 @@ class TransactionSignals:
         for signum in self.handled_signals():
             self.previous[signum] = signal.getsignal(signum)
             signal.signal(signum, self._handle)
-        if self._previous_signal_mask is not None:
-            signal.pthread_sigmask(signal.SIG_SETMASK, self._previous_signal_mask)
-            self._previous_signal_mask = None
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        for signum, handler in self.previous.items():
-            signal.signal(signum, handler)
-        if self._previous_signal_mask is not None:
-            signal.pthread_sigmask(signal.SIG_SETMASK, self._previous_signal_mask)
-            self._previous_signal_mask = None
+        self.restore_mask()
+        failures: List[str] = []
+        pending = list(self.previous.items())
+        for attempt in range(2):
+            remaining = []
+            for signum, handler in pending:
+                try:
+                    signal.signal(signum, handler)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    if attempt == 0:
+                        remaining.append((signum, handler))
+                    else:
+                        failures.append(f"signal {signum}: {exc}")
+                else:
+                    self.previous.pop(signum, None)
+            pending = remaining
+            if not pending:
+                break
+        if failures:
+            self.teardown_failure = "; ".join(failures)
 
     def raise_if_requested(self) -> None:
-        if self.first_signal is not None:
+        if self.first_signal is not None and self._recovery_depth == 0:
             raise AutostartError(
                 f"transaction interrupted by signal {self.first_signal}",
                 exit_code=128 + self.first_signal,
             )
 
+    @contextlib.contextmanager
+    def recovery_critical(self) -> Iterator[None]:
+        self._recovery_depth += 1
+        try:
+            yield
+        finally:
+            self._recovery_depth -= 1
 
-def _wait_child(child: subprocess.Popen) -> int:
+    def signal_exit_code(self) -> int:
+        if self.first_signal is None:
+            return 0
+        return 128 + self.first_signal
+
+    def restore_mask(self) -> None:
+        if self._previous_signal_mask is None:
+            return
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, self._previous_signal_mask)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.teardown_failure = f"signal mask restore failed: {exc}"
+            return
+        self._previous_signal_mask = None
+
+    def child_preexec_fn(self):
+        if self._previous_signal_mask is None or os.name != "posix" or not hasattr(signal, "pthread_sigmask"):
+            return None
+        previous_mask = self._previous_signal_mask
+
+        def restore_child_mask() -> None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+        return restore_child_mask
+
+    def forward_pending_to_child(self, child: subprocess.Popen) -> None:
+        if self.first_signal is None or self._recovery_depth > 0:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(child.pid, self.first_signal)
+            else:
+                child.send_signal(self.first_signal)
+        except OSError:
+            pass
+
+
+def _wait_child(child: subprocess.Popen, *, fail_closed: bool = False) -> int:
+    deadline = time.monotonic() + SUPERVISION_FAIL_CLOSED_SECONDS if fail_closed else None
     while True:
         try:
+            if fail_closed:
+                return child.wait(timeout=SUPERVISION_BACKOFF_SECONDS)
+            return child.wait()
+        except subprocess.TimeoutExpired:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise OSError(errno.ETIMEDOUT, "timed out waiting for child termination")
+            continue
+        except TypeError:
             return child.wait()
         except InterruptedError:
             continue
         except OSError as exc:
             if exc.errno == errno.EINTR:
                 continue
+            if not fail_closed:
+                raise
+            with contextlib.suppress(OSError):
+                state = child.poll()
+                if state is not None:
+                    return state
+            if deadline is not None and time.monotonic() >= deadline:
+                raise
+            time.sleep(SUPERVISION_BACKOFF_SECONDS)
+
+
+def _terminate_child_group(child: subprocess.Popen, signum: int) -> None:
+    try:
+        if os.name == "posix":
+            os.killpg(child.pid, signum)
+        elif signum == signal.SIGTERM:
+            child.terminate()
+        else:
+            child.kill()
+    except OSError:
+        pass
+
+
+def _drain_init_output(child: subprocess.Popen, limit: int) -> bool:
+    stdout = getattr(child, "stdout", None)
+    stderr = getattr(child, "stderr", None)
+    if stdout is None and stderr is None:
+        return False
+    overflow = False
+    streams: Dict[BinaryIO, int] = {}
+    selector = selectors.DefaultSelector()
+    try:
+        for stream in (stdout, stderr):
+            if stream is None:
+                continue
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ)
+            streams[stream] = 0
+        while streams:
+            for key, _events in selector.select(timeout=0.1):
+                stream = key.fileobj
+                try:
+                    chunk = stream.read(8192)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    streams.pop(stream, None)
+                    continue
+                streams[stream] += len(chunk)
+                if streams[stream] > limit:
+                    overflow = True
+            if child.poll() is not None and not selector.get_map():
+                break
+    finally:
+        selector.close()
+        for stream in (stdout, stderr):
+            if stream is not None:
+                with contextlib.suppress(OSError):
+                    stream.close()
+    return overflow
+
+
+def _supervise_spawned_child(
+    child: subprocess.Popen,
+    action: str,
+    *,
+    signals: Optional[TransactionSignals],
+    emit_output: bool,
+) -> int:
+    output_overflow = False
+    try:
+        if signals is not None:
+            signals.child = child
+            signals.forward_pending_to_child(child)
+            signals.restore_mask()
+            signals.forward_pending_to_child(child)
+        if emit_output:
+            returncode = _wait_child(child)
+        else:
+            output_overflow = _drain_init_output(child, MAX_INIT_OUTPUT_BYTES)
+            returncode = _wait_child(child)
+    except OSError as exc:
+        _terminate_child_group(child, signal.SIGTERM)
+        with contextlib.suppress(Exception):
+            _wait_child(child, fail_closed=True)
+        with contextlib.suppress(OSError, AttributeError):
+            if child.poll() is None:
+                _terminate_child_group(child, signal.SIGKILL)
+                _wait_child(child, fail_closed=True)
+        if child.returncode not in (None, 0):
+            returncode = child.returncode
+        elif child.returncode == 0:
+            raise AutostartError(f"S23xray-direct {action} supervision failed after child exit: {exc}", 1) from None
+        else:
             raise
+    finally:
+        with contextlib.suppress(Exception):
+            if child.poll() is None:
+                _wait_child(child, fail_closed=True)
+        if signals is not None and signals.child is child:
+            signals.child = None
+    if output_overflow and returncode == 0:
+        raise AutostartError(f"S23xray-direct {action} output exceeded the bounded capture limit.", 1)
+    return returncode
 
 
 def _run_init(
@@ -676,36 +875,18 @@ def _run_init(
     signals: Optional[TransactionSignals] = None,
     emit_output: bool = True,
 ) -> None:
+    preexec_fn = signals.child_preexec_fn() if signals is not None else None
     try:
         child = subprocess.Popen(
             ["sh", str(paths.s23), action],
             stdout=None if emit_output else subprocess.PIPE,
             stderr=None if emit_output else subprocess.PIPE,
             start_new_session=os.name == "posix",
+            preexec_fn=preexec_fn,
         )
     except OSError as exc:
         raise AutostartError(f"could not run S23xray-direct {action}: {exc}", SPAWN_ERROR) from None
-    if signals is not None:
-        signals.child = child
-        signals.raise_if_requested()
-    try:
-        if emit_output:
-            returncode = _wait_child(child)
-        else:
-            child.communicate()
-            returncode = child.returncode
-    except OSError as exc:
-        with contextlib.suppress(OSError):
-            if os.name == "posix":
-                os.killpg(child.pid, signal.SIGTERM)
-            else:
-                child.terminate()
-        with contextlib.suppress(Exception):
-            _wait_child(child)
-        raise AutostartError(f"S23xray-direct {action} supervision failed: {exc}", 1) from None
-    finally:
-        if signals is not None and signals.child is child:
-            signals.child = None
+    returncode = _supervise_spawned_child(child, action, signals=signals, emit_output=emit_output)
     if returncode < 0:
         returncode = 128 + abs(returncode)
     if returncode != 0:
@@ -713,6 +894,8 @@ def _run_init(
             f"S23xray-direct {action} failed with exit code {returncode}.",
             returncode,
         )
+    if signals is not None:
+        signals.raise_if_requested()
 
 
 def _preflight_apply(paths: AutostartPaths) -> None:
@@ -728,8 +911,7 @@ def _preflight_apply(paths: AutostartPaths) -> None:
     _require_regular_nonsymlink(paths.xray, "Xray executable")
     if not os.access(str(paths.xray), os.X_OK):
         raise AutostartError("Xray executable is not executable.")
-    if not paths.conf_dir.is_dir():
-        raise AutostartError("Xray config directory is missing.")
+    _require_directory_nonsymlink(paths.conf_dir, "Xray config directory")
     if _lexists(paths.s24):
         _require_regular_nonsymlink(paths.s24, "S24xray")
     conflicts = _bounded_init_conflicts(paths)
@@ -737,12 +919,18 @@ def _preflight_apply(paths: AutostartPaths) -> None:
         raise AutostartError("conflicting executable Xray init scripts were found.")
 
 
-def _remove_runtime_if_started(paths: AutostartPaths, *, proc_root: Path, emit_init_output: bool) -> bool:
+def _remove_runtime_if_started(
+    paths: AutostartPaths,
+    *,
+    proc_root: Path,
+    emit_init_output: bool,
+    signals: Optional[TransactionSignals] = None,
+) -> bool:
     before = verify_runtime(paths, proc_root=proc_root)
     if not before.ok:
         return True
     try:
-        _run_init(paths, "stop", emit_output=emit_init_output)
+        _run_init(paths, "stop", signals=signals, emit_output=emit_init_output)
     except AutostartError:
         return False
     after = verify_runtime(paths, proc_root=proc_root)
@@ -767,6 +955,7 @@ def enable_autostart(
         result.message = "Autostart already enabled and runtime-verified; no restart was performed."
         return result
 
+    completed_result: Optional[TransactionResult] = None
     with TransactionSignals() as signals:
         try:
             if _lexists(paths.s24):
@@ -791,7 +980,7 @@ def enable_autostart(
                 raise AutostartError("final autostart verification failed.")
             _remove_receipt(paths)
             result.message = "Autostart enabled and restart-verified."
-            return result
+            completed_result = result
         except AutostartError:
             rollback_failed = False
             _remove_receipt(paths)
@@ -802,13 +991,21 @@ def enable_autostart(
             if before.runtime.ok:
                 restored_runtime = verify_runtime(paths, proc_root=proc_root)
                 if not restored_runtime.ok:
-                    with contextlib.suppress(AutostartError):
-                        _run_init(paths, "start", signals=signals, emit_output=emit_init_output)
+                    with signals.recovery_critical():
+                        with contextlib.suppress(AutostartError):
+                            _run_init(paths, "start", signals=signals, emit_output=emit_init_output)
                     restored_runtime = verify_runtime(paths, proc_root=proc_root)
                 if not restored_runtime.ok:
                     rollback_failed = True
             elif result.restart_performed:
-                if not _remove_runtime_if_started(paths, proc_root=proc_root, emit_init_output=emit_init_output):
+                with signals.recovery_critical():
+                    stopped = _remove_runtime_if_started(
+                        paths,
+                        proc_root=proc_root,
+                        emit_init_output=emit_init_output,
+                        signals=signals,
+                    )
+                if not stopped:
                     rollback_failed = True
             try:
                 restored = inspect_status(paths.target_root, proc_root=proc_root)
@@ -825,6 +1022,12 @@ def enable_autostart(
                     ROLLBACK_UNPROVEN,
                 ) from None
             raise
+    if signals.teardown_failure is not None:
+        raise AutostartError(f"autostart signal lifecycle teardown failed: {signals.teardown_failure}", 1)
+    if completed_result is None:
+        raise AutostartError("autostart enable did not produce a transaction result.", 1)
+    completed_result.exit_code = signals.signal_exit_code()
+    return completed_result
 
 
 def disable_autostart(paths: AutostartPaths) -> TransactionResult:
@@ -832,27 +1035,33 @@ def disable_autostart(paths: AutostartPaths) -> TransactionResult:
         raise AutostartError("autostart apply supports only literal /opt.", USAGE_ERROR)
     result = TransactionResult(action="disable")
     with TransactionSignals() as signals:
-        if _lexists(paths.s24):
-            result.disabled_s24 = _disable_executable(paths.s24, "S24xray")
-        signals.raise_if_requested()
-        if _lexists(paths.s23):
-            result.changed_s23_mode = _disable_executable(paths.s23, "S23xray-direct")
-        signals.raise_if_requested()
-    if _lexists(paths.s24):
-        s24_present, s24_regular, s24_symlink, _mode, s24_enabled = _file_info(paths.s24)
-        if not s24_present or not s24_regular or s24_symlink or s24_enabled:
-            raise AutostartError(
-                "S24xray disable could not be proven; leave S23xray-direct disabled and inspect /opt/etc/init.d.",
-                1,
-            )
-    if _lexists(paths.s23):
-        s23_present, s23_regular, s23_symlink, _mode, s23_enabled = _file_info(paths.s23)
-        if not s23_present or not s23_regular or s23_symlink or s23_enabled:
-            raise AutostartError(
-                "S23xray-direct disable could not be proven; inspect /opt/etc/init.d before reboot.",
-                1,
-            )
-    _remove_receipt(paths)
+        try:
+            if _lexists(paths.s24):
+                result.disabled_s24 = _disable_executable(paths.s24, "S24xray")
+            if _lexists(paths.s23):
+                result.changed_s23_mode = _disable_executable(paths.s23, "S23xray-direct")
+            if _lexists(paths.s24):
+                s24_present, s24_regular, s24_symlink, _mode, s24_enabled = _file_info(paths.s24)
+                if not s24_present or not s24_regular or s24_symlink or s24_enabled:
+                    raise AutostartError(
+                        "S24xray disable could not be proven; leave S23xray-direct disabled and inspect /opt/etc/init.d.",
+                        1,
+                    )
+            if _lexists(paths.s23):
+                s23_present, s23_regular, s23_symlink, _mode, s23_enabled = _file_info(paths.s23)
+                if not s23_present or not s23_regular or s23_symlink or s23_enabled:
+                    raise AutostartError(
+                        "S23xray-direct disable could not be proven; inspect /opt/etc/init.d before reboot.",
+                        1,
+                    )
+            _remove_receipt(paths)
+        except AutostartError:
+            raise
+        finally:
+            signals.restore_mask()
+        result.exit_code = signals.signal_exit_code()
+    if signals.teardown_failure is not None:
+        raise AutostartError(f"autostart signal lifecycle teardown failed: {signals.teardown_failure}", 1)
     result.noop = not result.changed_s23_mode and not result.disabled_s24
     result.message = "Autostart disabled. Runtime may continue until manually stopped or rebooted."
     return result
@@ -945,7 +1154,7 @@ def main(argv: Optional[Sequence[str]] = None, *, input_fn=input) -> int:
             print(json.dumps(result.to_json(), sort_keys=True))
         else:
             _print_transaction_result(result)
-        return 0
+        return result.exit_code
 
     if args.disable and args.apply:
         if not args.yes and not _confirm(
@@ -963,7 +1172,7 @@ def main(argv: Optional[Sequence[str]] = None, *, input_fn=input) -> int:
             print(json.dumps(result.to_json(), sort_keys=True))
         else:
             _print_transaction_result(result)
-        return 0
+        return result.exit_code
 
     status = inspect_status(paths.target_root, proc_root=proc_root)
     if args.json:

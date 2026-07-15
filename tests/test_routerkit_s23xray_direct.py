@@ -31,15 +31,28 @@ class S23XrayDirectTemplateTests(unittest.TestCase):
     def test_lock_owner_lives_inside_private_lock_directory(self):
         self.assertIn('mkdir "$LOCKDIR"', self.text)
         self.assertIn('LOCKDIR/$OWNERFILE', self.text)
-        self.assertIn("trap 'release_lock' EXIT", self.text)
-        self.assertIn("trap 'release_lock; exit 130' INT", self.text)
+        self.assertIn("trap 'cleanup_active_child || true; release_lock' EXIT", self.text)
+        self.assertIn("trap 'signal_exit 130' INT", self.text)
         self.assertNotIn("rm -rf", self.text)
 
     def test_pid_publication_uses_lock_directory_temp_and_cleans_child(self):
         self.assertIn('tmp="$LOCKDIR/xray-direct.pid.$$"', self.text)
         self.assertIn('publish_pid "$child"', self.text)
-        self.assertIn('terminate_direct_child "$child"', self.text)
+        self.assertIn('terminate_direct_child "$child" "$child_start"', self.text)
         self.assertNotIn('$PIDFILE.$$', self.text)
+
+    def test_direct_child_termination_is_bounded_and_epoch_checked(self):
+        self.assertIn("ACTIVE_CHILD_PID", self.text)
+        self.assertIn("ACTIVE_CHILD_START", self.text)
+        self.assertIn('direct_child_epoch_alive "$child" "$start" && kill "$child"', self.text)
+        self.assertIn('direct_child_epoch_alive "$child" "$start" && kill -9 "$child"', self.text)
+        self.assertIn('[ "$i" -lt 10 ]', self.text)
+        self.assertIn('[ "$i" -lt 5 ]', self.text)
+
+    def test_signal_traps_clean_active_child_before_lock_release(self):
+        self.assertIn("signal_exit() {", self.text)
+        self.assertIn("cleanup_active_child || true", self.text)
+        self.assertIn("remove_active_pidfile", self.text)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,11 @@ All notable changes to this project will be documented in this file.
 - Autostart runtime verification now requires stable PID start time, executable device/inode, exact command line, and listener ownership, and rejects PID reuse or identity changes during verification.
 - Autostart enable now distinguishes runtime verification, restart performed, and restart verification; verified no-op paths no longer claim a restart.
 - Autostart rollback now attempts to restore prior running state or stop a transaction-started process, removes stale receipts, and returns exit `3` when rollback cannot be proven.
+- Autostart init child supervision now keeps ownership through pending signals, recovery-critical rollback, unexpected wait errors, and bounded JSON output capture before returning any signal result.
+- Autostart disable now defers catchable signals until `S24xray` and `S23xray-direct` are both verified non-executable and stale receipt state is removed.
+- Autostart preflight now rejects symlinked or identity-changing Xray config directories instead of following them.
 - `S23xray-direct` now fails closed on inaccessible proc identity, revalidates process epoch before TERM/KILL, uses owned lock directories, and cleans direct children after PID publication/start verification failures.
+- `S23xray-direct` traps now clean any active child from the current invocation through bounded exact-epoch TERM/KILL before releasing the owned lock.
 - Autostart JSON apply output suppresses init-script stdout/stderr and emits one parseable JSON document without PID or command-line details.
 - Setup now retains bootstrap-child ownership through unexpected wait errors and fails closed after signal-state restoration errors.
 - Setup now snapshots bootstrap-supervisor signal state only after temporary handler teardown, preventing a late catchable signal from being lost before router apply stages.
