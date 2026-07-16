@@ -73,6 +73,32 @@ def supported_result():
 
 
 class DeviceNormalizationTests(unittest.TestCase):
+    def test_public_assignment_mac_helper_normalizes_and_rejects_special_values(self):
+        for supplied, expected in (
+            ("00:11:22:33:44:55", "00:11:22:33:44:55"),
+            ("02-00-5E-00-00-10", "02:00:5e:00:00:10"),
+            ("02.00.5E.00.00.10", "02:00:5e:00:00:10"),
+        ):
+            with self.subTest(supplied=supplied):
+                self.assertEqual(
+                    devices.normalize_trusted_device_mac(supplied), expected
+                )
+        for invalid in (
+            "00:00:00:00:00:00",
+            "ff:ff:ff:ff:ff:ff",
+            "01:00:5e:00:00:01",
+            "33:33:00:00:00:01",
+            "02:00:5e:00:00",
+            "02:00:5e:00:00:gg",
+            "02:00:5e:00:00:10\n",
+            "",
+            7,
+            None,
+        ):
+            with self.subTest(invalid=repr(invalid)):
+                with self.assertRaises(devices.DeviceDiscoveryError):
+                    devices.normalize_trusted_device_mac(invalid)
+
     def test_merges_stable_identity_across_sources_and_preserves_policy(self):
         result = mixed_result()
         tvs = [item for item in result.devices if item.display_name == "Living Room TV"]
