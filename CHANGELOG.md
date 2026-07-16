@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Netcraze fixture simulation is now cryptographically bound to immutable desired endpoint semantics and the exact canonical source snapshot, validates complete plan/action/rollback integrity before mutation, verifies actual synthetic objects after every action, and proves reuse-only idempotent reruns without accepting an independent manifest.
+- Direct `SelectedDeviceRef` input now passes the same public trusted-unicast MAC normalizer as #21 device discovery before planning; malformed, zero, broadcast, multicast/group, non-text, control-character, and invalid display-name input fails before any action.
+- Local plan/snapshot integrity fingerprints are separated from public evidence; the public fingerprint covers every canonical default-policy projection field through a minimized digest and is never used as simulation or write authorization.
+- Private POSIX publication directories now require exact mode `0700`; group/world-readable, traversal-only, missing-owner-permission, and special-bit directories are rejected without chmod or publication residue.
 - Hardened fixture-first device discovery selection: nonzero choices now fail closed on degraded/partial inventories, raw public-evidence output no longer exposes source names or errors, selection handles are ephemeral/internal only, fixture data cannot elevate identifier trust, only valid unicast MACs are assignment-selectable, and the premature generic command runner has been removed until the hardware contract chooses an interface-specific execution boundary.
 - Device discovery is fixture-first and read-only: live Netcraze/Keenetic command execution remains disabled as `contract_unverified`, protected inventory-file mode rejects symlinks/hardlinks/oversized/invalid UTF-8 input, IP-only devices cannot be selected, and public-evidence JSON redacts local identifiers.
 - Autostart apply no longer exposes a public `--proc-root` override; production status, verify, and apply inspect real `/proc` only.

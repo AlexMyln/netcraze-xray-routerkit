@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from routerkit_devices import DeviceDiscoveryError, normalize_trusted_device_mac
 from routerkit_private_io import PrivateFileError, read_owner_only_text_file
 
 
@@ -229,9 +230,13 @@ class PlanAction:
 
 @dataclass(frozen=True)
 class ChangePlan:
+    desired_profiles: Tuple[LocalProxyProfile, ...]
+    source_snapshot_fingerprint: str
+    source_default_policy_projection: DefaultPolicyProjection
     actions: Tuple[PlanAction, ...]
     rollback: RollbackPlan
-    fingerprint: str
+    local_integrity_fingerprint: str
+    public_plan_fingerprint: str
     plan_status: str
     write_readiness: str
     default_policy_not_targeted: bool
@@ -295,6 +300,79 @@ def _reject_fixture_trust(value: Any) -> None:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sha256_json(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _canonical_profile(profile: LocalProxyProfile) -> Dict[str, Any]:
+    return {
+        "slot": profile.slot,
+        "label": profile.label,
+        "host": profile.host,
+        "port": profile.port,
+        "enabled": profile.enabled,
+        "protocol": profile.protocol,
+        "auth_mode": profile.auth_mode,
+    }
+
+
+def _normalize_desired_profiles(
+    profiles: Sequence[LocalProxyProfile],
+) -> Tuple[LocalProxyProfile, ...]:
+    if not isinstance(profiles, tuple) or not 1 <= len(profiles) <= MAX_PROFILES:
+        raise ManifestSchemaError("Local endpoint manifest must contain one to three profiles.")
+    normalized: List[LocalProxyProfile] = []
+    seen_ports = set()
+    for profile in profiles:
+        if type(profile) is not LocalProxyProfile:
+            raise ManifestSchemaError("Local endpoint manifest contains a malformed profile.")
+        if profile.slot not in (1, 2, 3) or isinstance(profile.slot, bool):
+            raise ManifestSchemaError("Local endpoint profile slot is invalid.")
+        if profile.label != SAFE_MANIFEST_LABELS[profile.slot]:
+            raise ManifestSchemaError("Local endpoint profile label is not code-owned.")
+        try:
+            host = str(ipaddress.ip_address(profile.host))
+        except (TypeError, ValueError):
+            raise ManifestSchemaError("Local endpoint address is invalid.") from None
+        if host not in LOOPBACK_HOSTS or host != profile.host:
+            raise ManifestSchemaError("Local endpoint must use an exact loopback address.")
+        if (
+            not isinstance(profile.port, int)
+            or isinstance(profile.port, bool)
+            or profile.port not in EXPECTED_PORTS
+            or profile.port in seen_ports
+        ):
+            raise ManifestSchemaError("Local endpoint profile port is outside the supported scope.")
+        if type(profile.enabled) is not bool:
+            raise ManifestSchemaError("Local endpoint enabled state must be true or false.")
+        if profile.protocol != "socks5" or profile.auth_mode != "none":
+            raise ManifestSchemaError("Local endpoint profile semantics are unsupported.")
+        normalized.append(
+            LocalProxyProfile(
+                profile.slot,
+                profile.label,
+                host,
+                profile.port,
+                profile.enabled,
+                profile.protocol,
+                profile.auth_mode,
+            )
+        )
+        seen_ports.add(profile.port)
+    normalized.sort(key=lambda item: item.slot)
+    if [item.slot for item in normalized] != list(range(1, len(normalized) + 1)):
+        raise ManifestSchemaError("Local endpoint profile slots must be contiguous from one.")
+    return tuple(normalized)
+
+
+def normalize_local_endpoint_manifest(
+    manifest: LocalEndpointManifest,
+) -> LocalEndpointManifest:
+    if type(manifest) is not LocalEndpointManifest or manifest.schema != MANIFEST_SCHEMA:
+        raise ManifestSchemaError("Unsupported local endpoint manifest schema.")
+    return LocalEndpointManifest(_normalize_desired_profiles(manifest.profiles))
 
 
 def _parse_json_object(text: str, description: str) -> Dict[str, Any]:
@@ -416,14 +494,10 @@ def _parse_policy(raw: Any) -> ExistingPolicy:
 
 
 def _normalize_mac(value: Any) -> str:
-    text = _clean_text(value, "Device assignment MAC")
-    compact = re.sub(r"[^0-9a-fA-F]", "", text)
-    if len(compact) != 12 or not re.fullmatch(r"[0-9a-fA-F]{12}", compact):
-        raise SnapshotSchemaError("Device assignment requires a valid MAC identity.")
-    raw = bytes.fromhex(compact)
-    if raw in (b"\x00" * 6, b"\xff" * 6) or raw[0] & 1:
+    try:
+        return normalize_trusted_device_mac(value)
+    except DeviceDiscoveryError:
         raise SnapshotSchemaError("Device assignment requires a unicast MAC identity.")
-    return ":".join(compact[index : index + 2].lower() for index in range(0, 12, 2))
 
 
 def _parse_assignment(raw: Any) -> ExistingDeviceAssignment:
@@ -549,6 +623,48 @@ def default_policy_projection(snapshot: RouterStateSnapshot) -> DefaultPolicyPro
     )
 
 
+def _canonical_default_policy_projection(
+    projection: DefaultPolicyProjection,
+) -> Dict[str, Any]:
+    return {
+        "status": projection.status,
+        "default_policy_ref": projection.default_policy_ref,
+        "policy": projection.policy,
+        "connection": projection.connection,
+    }
+
+
+def _canonical_snapshot_semantics(snapshot: RouterStateSnapshot) -> Dict[str, Any]:
+    projection = default_policy_projection(snapshot)
+    return {
+        "schema": snapshot.schema,
+        "state": snapshot.state,
+        "stale": snapshot.stale,
+        "default_policy": _canonical_default_policy_projection(projection),
+        "connections": [
+            asdict(item)
+            for item in sorted(snapshot.connections, key=lambda item: item.object_id)
+        ],
+        "policies": [
+            asdict(item) for item in sorted(snapshot.policies, key=lambda item: item.object_id)
+        ],
+        "assignments": [
+            asdict(item)
+            for item in sorted(
+                snapshot.assignments,
+                key=lambda item: (item.device_mac, item.policy_ref),
+            )
+        ],
+        "capabilities": [list(item) for item in sorted(snapshot.capabilities)],
+    }
+
+
+def snapshot_semantic_fingerprint(snapshot: RouterStateSnapshot) -> str:
+    """Return a local-sensitive digest of every planner-relevant observation."""
+
+    return _sha256_json(_canonical_snapshot_semantics(snapshot))
+
+
 def parse_router_state_snapshot(text: str) -> RouterStateSnapshot:
     value = _parse_json_object(text, "Router state fixture")
     _reject_fixture_trust(value)
@@ -635,10 +751,25 @@ def selected_device_from_device_selection(
         raise NetcrazePlanError("Selected device lacks a trusted selectable identity.")
     if device.stable_identifier_type != "mac":
         raise NetcrazePlanError("Selected device requires a trusted MAC identity.")
-    return SelectedDeviceRef(
-        display_name=_clean_text(device.display_name, "Selected device name"),
-        mac=_normalize_mac(device.stable_identifier),
+    return normalize_selected_device_ref(
+        SelectedDeviceRef(
+            display_name=device.display_name,
+            mac=device.stable_identifier,
+        )
     )
+
+
+def normalize_selected_device_ref(value: SelectedDeviceRef) -> SelectedDeviceRef:
+    """Validate and canonicalize a selected device regardless of its origin."""
+
+    try:
+        if type(value) is not SelectedDeviceRef:
+            raise ValueError
+        display_name = _clean_text(value.display_name, "Selected device name")
+        mac = normalize_trusted_device_mac(value.mac)
+    except (DeviceDiscoveryError, SnapshotSchemaError, ValueError):
+        raise NetcrazePlanError("Selected device reference is invalid.") from None
+    return SelectedDeviceRef(display_name=display_name, mac=mac)
 
 
 def connection_equivalence(
@@ -755,12 +886,357 @@ def _planned_reference(object_type: str, slot: int) -> ObjectReference:
     return ObjectReference("planned_%s" % object_type, profile_slot=slot)
 
 
-def _reference_identity(reference: ObjectReference) -> Dict[str, Any]:
+def _canonical_action(action: PlanAction) -> Dict[str, Any]:
     return {
-        "kind": reference.kind,
-        "profile_slot": reference.profile_slot,
-        "existing_reference": reference.value is not None,
+        "action_id": action.action_id,
+        "operation": action.operation,
+        "object_type": action.object_type,
+        "target_name": action.target_name,
+        "profile_slot": action.profile_slot,
+        "endpoint": action.endpoint,
+        "observed_id": action.observed_id,
+        "observed_name": action.observed_name,
+        "proposed": [list(item) for item in action.proposed],
+        "dependencies": [asdict(item) for item in action.dependencies],
+        "preconditions": [asdict(item) for item in action.preconditions],
+        "future_adapter_requirement": action.future_adapter_requirement,
+        "backup_required": action.backup_required,
+        "verification_checks": [asdict(item) for item in action.verification_checks],
+        "rollback_intent": action.rollback_intent,
+        "readiness": action.readiness,
+        "sensitivity": action.sensitivity,
+        "reason": action.reason,
     }
+
+
+def _local_plan_identity(plan: ChangePlan) -> Dict[str, Any]:
+    return {
+        "schema": plan.schema,
+        "software_verdict": plan.software_verdict,
+        "desired_profiles": [_canonical_profile(item) for item in plan.desired_profiles],
+        "source_snapshot_fingerprint": plan.source_snapshot_fingerprint,
+        "source_default_policy_projection": _canonical_default_policy_projection(
+            plan.source_default_policy_projection
+        ),
+        "actions": [_canonical_action(item) for item in plan.actions],
+        "rollback": [asdict(item) for item in plan.rollback.actions],
+        "plan_status": plan.plan_status,
+        "write_readiness": plan.write_readiness,
+        "default_policy_not_targeted": plan.default_policy_not_targeted,
+        "selected_device": (
+            None if plan.selected_device is None else asdict(plan.selected_device)
+        ),
+    }
+
+
+def _public_plan_identity(plan: ChangePlan) -> Dict[str, Any]:
+    counts: Dict[str, int] = {}
+    for action in plan.actions:
+        counts[action.operation] = counts.get(action.operation, 0) + 1
+    return {
+        "schema": PUBLIC_EVIDENCE_SCHEMA,
+        "plan_schema": plan.schema,
+        "software_verdict": plan.software_verdict,
+        "plan_status": plan.plan_status,
+        "write_readiness": plan.write_readiness,
+        "profile_slots": [item.slot for item in plan.desired_profiles],
+        "selected_device_present": plan.selected_device is not None,
+        "default_policy_not_targeted": plan.default_policy_not_targeted,
+        "default_policy_projection_digest": _sha256_json(
+            _canonical_default_policy_projection(
+                plan.source_default_policy_projection
+            )
+        ),
+        "counts": counts,
+        "actions": [
+            {
+                "action_id": action.action_id,
+                "operation": action.operation,
+                "object_type": action.object_type,
+                "profile_slot": action.profile_slot,
+                "readiness": action.readiness,
+                "backup_required": action.backup_required,
+                "reason_category": bool(action.reason),
+                "dependency_categories": [
+                    reference.kind for reference in action.dependencies
+                ],
+            }
+            for action in plan.actions
+        ],
+    }
+
+
+def _validate_reference(reference: ObjectReference) -> None:
+    if type(reference) is not ObjectReference:
+        raise NetcrazePlanError("Change plan integrity validation failed.")
+    if reference.kind in ("existing_connection", "existing_policy"):
+        if (
+            not isinstance(reference.value, str)
+            or not reference.value
+            or reference.profile_slot is not None
+        ):
+            raise NetcrazePlanError("Change plan integrity validation failed.")
+    elif reference.kind in ("planned_connection", "planned_policy"):
+        if reference.value is not None or reference.profile_slot not in (1, 2, 3):
+            raise NetcrazePlanError("Change plan integrity validation failed.")
+    else:
+        raise NetcrazePlanError("Change plan integrity validation failed.")
+
+
+def validate_change_plan_integrity(plan: ChangePlan) -> None:
+    """Reject directly constructed or mutated plans before simulation."""
+
+    failure = "Change plan integrity validation failed."
+    try:
+        if type(plan) is not ChangePlan:
+            raise ValueError
+        if (
+            plan.schema != PLAN_SCHEMA
+            or plan.software_verdict != SOFTWARE_VERDICT
+            or plan.write_readiness != READINESS_BLOCKED
+            or plan.plan_status not in (READINESS_HARDWARE, READINESS_BLOCKED)
+            or not isinstance(plan.default_policy_not_targeted, bool)
+        ):
+            raise ValueError
+        desired_profiles = _normalize_desired_profiles(plan.desired_profiles)
+        if desired_profiles != plan.desired_profiles:
+            raise ValueError
+        if (
+            not isinstance(plan.source_snapshot_fingerprint, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", plan.source_snapshot_fingerprint)
+            or type(plan.source_default_policy_projection) is not DefaultPolicyProjection
+        ):
+            raise ValueError
+        selected_device = (
+            None
+            if plan.selected_device is None
+            else normalize_selected_device_ref(plan.selected_device)
+        )
+        if selected_device != plan.selected_device:
+            raise ValueError
+        if not isinstance(plan.actions, tuple) or not all(
+            type(item) is PlanAction for item in plan.actions
+        ):
+            raise ValueError
+
+        expected_ids = [
+            "%02d:connection" % item.slot for item in desired_profiles
+        ]
+        expected_ids.extend("%02d:policy" % item.slot for item in desired_profiles)
+        if selected_device is not None:
+            expected_ids.append("80:assignment")
+        expected_ids.extend(("90:verify-connections", "91:verify-policies"))
+        if selected_device is not None:
+            expected_ids.append("92:verify-assignment")
+        expected_ids.append("99:verify-default")
+        if [item.action_id for item in plan.actions] != expected_ids:
+            raise ValueError
+
+        profiles = {item.slot: item for item in desired_profiles}
+        for action in plan.actions:
+            if (
+                not isinstance(action.proposed, tuple)
+                or tuple(sorted(action.proposed)) != action.proposed
+                or not all(
+                    isinstance(item, tuple)
+                    and len(item) == 2
+                    and all(isinstance(value, str) for value in item)
+                    for item in action.proposed
+                )
+                or not isinstance(action.dependencies, tuple)
+                or not isinstance(action.preconditions, tuple)
+                or not isinstance(action.verification_checks, tuple)
+                or not all(
+                    type(item) is PlanPrecondition for item in action.preconditions
+                )
+                or not all(
+                    type(item) is VerificationCheck
+                    for item in action.verification_checks
+                )
+                or action.readiness
+                not in (READINESS_PLAN, READINESS_HARDWARE, READINESS_BLOCKED)
+                or action.sensitivity != SENSITIVITY_LOCAL
+            ):
+                raise ValueError
+            for reference in action.dependencies:
+                _validate_reference(reference)
+
+            if action.action_id.endswith(":connection"):
+                profile = profiles[action.profile_slot or 0]
+                if (
+                    action.object_type != "connection"
+                    or action.target_name != connection_name(profile)
+                    or action.endpoint != "%s:%d" % (profile.host, profile.port)
+                    or action.dependencies
+                    or action.operation
+                    not in ("create_connection", "reuse_connection", "conflict")
+                ):
+                    raise ValueError
+                proposed = dict(action.proposed)
+                if action.operation == "create_connection":
+                    if proposed != {
+                        "auth_mode": profile.auth_mode,
+                        "enabled": str(profile.enabled),
+                        "host": profile.host,
+                        "port": str(profile.port),
+                        "protocol": profile.protocol,
+                    }:
+                        raise ValueError
+                elif action.operation == "reuse_connection":
+                    if proposed != {"semantic_match": "exact"}:
+                        raise ValueError
+                elif proposed not in (
+                    {},
+                    {"semantic_match": "ambiguous"},
+                    {"semantic_match": "false"},
+                ):
+                    raise ValueError
+            elif action.action_id.endswith(":policy") and action.action_id[0:2].isdigit():
+                profile = profiles[action.profile_slot or 0]
+                if (
+                    action.object_type != "policy"
+                    or action.target_name != policy_name(profile)
+                    or action.endpoint != "%s:%d" % (profile.host, profile.port)
+                    or action.operation
+                    not in ("create_policy", "reuse_policy", "conflict", "blocked")
+                ):
+                    raise ValueError
+                if action.dependencies:
+                    if len(action.dependencies) != 1:
+                        raise ValueError
+                    reference = action.dependencies[0]
+                    if (
+                        reference.kind
+                        not in ("existing_connection", "planned_connection")
+                        or (
+                            reference.kind == "planned_connection"
+                            and reference.profile_slot != profile.slot
+                        )
+                    ):
+                        raise ValueError
+                elif action.operation != "blocked":
+                    raise ValueError
+                proposed = dict(action.proposed)
+                if action.operation == "create_policy":
+                    if proposed != {"default": "False", "mode": "proxy_only"}:
+                        raise ValueError
+                elif action.operation == "reuse_policy":
+                    if proposed != {"semantic_match": "exact"}:
+                        raise ValueError
+                elif action.operation == "blocked":
+                    if proposed:
+                        raise ValueError
+                elif proposed not in (
+                    {},
+                    {"semantic_match": "ambiguous"},
+                    {"semantic_match": "false"},
+                ):
+                    raise ValueError
+            elif action.action_id == "80:assignment":
+                primary = desired_profiles[0]
+                if (
+                    selected_device is None
+                    or action.object_type != "assignment"
+                    or action.target_name != "selected-device"
+                    or action.profile_slot != primary.slot
+                    or action.endpoint != "%s:%d" % (primary.host, primary.port)
+                    or action.operation
+                    not in ("assign_device", "reuse_assignment", "blocked")
+                    or action.proposed
+                ):
+                    raise ValueError
+                if action.dependencies:
+                    if len(action.dependencies) != 1:
+                        raise ValueError
+                    reference = action.dependencies[0]
+                    if (
+                        reference.kind not in ("existing_policy", "planned_policy")
+                        or (
+                            reference.kind == "planned_policy"
+                            and reference.profile_slot != primary.slot
+                        )
+                    ):
+                        raise ValueError
+                elif action.operation != "blocked":
+                    raise ValueError
+                if (
+                    action.operation == "reuse_assignment"
+                    and action.observed_id != selected_device.mac
+                ):
+                    raise ValueError
+            elif action.action_id in (
+                "90:verify-connections",
+                "91:verify-policies",
+                "92:verify-assignment",
+                "99:verify-default",
+            ):
+                expected_object = {
+                    "90:verify-connections": "connection",
+                    "91:verify-policies": "policy",
+                    "92:verify-assignment": "assignment",
+                    "99:verify-default": "default_policy",
+                }[action.action_id]
+                if (
+                    action.operation != "verify"
+                    or action.object_type != expected_object
+                    or action.profile_slot is not None
+                    or action.endpoint is not None
+                    or action.dependencies
+                    or action.proposed
+                ):
+                    raise ValueError
+            else:
+                raise ValueError
+
+        default_action = plan.actions[-1]
+        if (
+            default_action.action_id != "99:verify-default"
+            or default_action.observed_id
+            != plan.source_default_policy_projection.default_policy_ref
+            or (
+                plan.default_policy_not_targeted
+                and default_action.reason is not None
+            )
+            or (
+                not plan.default_policy_not_targeted
+                and (
+                    default_action.readiness != READINESS_BLOCKED
+                    or default_action.reason is None
+                )
+            )
+        ):
+            raise ValueError
+
+        if plan.plan_status == READINESS_BLOCKED:
+            if not all(item.readiness == READINESS_BLOCKED for item in plan.actions):
+                raise ValueError
+        elif (
+            not plan.default_policy_not_targeted
+            or any(item.readiness == READINESS_BLOCKED for item in plan.actions)
+        ):
+            raise ValueError
+
+        expected_rollback = tuple(
+            item
+            for item in (
+                _rollback_for(action) for action in reversed(plan.actions)
+            )
+            if item is not None
+        )
+        if (
+            type(plan.rollback) is not RollbackPlan
+            or plan.rollback.actions != expected_rollback
+        ):
+            raise ValueError
+        if (
+            plan.local_integrity_fingerprint
+            != _sha256_json(_local_plan_identity(plan))
+            or plan.public_plan_fingerprint
+            != _sha256_json(_public_plan_identity(plan))
+        ):
+            raise ValueError
+    except (KeyError, ManifestSchemaError, NetcrazePlanError, TypeError, ValueError):
+        raise NetcrazePlanError(failure) from None
 
 
 def _prove_default_policy_not_targeted(
@@ -799,7 +1275,12 @@ def build_change_plan(
     snapshot: RouterStateSnapshot,
     selected_device: Optional[SelectedDeviceRef] = None,
 ) -> ChangePlan:
+    manifest = normalize_local_endpoint_manifest(manifest)
+    if selected_device is not None:
+        selected_device = normalize_selected_device_ref(selected_device)
     consistency = validate_snapshot_consistency(snapshot)
+    source_default = default_policy_projection(snapshot)
+    source_fingerprint = snapshot_semantic_fingerprint(snapshot)
     actions: List[PlanAction] = []
     connection_refs: Dict[int, ObjectReference] = {}
     policy_refs: Dict[int, ObjectReference] = {}
@@ -1185,48 +1666,29 @@ def build_change_plan(
     if blocked:
         actions = [replace(item, readiness=READINESS_BLOCKED) for item in actions]
 
-    semantic_identity = {
-        "profiles": [
-            {
-                "slot": item.slot,
-                "host": item.host,
-                "port": item.port,
-                "enabled": item.enabled,
-                "protocol": item.protocol,
-            }
-            for item in manifest.profiles
-        ],
-        "actions": [
-            {
-                "id": item.action_id,
-                "operation": item.operation,
-                "object_type": item.object_type,
-                "target": item.target_name,
-                "readiness": item.readiness,
-                "reason_category": bool(item.reason),
-                "dependencies": [
-                    _reference_identity(reference) for reference in item.dependencies
-                ],
-            }
-            for item in actions
-        ],
-        "selected_device": selected_device is not None,
-        "default_policy_status": snapshot.default_policy_status,
-        "default_policy_not_targeted": default_policy_not_targeted,
-    }
-    fingerprint = hashlib.sha256(_canonical_json(semantic_identity).encode("utf-8")).hexdigest()
     rollback_actions = tuple(
         item for item in (_rollback_for(action) for action in reversed(actions)) if item is not None
     )
-    return ChangePlan(
+    change_plan = ChangePlan(
+        desired_profiles=manifest.profiles,
+        source_snapshot_fingerprint=source_fingerprint,
+        source_default_policy_projection=source_default,
         actions=tuple(actions),
         rollback=RollbackPlan(rollback_actions),
-        fingerprint=fingerprint,
+        local_integrity_fingerprint="",
+        public_plan_fingerprint="",
         plan_status=READINESS_BLOCKED if blocked else READINESS_HARDWARE,
         write_readiness=READINESS_BLOCKED,
         default_policy_not_targeted=default_policy_not_targeted,
         selected_device=selected_device,
     )
+    change_plan = replace(
+        change_plan,
+        local_integrity_fingerprint=_sha256_json(_local_plan_identity(change_plan)),
+        public_plan_fingerprint=_sha256_json(_public_plan_identity(change_plan)),
+    )
+    validate_change_plan_integrity(change_plan)
+    return change_plan
 
 
 def _action_json(action: PlanAction, *, public: bool) -> Dict[str, Any]:
@@ -1265,6 +1727,7 @@ def _action_json(action: PlanAction, *, public: bool) -> Dict[str, Any]:
 
 
 def render_plan_json(plan: ChangePlan, *, public_evidence: bool = False) -> str:
+    validate_change_plan_integrity(plan)
     if public_evidence:
         counts: Dict[str, int] = {}
         for action in plan.actions:
@@ -1274,13 +1737,17 @@ def render_plan_json(plan: ChangePlan, *, public_evidence: bool = False) -> str:
             "software_verdict": plan.software_verdict,
             "plan_status": plan.plan_status,
             "write_readiness": plan.write_readiness,
-            "plan_fingerprint": plan.fingerprint,
+            "public_plan_fingerprint": plan.public_plan_fingerprint,
             "default_policy_not_targeted": plan.default_policy_not_targeted,
             "selected_device_present": plan.selected_device is not None,
             "counts": counts,
             "actions": [_action_json(item, public=True) for item in plan.actions],
             "sensitivity": SENSITIVITY_PUBLIC,
             "redaction_notice": "Public evidence is minimized but is not an anonymity guarantee.",
+            "fingerprint_notice": (
+                "The stable public fingerprint permits correlation and is evidence only, "
+                "not simulation or write authorization."
+            ),
         }
     else:
         selected = None
@@ -1296,22 +1763,33 @@ def render_plan_json(plan: ChangePlan, *, public_evidence: bool = False) -> str:
             "software_verdict": plan.software_verdict,
             "plan_status": plan.plan_status,
             "write_readiness": plan.write_readiness,
-            "plan_fingerprint": plan.fingerprint,
+            "local_integrity_fingerprint": plan.local_integrity_fingerprint,
+            "local_integrity_fingerprint_sensitivity": SENSITIVITY_LOCAL,
+            "source_snapshot_fingerprint": plan.source_snapshot_fingerprint,
+            "source_snapshot_fingerprint_sensitivity": SENSITIVITY_LOCAL,
+            "desired_profiles": [
+                _canonical_profile(item) for item in plan.desired_profiles
+            ],
             "default_policy_not_targeted": plan.default_policy_not_targeted,
             "selected_device": selected,
             "actions": [_action_json(item, public=False) for item in plan.actions],
             "rollback": [asdict(item) for item in plan.rollback.actions],
             "sensitivity": SENSITIVITY_LOCAL,
+            "integrity_notice": (
+                "Local fingerprints bind this synthetic plan only; they are not router "
+                "revision tokens or write authorization."
+            ),
         }
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def render_plan_text(plan: ChangePlan) -> str:
+    validate_change_plan_integrity(plan)
     lines = [
         "Netcraze offline change plan",
         "Status: %s" % plan.software_verdict,
         "Plan: %s; future write readiness: %s" % (plan.plan_status, plan.write_readiness),
-        "Fingerprint: %s" % plan.fingerprint,
+        "Local integrity fingerprint: %s" % plan.local_integrity_fingerprint,
     ]
     if plan.selected_device is None:
         lines.append("Selected device: none (no assignment requested)")
@@ -1394,8 +1872,8 @@ def _apply_simulated_action(
     snapshot: RouterStateSnapshot,
     action: PlanAction,
     plan: ChangePlan,
-    profiles: Mapping[int, LocalProxyProfile],
 ) -> RouterStateSnapshot:
+    profiles = {item.slot: item for item in plan.desired_profiles}
     profile = profiles.get(action.profile_slot) if action.profile_slot is not None else None
     if action.operation == "create_connection" and profile is not None:
         return _replace_snapshot(
@@ -1441,39 +1919,187 @@ def _apply_simulated_action(
     return snapshot
 
 
+def _verify_connection_action(
+    snapshot: RouterStateSnapshot,
+    action: PlanAction,
+    profile: LocalProxyProfile,
+) -> None:
+    object_id = (
+        _simulation_object_id("connection", profile.slot)
+        if action.operation == "create_connection"
+        else action.observed_id
+    )
+    connection = next(
+        (item for item in snapshot.connections if item.object_id == object_id), None
+    )
+    expected_name = (
+        action.target_name
+        if action.operation == "create_connection"
+        else action.observed_name
+    )
+    if (
+        connection is None
+        or connection.name != expected_name
+        or connection.protocol != profile.protocol
+        or connection.host != profile.host
+        or connection.port != profile.port
+        or connection.auth_mode != profile.auth_mode
+        or connection.enabled != profile.enabled
+        or not connection.semantic_complete
+    ):
+        raise NetcrazePlanError("Synthetic connection verification failed.")
+
+
+def _verify_policy_action(
+    snapshot: RouterStateSnapshot,
+    action: PlanAction,
+    profile: LocalProxyProfile,
+) -> None:
+    if len(action.dependencies) != 1:
+        raise NetcrazePlanError("Synthetic policy verification failed.")
+    connection = _resolve_simulation_reference(snapshot, action.dependencies[0])
+    object_id = (
+        _simulation_object_id("policy", profile.slot)
+        if action.operation == "create_policy"
+        else action.observed_id
+    )
+    policy = next((item for item in snapshot.policies if item.object_id == object_id), None)
+    expected_name = (
+        action.target_name if action.operation == "create_policy" else action.observed_name
+    )
+    if (
+        policy is None
+        or policy.name != expected_name
+        or policy.connection_ref != connection.object_id
+        or policy.mode != "proxy_only"
+        or policy.is_default_observed
+        or not policy.semantic_complete
+        or policy.unrelated_rules
+    ):
+        raise NetcrazePlanError("Synthetic policy verification failed.")
+
+
+def _verify_assignment_action(
+    snapshot: RouterStateSnapshot,
+    action: PlanAction,
+    plan: ChangePlan,
+) -> None:
+    selected_device = (
+        None
+        if plan.selected_device is None
+        else normalize_selected_device_ref(plan.selected_device)
+    )
+    if selected_device is None or len(action.dependencies) != 1:
+        raise NetcrazePlanError("Synthetic assignment verification failed.")
+    policy = _resolve_simulation_reference(snapshot, action.dependencies[0])
+    matching = [
+        item
+        for item in snapshot.assignments
+        if item.device_mac == selected_device.mac
+    ]
+    if len(matching) != 1 or matching[0].policy_ref != policy.object_id:
+        raise NetcrazePlanError("Synthetic assignment verification failed.")
+
+
+def _verify_simulated_action(
+    snapshot: RouterStateSnapshot,
+    action: PlanAction,
+    plan: ChangePlan,
+) -> None:
+    profiles = {item.slot: item for item in plan.desired_profiles}
+    if action.operation in ("create_connection", "reuse_connection"):
+        _verify_connection_action(snapshot, action, profiles[action.profile_slot or 0])
+        return
+    if action.operation in ("create_policy", "reuse_policy"):
+        _verify_policy_action(snapshot, action, profiles[action.profile_slot or 0])
+        return
+    if action.operation in ("assign_device", "reuse_assignment"):
+        _verify_assignment_action(snapshot, action, plan)
+        return
+    if action.action_id == "90:verify-connections":
+        for planned in plan.actions:
+            if planned.operation in ("create_connection", "reuse_connection"):
+                _verify_connection_action(
+                    snapshot, planned, profiles[planned.profile_slot or 0]
+                )
+        return
+    if action.action_id == "91:verify-policies":
+        for planned in plan.actions:
+            if planned.operation in ("create_policy", "reuse_policy"):
+                _verify_policy_action(
+                    snapshot, planned, profiles[planned.profile_slot or 0]
+                )
+        return
+    if action.action_id == "92:verify-assignment":
+        assignment = next(
+            item
+            for item in plan.actions
+            if item.action_id == "80:assignment"
+        )
+        _verify_assignment_action(snapshot, assignment, plan)
+        return
+    if action.action_id == "99:verify-default":
+        if default_policy_projection(snapshot) != plan.source_default_policy_projection:
+            raise NetcrazePlanError("Synthetic default-policy verification failed.")
+        return
+    raise NetcrazePlanError("Synthetic action verification failed.")
+
+
 def _restore_simulated_state(snapshot: RouterStateSnapshot) -> RouterStateSnapshot:
     return snapshot
+
+
+def _unchanged_simulation_failure(
+    snapshot: RouterStateSnapshot,
+    error_category: str,
+) -> SimulationResult:
+    return SimulationResult(
+        success=False,
+        stopped_after=None,
+        completed_actions=(),
+        rollback_actions=(),
+        rollback_succeeded=True,
+        restored_initial_state=True,
+        default_policy_unchanged=True,
+        unrelated_objects_unchanged=True,
+        final_state=snapshot,
+        error_category=error_category,
+    )
 
 
 def simulate_change_plan(
     plan: ChangePlan,
     snapshot: RouterStateSnapshot,
-    manifest: LocalEndpointManifest,
     *,
     fail_after: Optional[str] = None,
     rollback_failure: bool = False,
 ) -> SimulationResult:
     validate_snapshot_consistency(snapshot)
+    try:
+        validate_change_plan_integrity(plan)
+    except NetcrazePlanError:
+        return _unchanged_simulation_failure(snapshot, "plan_integrity")
+    if (
+        snapshot_semantic_fingerprint(snapshot)
+        != plan.source_snapshot_fingerprint
+        or default_policy_projection(snapshot)
+        != plan.source_default_policy_projection
+    ):
+        return _unchanged_simulation_failure(snapshot, "plan_snapshot_mismatch")
+    expected_plan = build_change_plan(
+        LocalEndpointManifest(plan.desired_profiles),
+        snapshot,
+        plan.selected_device,
+    )
+    if expected_plan != plan:
+        return _unchanged_simulation_failure(snapshot, "plan_integrity")
     initial_default = default_policy_projection(snapshot)
     if plan.blocked:
-        default_unchanged = default_policy_projection(snapshot) == initial_default
-        return SimulationResult(
-            success=False,
-            stopped_after=None,
-            completed_actions=(),
-            rollback_actions=(),
-            rollback_succeeded=True,
-            restored_initial_state=True,
-            default_policy_unchanged=default_unchanged,
-            unrelated_objects_unchanged=True,
-            final_state=snapshot,
-            error_category="plan_blocked",
-        )
+        return _unchanged_simulation_failure(snapshot, "plan_blocked")
     initial = snapshot
     current = snapshot
     completed: List[str] = []
     rollback_stack: List[Tuple[RollbackAction, RouterStateSnapshot]] = []
-    profiles = {item.slot: item for item in manifest.profiles}
     unrelated_before = _unrelated_identity(snapshot, plan)
     stopped_after = None
     error_category = None
@@ -1481,7 +2107,7 @@ def simulate_change_plan(
     for action in plan.actions:
         before = current
         try:
-            current = _apply_simulated_action(current, action, plan, profiles)
+            current = _apply_simulated_action(current, action, plan)
         except NetcrazePlanError:
             stopped_after = action.action_id
             error_category = "simulation_dependency"
@@ -1489,16 +2115,22 @@ def simulate_change_plan(
         rollback = _rollback_for(action)
         if rollback is not None and current != before:
             rollback_stack.append((rollback, before))
-        completed.append(action.action_id)
-        if current != before and stopped_after is None:
+        if stopped_after is None:
             try:
                 validate_snapshot_consistency(current)
                 if default_policy_projection(current) != initial_default:
                     stopped_after = action.action_id
                     error_category = "default_policy_invariant"
+                else:
+                    _verify_simulated_action(current, action, plan)
             except SnapshotSchemaError:
                 stopped_after = action.action_id
                 error_category = "snapshot_consistency"
+            except NetcrazePlanError:
+                stopped_after = action.action_id
+                error_category = "simulation_verification"
+        if stopped_after is None:
+            completed.append(action.action_id)
         if fail_after == action.action_id and stopped_after is None:
             stopped_after = action.action_id
             error_category = "injected_failure"
@@ -1513,10 +2145,33 @@ def simulate_change_plan(
                 success = False
                 stopped_after = completed[-1] if completed else None
                 error_category = "default_policy_invariant"
+            else:
+                rerun = build_change_plan(
+                    LocalEndpointManifest(plan.desired_profiles),
+                    current,
+                    plan.selected_device,
+                )
+                forbidden = {
+                    "create_connection",
+                    "create_policy",
+                    "assign_device",
+                    "conflict",
+                    "blocked",
+                }
+                if rerun.blocked or any(
+                    item.operation in forbidden for item in rerun.actions
+                ):
+                    success = False
+                    stopped_after = completed[-1] if completed else None
+                    error_category = "idempotency_verification"
         except SnapshotSchemaError:
             success = False
             stopped_after = completed[-1] if completed else None
             error_category = "snapshot_consistency"
+        except (ManifestSchemaError, NetcrazePlanError):
+            success = False
+            stopped_after = completed[-1] if completed else None
+            error_category = "idempotency_verification"
     performed_rollback: List[RollbackAction] = []
     rollback_succeeded = True
     if not success:
@@ -1658,7 +2313,6 @@ def run_cli(
         result = simulate_change_plan(
             plan,
             snapshot,
-            manifest,
             fail_after=args.fail_after,
             rollback_failure=args.rollback_failure,
         )

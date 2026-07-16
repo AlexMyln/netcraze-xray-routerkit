@@ -46,9 +46,9 @@ def _validate_private_directory_metadata(
     if os.name == "posix":
         if metadata.st_uid != os.geteuid():
             raise PrivateFileError(f"{description} must be owned by the current user on POSIX.")
-        if stat.S_IMODE(metadata.st_mode) & 0o022:
+        if stat.S_IMODE(metadata.st_mode) != 0o700:
             raise PrivateFileError(
-                f"{description} must not be group- or world-writable on POSIX."
+                f"{description} permissions must be exactly 0700 on POSIX."
             )
 
 

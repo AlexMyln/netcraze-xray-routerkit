@@ -1,10 +1,13 @@
+import ast
 import json
 import inspect
 import os
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +17,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import routerkit_netcraze_plan as plan
+import routerkit_devices as devices
 from tests.test_routerkit_device_adapters import find_live_execution_guard_violations
 
 
@@ -238,7 +242,19 @@ class PlanningTests(unittest.TestCase):
         first = plan.build_change_plan(manifest, snapshot)
         second = plan.build_change_plan(manifest, snapshot)
 
-        self.assertEqual(first.fingerprint, second.fingerprint)
+        self.assertEqual(
+            first.local_integrity_fingerprint,
+            second.local_integrity_fingerprint,
+        )
+        self.assertEqual(
+            first.public_plan_fingerprint,
+            second.public_plan_fingerprint,
+        )
+        self.assertEqual(first.desired_profiles, manifest.profiles)
+        self.assertEqual(
+            first.source_snapshot_fingerprint,
+            plan.snapshot_semantic_fingerprint(snapshot),
+        )
         self.assertEqual(first.plan_status, plan.READINESS_HARDWARE)
         self.assertEqual(first.write_readiness, plan.READINESS_BLOCKED)
         self.assertEqual(
@@ -324,6 +340,83 @@ class PlanningTests(unittest.TestCase):
         self.assertTrue(default_blocked.blocked)
         self.assertIn("default policy", assignment.reason)
 
+    def test_selected_device_boundary_rejects_invalid_direct_construction(self):
+        manifest = one_profile_manifest()
+        snapshot = plan.parse_router_state_snapshot(
+            fixture("empty-clean-state.json")
+        )
+        invalid_macs = (
+            "00:00:00:00:00:00",
+            "ff:ff:ff:ff:ff:ff",
+            "01:00:5e:00:00:01",
+            "33:33:00:00:00:01",
+            "02:00:5e:00:00",
+            "02:00:5e:00:00:gg",
+            "",
+            123,
+            None,
+            "02:00:5e:00:00:10\n",
+        )
+        for mac in invalid_macs:
+            selected = plan.SelectedDeviceRef("Synthetic Tablet", mac)
+            with self.subTest(mac=repr(mac)):
+                with mock.patch.object(
+                    plan,
+                    "_action",
+                    side_effect=AssertionError("actions must not be built"),
+                ):
+                    with self.assertRaisesRegex(
+                        plan.NetcrazePlanError,
+                        "^Selected device reference is invalid\\.$",
+                    ):
+                        plan.build_change_plan(manifest, snapshot, selected)
+
+        for display_name in ("", " \t ", "bad\nname", "x" * (plan.MAX_TEXT + 1), 7, None):
+            selected = plan.SelectedDeviceRef(
+                display_name, "02:00:5e:00:00:10"
+            )
+            with self.subTest(display_name=repr(display_name)):
+                with self.assertRaisesRegex(
+                    plan.NetcrazePlanError,
+                    "^Selected device reference is invalid\\.$",
+                ):
+                    plan.build_change_plan(manifest, snapshot, selected)
+
+    def test_selected_device_boundary_normalizes_valid_global_and_local_macs(self):
+        snapshot = plan.parse_router_state_snapshot(
+            fixture("empty-clean-state.json")
+        )
+        for supplied, expected in (
+            ("00:11:22:33:44:55", "00:11:22:33:44:55"),
+            ("02:00:5e:00:00:10", "02:00:5e:00:00:10"),
+            ("02-00-5E-00-00-10", "02:00:5e:00:00:10"),
+        ):
+            with self.subTest(supplied=supplied):
+                result = plan.build_change_plan(
+                    one_profile_manifest(),
+                    snapshot,
+                    plan.SelectedDeviceRef(" Synthetic Tablet ", supplied),
+                )
+                self.assertEqual(result.selected_device.display_name, "Synthetic Tablet")
+                self.assertEqual(result.selected_device.mac, expected)
+                self.assertIn(
+                    "assign_device", [item.operation for item in result.actions]
+                )
+
+    def test_device_discovery_and_planner_share_one_mac_trust_helper(self):
+        self.assertIs(
+            plan.normalize_trusted_device_mac,
+            devices.normalize_trusted_device_mac,
+        )
+        self.assertEqual(
+            devices.normalize_trusted_device_mac("02-00-5E-00-00-10"),
+            plan.normalize_selected_device_ref(
+                plan.SelectedDeviceRef(
+                    "Synthetic Tablet", "02-00-5E-00-00-10"
+                )
+            ).mac,
+        )
+
     def test_default_policy_invariant_blocks_unknown_name_and_id_collisions(self):
         unknown = plan.build_change_plan(
             one_profile_manifest(),
@@ -375,8 +468,202 @@ class PlanningTests(unittest.TestCase):
             self.assertNotIn(marker, public)
         self.assertNotIn("planned_connection", public)
         self.assertIn("not an anonymity guarantee", public)
+        self.assertIn("public_plan_fingerprint", public)
+        self.assertNotIn("local_integrity_fingerprint", public)
+        self.assertNotIn(result.local_integrity_fingerprint, public)
+        self.assertNotIn(result.source_snapshot_fingerprint, public)
+        self.assertIn("permits correlation", public)
         self.assertIn("PRIVATE_DEVICE", local)
+        self.assertIn("local_integrity_fingerprint", local)
+        self.assertIn("source_snapshot_fingerprint", local)
         self.assertIn(plan.SENSITIVITY_LOCAL, local)
+
+    def test_local_fingerprint_identity_covers_all_plan_semantics(self):
+        snapshot = plan.parse_router_state_snapshot(
+            fixture("empty-clean-state.json")
+        )
+        base = plan.build_change_plan(
+            one_profile_manifest(),
+            snapshot,
+            plan.SelectedDeviceRef("Synthetic Tablet", "02:00:5e:00:00:10"),
+        )
+        baseline = plan._sha256_json(plan._local_plan_identity(base))
+        first_profile = base.desired_profiles[0]
+        first_action = base.actions[0]
+        first_policy = next(
+            item for item in base.actions if item.action_id == "01:policy"
+        )
+        mutations = {
+            "desired_host": replace(
+                base,
+                desired_profiles=(replace(first_profile, host="::1"),),
+            ),
+            "desired_port": replace(
+                base,
+                desired_profiles=(replace(first_profile, port=1083),),
+            ),
+            "desired_enabled": replace(
+                base,
+                desired_profiles=(replace(first_profile, enabled=False),),
+            ),
+            "desired_protocol": replace(
+                base,
+                desired_profiles=(replace(first_profile, protocol="http"),),
+            ),
+            "desired_auth": replace(
+                base,
+                desired_profiles=(replace(first_profile, auth_mode="password"),),
+            ),
+            "action_operation": replace(
+                base,
+                actions=(replace(first_action, operation="reuse_connection"),)
+                + base.actions[1:],
+            ),
+            "dependency": replace(
+                base,
+                actions=tuple(
+                    replace(
+                        item,
+                        dependencies=(
+                            plan.ObjectReference(
+                                "existing_connection", value="different"
+                            ),
+                        ),
+                    )
+                    if item.action_id == first_policy.action_id
+                    else item
+                    for item in base.actions
+                ),
+            ),
+            "selected_mac": replace(
+                base,
+                selected_device=replace(
+                    base.selected_device, mac="02:00:5e:00:00:11"
+                ),
+            ),
+            "source_connection": replace(
+                base, source_snapshot_fingerprint="1" * 64
+            ),
+            "rollback": replace(
+                base,
+                rollback=plan.RollbackPlan(
+                    (
+                        replace(
+                            base.rollback.actions[0],
+                            operation="different_rollback",
+                        ),
+                    )
+                    + base.rollback.actions[1:]
+                ),
+            ),
+        }
+        for label, changed in mutations.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(
+                    plan._sha256_json(plan._local_plan_identity(changed)),
+                    baseline,
+                )
+
+        snapshot_mutations = {
+            "connection_semantics": replace(
+                snapshot,
+                connections=(
+                    replace(snapshot.connections[0], enabled=False),
+                ),
+            ),
+            "policy_semantics": replace(
+                snapshot,
+                policies=(replace(snapshot.policies[0], mode="changed"),),
+            ),
+            "assignment": replace(
+                snapshot,
+                assignments=(
+                    plan.ExistingDeviceAssignment(
+                        "02:00:5e:00:00:10", snapshot.policies[0].object_id
+                    ),
+                ),
+            ),
+            "default_name": replace(
+                snapshot,
+                policies=(
+                    replace(snapshot.policies[0], name="Changed Default"),
+                ),
+            ),
+        }
+        source_baseline = plan.snapshot_semantic_fingerprint(snapshot)
+        for label, changed in snapshot_mutations.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(
+                    plan.snapshot_semantic_fingerprint(changed),
+                    source_baseline,
+                )
+
+    def test_public_fingerprint_covers_every_default_projection_field(self):
+        base = plan.build_change_plan(
+            one_profile_manifest(),
+            plan.parse_router_state_snapshot(fixture("empty-clean-state.json")),
+        )
+        projection = base.source_default_policy_projection
+        baseline = plan._sha256_json(plan._public_plan_identity(base))
+        policy_values = list(projection.policy)
+        connection_values = list(projection.connection)
+        mutations = {
+            "status": replace(projection, status="changed"),
+            "default_ref": replace(
+                projection, default_policy_ref="changed-default-ref"
+            ),
+        }
+        for index, label in enumerate(
+            (
+                "policy_id",
+                "policy_name",
+                "policy_connection_ref",
+                "policy_mode",
+                "policy_semantic_complete",
+                "policy_unrelated_rules",
+                "policy_observed_default",
+            )
+        ):
+            changed = list(policy_values)
+            changed[index] = (
+                not changed[index]
+                if isinstance(changed[index], bool)
+                else "%s-changed" % changed[index]
+            )
+            mutations[label] = replace(projection, policy=tuple(changed))
+        for index, label in enumerate(
+            (
+                "connection_id",
+                "connection_name",
+                "connection_protocol",
+                "connection_host",
+                "connection_port",
+                "connection_auth",
+                "connection_enabled",
+                "connection_semantic_complete",
+            )
+        ):
+            changed = list(connection_values)
+            if isinstance(changed[index], bool):
+                changed[index] = not changed[index]
+            elif isinstance(changed[index], int):
+                changed[index] += 1
+            else:
+                changed[index] = "%s-changed" % changed[index]
+            mutations[label] = replace(
+                projection, connection=tuple(changed)
+            )
+
+        for label, changed_projection in mutations.items():
+            with self.subTest(label=label):
+                changed = replace(
+                    base,
+                    source_default_policy_projection=changed_projection,
+                )
+                self.assertNotEqual(
+                    plan._sha256_json(plan._public_plan_identity(changed)),
+                    baseline,
+                )
 
 
 class StaticGuardTests(unittest.TestCase):
@@ -398,6 +685,58 @@ class StaticGuardTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertTrue(find_live_execution_guard_violations(source))
         self.assertEqual(find_live_execution_guard_violations("import json\nvalue = json.loads('{}')"), [])
+
+    def test_semantic_binding_guard_covers_simulator_selected_input_and_public_evidence(self):
+        source = (SCRIPTS / "routerkit_netcraze_plan.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        functions = {
+            item.name: item
+            for item in tree.body
+            if isinstance(item, ast.FunctionDef)
+        }
+        simulator = functions["simulate_change_plan"]
+        self.assertEqual(
+            [item.arg for item in simulator.args.args],
+            ["plan", "snapshot"],
+        )
+        simulator_calls = {
+            node.func.id
+            for node in ast.walk(simulator)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        self.assertIn("validate_change_plan_integrity", simulator_calls)
+        self.assertIn("snapshot_semantic_fingerprint", simulator_calls)
+
+        for function_name in (
+            "build_change_plan",
+            "selected_device_from_device_selection",
+        ):
+            calls = {
+                node.func.id
+                for node in ast.walk(functions[function_name])
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            self.assertIn("normalize_selected_device_ref", calls)
+
+        renderer = functions["render_plan_json"]
+        public_branch = next(
+            node
+            for node in renderer.body
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "public_evidence"
+        )
+        public_attributes = {
+            node.attr
+            for statement in public_branch.body
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Attribute)
+        }
+        self.assertIn("public_plan_fingerprint", public_attributes)
+        self.assertNotIn("local_integrity_fingerprint", public_attributes)
+        self.assertNotIn("source_snapshot_fingerprint", public_attributes)
 
 
 if __name__ == "__main__":

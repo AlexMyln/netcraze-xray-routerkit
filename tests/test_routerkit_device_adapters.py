@@ -27,6 +27,7 @@ ALLOWED_FIXTURE_MODULE_IMPORTS = {
     "os",
     "pathlib",
     "re",
+    "routerkit_devices",
     "routerkit_private_io",
     "secrets",
     "stat",

@@ -28,7 +28,7 @@ The guided installer may:
 - run healthcheck;
 - with explicit `setup --apply --enable-autostart` or `install --apply --enable-autostart`, enable `S23xray-direct` only after healthcheck and strict runtime verification;
 - with explicit `setup --discover-devices`, run read-only fixture-first device discovery and optional no-write selection after strict planning;
-- with explicit `setup --plan-netcraze --netcraze-state-file PATH`, run a consistency-validated fixture-first connection/policy/optional-assignment preview before confirmation; if combined with apply, print that every Netcraze action is excluded;
+- with explicit `setup --plan-netcraze --netcraze-state-file PATH`, run a consistency-validated fixture-first connection/policy/optional-assignment preview whose desired inputs and exact source snapshot are bound into the plan; reject invalid selected-device identities and require exact POSIX `0700` private generation directories; if combined with apply, print that every Netcraze action is excluded;
 - print exact Web UI steps for proxy connections and policies.
 
 ## Out of scope for the first guided installer

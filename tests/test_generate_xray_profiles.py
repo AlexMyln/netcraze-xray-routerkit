@@ -2,6 +2,7 @@ import base64
 import importlib.util
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -408,6 +409,108 @@ class BuildConfigTests(unittest.TestCase):
                 generator.write_private_json_atomic(
                     linked / "manifest.json", self.manifest_value()
                 )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode contract")
+    def test_private_directories_require_exact_0700_without_modification_or_residue(self):
+        rejected_modes = (
+            0o755,
+            0o750,
+            0o711,
+            0o701,
+            0o770,
+            0o777,
+            0o500,
+            0o300,
+            0o1700,
+            0o2700,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            accepted = root / "accepted"
+            private_io.ensure_private_directory(
+                accepted, description="Synthetic private directory"
+            )
+            self.assertEqual(accepted.stat().st_mode & 0o7777, 0o700)
+            private_io.ensure_private_directory(
+                accepted, description="Synthetic private directory"
+            )
+            fd = private_io._open_private_directory(
+                accepted, description="Synthetic private directory"
+            )
+            os.close(fd)
+
+            for mode in rejected_modes:
+                metadata = type(
+                    "SyntheticDirectoryMetadata",
+                    (),
+                    {
+                        "st_mode": stat.S_IFDIR | mode,
+                        "st_uid": os.geteuid(),
+                    },
+                )()
+                with self.subTest(metadata_mode=oct(mode)):
+                    with self.assertRaises(private_io.PrivateFileError):
+                        private_io._validate_private_directory_metadata(
+                            metadata,
+                            description="Synthetic private directory",
+                        )
+
+            for mode in rejected_modes:
+                with self.subTest(mode=oct(mode)):
+                    candidate = root / ("mode-%04o" % mode)
+                    candidate.mkdir(mode=0o700)
+                    os.chmod(candidate, mode)
+                    before = candidate.stat().st_mode & 0o7777
+                    if before == 0o700:
+                        candidate.rmdir()
+                        continue
+                    with self.assertRaises(private_io.PrivateFileError):
+                        private_io.ensure_private_directory(
+                            candidate,
+                            description="Synthetic private directory",
+                        )
+                    with self.assertRaises(private_io.PrivateFileError):
+                        private_io._open_private_directory(
+                            candidate,
+                            description="Synthetic private directory",
+                        )
+                    with self.assertRaises(SystemExit):
+                        generator.write_private_json_atomic(
+                            candidate / "manifest.json",
+                            self.manifest_value(),
+                        )
+                    self.assertEqual(candidate.stat().st_mode & 0o7777, before)
+                    os.chmod(candidate, 0o700)
+                    self.assertEqual(list(candidate.iterdir()), [])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode contract")
+    def test_direct_generator_rejects_reused_nonprivate_output_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profiles = root / "profiles.json"
+            profiles.write_text('{"profiles": []}\n', encoding="utf-8")
+            os.chmod(profiles, 0o600)
+            for mode in (0o755, 0o711):
+                with self.subTest(mode=oct(mode)):
+                    output = root / ("generated-%04o" % mode)
+                    output.mkdir(mode=0o700)
+                    os.chmod(output, mode)
+                    old_argv = sys.argv
+                    try:
+                        sys.argv = [
+                            "generate-xray-profiles.py",
+                            "--profiles",
+                            str(profiles),
+                            "--out",
+                            str(output),
+                        ]
+                        with self.assertRaises(SystemExit):
+                            generator.main()
+                    finally:
+                        sys.argv = old_argv
+                    self.assertEqual(output.stat().st_mode & 0o7777, mode)
+                    os.chmod(output, 0o700)
+                    self.assertEqual(list(output.iterdir()), [])
 
     def test_publication_failures_preserve_old_bytes_and_cleanup_temp(self):
         failure_patches = (

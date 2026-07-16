@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -54,7 +55,14 @@ class SetupNetcrazePlanTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertLess(rendered.index("device discovery/selection"), rendered.index("Netcraze connection/policy plan"))
 
-    def _run_fixture_setup(self, state_name, *, extra_args=(), answer="yes"):
+    def _run_fixture_setup(
+        self,
+        state_name,
+        *,
+        extra_args=(),
+        answer="yes",
+        selected_device=None,
+    ):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
         workspace = cli.SetupSecretWorkspace(root / "workspace", root / "workspace" / "profiles.json")
@@ -100,7 +108,7 @@ class SetupNetcrazePlanTests(unittest.TestCase):
                 with mock.patch.object(
                     cli,
                     "run_setup_selection_stage",
-                    return_value=(0, None),
+                    return_value=(0, selected_device),
                 ):
                     with mock.patch.object(
                         cli,
@@ -192,6 +200,35 @@ class SetupNetcrazePlanTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(prompts, [])
         self.assertIn("Netcraze offline plan failed", errors)
+
+    def test_invalid_selected_device_handoff_stops_before_plan_and_confirmation(self):
+        selection = SimpleNamespace(
+            selected=True,
+            device=SimpleNamespace(
+                selectable=True,
+                stable_identifier_type="mac",
+                stable_identifier="00:00:00:00:00:00",
+                display_name="PRIVATE_INVALID_DEVICE",
+            ),
+        )
+        code, output, errors, prompts = self._run_fixture_setup(
+            "empty-clean-state.json",
+            extra_args=(
+                "--apply",
+                "--discover-devices",
+                "--device-inventory-file",
+                "/synthetic/devices.json",
+                "--device-choice",
+                "1",
+            ),
+            selected_device=selection,
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(prompts, [])
+        self.assertNotIn("assign_device", output)
+        self.assertNotIn("00:00:00:00:00:00", errors)
+        self.assertNotIn("PRIVATE_INVALID_DEVICE", errors)
+        self.assertIn("Selected device reference is invalid.", errors)
 
 
 if __name__ == "__main__":

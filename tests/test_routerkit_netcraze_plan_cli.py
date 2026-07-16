@@ -179,6 +179,53 @@ class NetcrazePlanCliTests(unittest.TestCase):
         self.assertIn("assign_device", result.stdout)
         self.assertNotIn("routerkit-device-selection-v1", result.stdout)
 
+    def test_invalid_device_handoff_stops_before_plan_output(self):
+        inventory_value = {
+            "schema": "routerkit.devices.fixture.v1",
+            "sources": [
+                {
+                    "name": "synthetic-invalid-netcraze-cli",
+                    "kind": "dhcp_leases",
+                    "state": "supported",
+                    "confidence": "fixture",
+                    "records": [
+                        {
+                            "source_record_id": "invalid-tablet",
+                            "display_name": "PRIVATE_INVALID_DEVICE",
+                            "addresses": ["192.0.2.41"],
+                            "stable_identifier": "00:00:00:00:00:00",
+                            "stable_identifier_type": "mac",
+                            "online_state": "online",
+                            "connection_type": "wifi",
+                        }
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, snapshot = self.protected_inputs(directory)
+            inventory = Path(directory) / "devices.json"
+            inventory.write_text(json.dumps(inventory_value), encoding="utf-8")
+            os.chmod(inventory, 0o600)
+            result = run_cli(
+                UNIFIED,
+                "netcraze-plan",
+                "plan",
+                "--manifest-file",
+                str(manifest),
+                "--state-file",
+                str(snapshot),
+                "--device-inventory-file",
+                str(inventory),
+                "--device-choice",
+                "1",
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("assign_device", result.stdout)
+        self.assertNotIn("selected_device_present", result.stdout)
+        self.assertNotIn("00:00:00:00:00:00", result.stderr)
+        self.assertNotIn("PRIVATE_INVALID_DEVICE", result.stderr)
+
     def test_device_file_and_choice_must_be_paired_before_reads(self):
         result = run_cli(
             DIRECT,
