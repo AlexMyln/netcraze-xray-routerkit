@@ -47,16 +47,18 @@ def one_profile_manifest():
 
 def find_simulator_api_signature_violations(source):
     tree = ast.parse(source)
-    simulators = [
+    definitions = [
         item
         for item in tree.body
-        if isinstance(item, ast.FunctionDef)
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
         and item.name == "simulate_change_plan"
     ]
-    if len(simulators) != 1:
+    if len(definitions) != 1:
         return ["simulate_change_plan must have exactly one top-level definition"]
+    if not isinstance(definitions[0], ast.FunctionDef):
+        return ["simulate_change_plan must be a synchronous function"]
 
-    arguments = simulators[0].args
+    arguments = definitions[0].args
     violations = []
     if arguments.posonlyargs:
         violations.append("positional-only parameters are forbidden")
@@ -735,9 +737,16 @@ class StaticGuardTests(unittest.TestCase):
         def source_for(signature):
             return "def simulate_change_plan({}):\n    pass\n".format(signature)
 
+        def async_source_for(signature):
+            return "async def simulate_change_plan({}):\n    pass\n".format(
+                signature
+            )
+
         safe_control = (
             "plan, snapshot, *, fail_after=None, rollback_failure=False"
         )
+        safe_sync_source = source_for(safe_control)
+        safe_async_source = async_source_for(safe_control)
         mutations = {
             "kwargs": safe_control + ", **kwargs",
             "varargs": (
@@ -781,7 +790,7 @@ class StaticGuardTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            find_simulator_api_signature_violations(source_for(safe_control)),
+            find_simulator_api_signature_violations(safe_sync_source),
             [],
         )
         for label, signature in mutations.items():
@@ -790,6 +799,73 @@ class StaticGuardTests(unittest.TestCase):
                     find_simulator_api_signature_violations(
                         source_for(signature)
                     )
+                )
+
+        definition_mutations = {
+            "absent_definition": "def unrelated():\n    pass\n",
+            "sync_plus_async_duplicate": (
+                safe_sync_source + "\n" + async_source_for("")
+            ),
+            "async_duplicate_plus_sync": (
+                async_source_for("") + "\n" + safe_sync_source
+            ),
+            "two_synchronous_definitions": (
+                safe_sync_source + "\n" + safe_sync_source
+            ),
+            "two_asynchronous_definitions": (
+                safe_async_source + "\n" + safe_async_source
+            ),
+            "sync_plus_two_async_duplicates": (
+                safe_sync_source
+                + "\n"
+                + safe_async_source
+                + "\n"
+                + safe_async_source
+            ),
+        }
+        for label, source in definition_mutations.items():
+            with self.subTest(label=label):
+                self.assertEqual(
+                    find_simulator_api_signature_violations(source),
+                    [
+                        "simulate_change_plan must have exactly one "
+                        "top-level definition"
+                    ],
+                )
+
+        async_only_mutations = {
+            "exact_signature": safe_async_source,
+            "kwargs": async_source_for(safe_control + ", **kwargs"),
+            "hidden_manifest": async_source_for(
+                safe_control + ", manifest=None"
+            ),
+        }
+        for label, source in async_only_mutations.items():
+            with self.subTest(label=label):
+                self.assertEqual(
+                    find_simulator_api_signature_violations(source),
+                    ["simulate_change_plan must be a synchronous function"],
+                )
+
+        nested_controls = (
+            (
+                "def unrelated():\n"
+                "    def simulate_change_plan():\n"
+                "        pass\n\n"
+                + safe_sync_source
+            ),
+            (
+                "def unrelated():\n"
+                "    async def simulate_change_plan():\n"
+                "        pass\n\n"
+                + safe_sync_source
+            ),
+        )
+        for source in nested_controls:
+            with self.subTest(source=source):
+                self.assertEqual(
+                    find_simulator_api_signature_violations(source),
+                    [],
                 )
 
     def test_simulator_runtime_signature_and_rejected_calls_are_exact(self):
