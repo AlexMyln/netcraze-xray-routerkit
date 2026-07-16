@@ -1,0 +1,32 @@
+{
+  "schema": "routerkit.devices.fixture.v1",
+  "sources": [
+    {
+      "name": "synthetic-conflict",
+      "kind": "dhcp_leases",
+      "state": "supported",
+      "records": [
+        {
+          "source_record_id": "first",
+          "display_name": "Conflict A",
+          "addresses": ["192.0.2.70"],
+          "stable_identifier": "02:00:5e:00:00:70",
+          "stable_identifier_type": "mac",
+          "vendor_record_id": "vendor-record-1",
+          "online_state": "online",
+          "connection_type": "wifi"
+        },
+        {
+          "source_record_id": "second",
+          "display_name": "Conflict B",
+          "addresses": ["192.0.2.71"],
+          "stable_identifier": "02:00:5e:00:00:71",
+          "stable_identifier_type": "mac",
+          "vendor_record_id": "vendor-record-1",
+          "online_state": "online",
+          "connection_type": "wifi"
+        }
+      ]
+    }
+  ]
+}
