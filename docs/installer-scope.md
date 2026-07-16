@@ -27,6 +27,7 @@ The guided installer may:
 - keep `S24xray` disabled;
 - run healthcheck;
 - with explicit `setup --apply --enable-autostart` or `install --apply --enable-autostart`, enable `S23xray-direct` only after healthcheck and strict runtime verification;
+- with explicit `setup --discover-devices`, run read-only fixture-first device discovery and optional no-write selection after strict planning;
 - print exact Web UI steps for proxy connections and policies.
 
 ## Out of scope for the first guided installer
@@ -40,6 +41,8 @@ The first version will not:
 - restart services outside the explicit autostart transaction, perform reboot proof, or call `xkeen -start`;
 - automate Web UI clicks;
 - change default router policies;
+- assign discovered devices to policies before #15;
+- actively scan the LAN by default;
 - create TPROXY/REDIRECT/firewall rules;
 - publish or store real secrets.
 
@@ -47,4 +50,4 @@ The first version will not:
 
 USB preparation, Entware installation, firmware components, and Web UI policy assignment are device-specific and can be destructive if automated blindly.
 
-The installer should fail closed: if prerequisites are missing, it must stop instead of guessing. Package additions made by explicit bootstrap may remain, while Xray replacement has a separate verified backup/rollback boundary. Autostart enable is not a firewall, Web UI, policy, default-policy, device-discovery, or reboot-validation step. Hardware validation remains tracked in #16.
+The installer should fail closed: if prerequisites are missing, it must stop instead of guessing. Package additions made by explicit bootstrap may remain, while Xray replacement has a separate verified backup/rollback boundary. Autostart enable is not a firewall, Web UI, policy, default-policy, device-discovery, or reboot-validation step. Fixture-first device discovery is not a policy or assignment write. Hardware validation remains tracked in #16.

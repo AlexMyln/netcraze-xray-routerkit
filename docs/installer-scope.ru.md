@@ -27,6 +27,7 @@
 - оставить `S24xray` выключенным;
 - выполнить healthcheck;
 - с явным `setup --apply --enable-autostart` или `install --apply --enable-autostart` включить только `S23xray-direct` после healthcheck и строгой runtime verification;
+- с явным `setup --discover-devices` запустить read-only fixture-first device discovery и optional no-write selection после strict planning;
 - вывести точные шаги для Web UI proxy connections и policies.
 
 ## Что не входит в первую версию guided installer
@@ -40,6 +41,8 @@
 - перезапускать services вне явной autostart transaction, доказывать reboot persistence или вызывать `xkeen -start`;
 - автоматически кликать Web UI;
 - менять default policy роутера;
+- назначать discovered devices на policies до #15;
+- по умолчанию активно сканировать LAN;
 - создавать TPROXY/REDIRECT/firewall rules;
 - публиковать или хранить реальные секреты.
 
@@ -47,4 +50,4 @@
 
 Подготовка USB, установка Entware, компоненты прошивки и назначение Web UI policies зависят от модели, прошивки и конкретной домашней сети. Эти шаги могут быть разрушительными, если автоматизировать их вслепую.
 
-Установщик должен fail closed: если prerequisites не выполнены, он должен остановиться, а не угадывать. Package additions явного bootstrap могут остаться, а Xray replacement имеет отдельную проверенную границу backup/rollback. Autostart enable не является шагом firewall, Web UI, policy, default-policy, device-discovery или reboot validation. Hardware validation остаётся в #16.
+Установщик должен fail closed: если prerequisites не выполнены, он должен остановиться, а не угадывать. Package additions явного bootstrap могут остаться, а Xray replacement имеет отдельную проверенную границу backup/rollback. Autostart enable не является шагом firewall, Web UI, policy, default-policy, device-discovery или reboot validation. Fixture-first device discovery не является policy или assignment write. Hardware validation остаётся в #16.
