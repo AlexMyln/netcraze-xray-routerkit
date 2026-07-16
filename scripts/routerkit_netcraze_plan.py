@@ -37,6 +37,11 @@ MAX_ASSIGNMENTS = 512
 MAX_TEXT = 128
 EXPECTED_PORTS = (1082, 1083, 1084)
 LOOPBACK_HOSTS = ("127.0.0.1", "::1")
+SAFE_MANIFEST_LABELS = {
+    1: "primary",
+    2: "fallback-1",
+    3: "fallback-2",
+}
 
 READINESS_PLAN = "plan_ready"
 READINESS_HARDWARE = "hardware_contract_pending"
@@ -44,7 +49,6 @@ READINESS_BLOCKED = "blocked"
 SENSITIVITY_LOCAL = "local_sensitive"
 SENSITIVITY_PUBLIC = "public_evidence_redacted"
 
-_PROOF_SENTINEL = object()
 _FORBIDDEN_FIXTURE_KEYS = {
     "adapter_ownership_proof",
     "backup_complete",
@@ -152,33 +156,25 @@ class ObjectEquivalence:
 
 
 @dataclass(frozen=True)
-class AdapterOwnershipProof:
-    object_type: str
-    object_id: str
-    exact_rollback: Tuple[Tuple[str, str], ...]
-    _sentinel: object
+class SnapshotConsistency:
+    valid: bool
+    default_identity_proven: bool
+    diagnostic_category: str
 
-    def __post_init__(self) -> None:
-        if self._sentinel is not _PROOF_SENTINEL:
-            raise ValueError("Ownership proof must come from reviewed adapter code.")
 
-    @classmethod
-    def from_reviewed_adapter(
-        cls,
-        object_type: str,
-        object_id: str,
-        exact_rollback: Mapping[str, str],
-    ) -> "AdapterOwnershipProof":
-        if object_type not in ("connection", "policy", "assignment"):
-            raise ValueError("Unsupported ownership proof object type.")
-        if not object_id or not exact_rollback:
-            raise ValueError("Ownership proof requires an object ID and exact rollback data.")
-        return cls(
-            object_type=object_type,
-            object_id=object_id,
-            exact_rollback=tuple(sorted((str(k), str(v)) for k, v in exact_rollback.items())),
-            _sentinel=_PROOF_SENTINEL,
-        )
+@dataclass(frozen=True)
+class ObjectReference:
+    kind: str
+    value: Optional[str] = None
+    profile_slot: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class DefaultPolicyProjection:
+    status: str
+    default_policy_ref: Optional[str]
+    policy: Optional[Tuple[Any, ...]]
+    connection: Optional[Tuple[Any, ...]]
 
 
 @dataclass(frozen=True)
@@ -220,8 +216,9 @@ class PlanAction:
     observed_id: Optional[str]
     observed_name: Optional[str]
     proposed: Tuple[Tuple[str, str], ...]
+    dependencies: Tuple[ObjectReference, ...]
     preconditions: Tuple[PlanPrecondition, ...]
-    required_ownership_proof: str
+    future_adapter_requirement: str
     backup_required: bool
     verification_checks: Tuple[VerificationCheck, ...]
     rollback_intent: str
@@ -237,7 +234,7 @@ class ChangePlan:
     fingerprint: str
     plan_status: str
     write_readiness: str
-    default_policy_unchanged: bool
+    default_policy_not_targeted: bool
     selected_device: Optional[SelectedDeviceRef]
     software_verdict: str = SOFTWARE_VERDICT
     schema: str = PLAN_SCHEMA
@@ -337,6 +334,8 @@ def parse_local_endpoint_manifest(text: str) -> LocalEndpointManifest:
         if slot in seen_slots or port in seen_ports:
             raise ManifestSchemaError("Local endpoint manifest contains duplicate slots or ports.")
         label = _clean_text(raw.get("label"), "Profile label")
+        if label != SAFE_MANIFEST_LABELS[slot]:
+            raise ManifestSchemaError("Local endpoint profile label is not code-owned.")
         host = _clean_text(raw.get("listen"), "Local endpoint address")
         try:
             parsed_host = ipaddress.ip_address(host)
@@ -437,6 +436,119 @@ def _parse_assignment(raw: Any) -> ExistingDeviceAssignment:
     )
 
 
+def validate_snapshot_consistency(snapshot: RouterStateSnapshot) -> SnapshotConsistency:
+    """Validate every cross-object invariant used by planning and simulation."""
+
+    for label, items in (("connection", snapshot.connections), ("policy", snapshot.policies)):
+        ids = [item.object_id for item in items]
+        names = [item.name.casefold() for item in items]
+        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
+            raise SnapshotSchemaError("Router snapshot contains duplicate %s IDs or names." % label)
+
+    connection_by_id = {item.object_id: item for item in snapshot.connections}
+    policy_by_id = {item.object_id: item for item in snapshot.policies}
+    for policy in snapshot.policies:
+        if policy.connection_ref not in connection_by_id:
+            raise SnapshotSchemaError("Router policy references an unknown connection.")
+
+    assignment_pairs = [(item.device_mac, item.policy_ref) for item in snapshot.assignments]
+    if len(assignment_pairs) != len(set(assignment_pairs)):
+        raise SnapshotSchemaError("Router snapshot contains a duplicate assignment.")
+    assignment_macs = [item.device_mac for item in snapshot.assignments]
+    if len(assignment_macs) != len(set(assignment_macs)):
+        raise SnapshotSchemaError("One device cannot be assigned to multiple policies.")
+    for assignment in snapshot.assignments:
+        if assignment.device_mac != _normalize_mac(assignment.device_mac):
+            raise SnapshotSchemaError("Router assignment MAC identity is not normalized.")
+        if assignment.policy_ref not in policy_by_id:
+            raise SnapshotSchemaError("Router assignment references an unknown policy.")
+
+    observed_defaults = [item for item in snapshot.policies if item.is_default_observed]
+    default_identity_proven = False
+    if snapshot.default_policy_status == "known":
+        default_policy = policy_by_id.get(snapshot.default_policy_ref or "")
+        if default_policy is None or observed_defaults != [default_policy]:
+            raise SnapshotSchemaError("Known default-policy evidence is inconsistent.")
+        default_connection = connection_by_id[default_policy.connection_ref]
+        if not default_policy.semantic_complete or not default_connection.semantic_complete:
+            raise SnapshotSchemaError("Known default-policy semantics are incomplete.")
+        default_identity_proven = True
+    elif snapshot.default_policy_status == "unknown":
+        if snapshot.default_policy_ref is not None or observed_defaults:
+            raise SnapshotSchemaError("Unknown default-policy evidence is inconsistent.")
+    elif snapshot.default_policy_status == "ambiguous":
+        if snapshot.default_policy_ref is not None or len(observed_defaults) < 2:
+            raise SnapshotSchemaError("Ambiguous default-policy evidence is inconsistent.")
+    else:
+        raise SnapshotSchemaError("Default-policy status is unsupported.")
+
+    capabilities = dict(snapshot.capabilities)
+    default_capability = capabilities.get("default_policy_identity")
+    allowed_default_capabilities = {
+        "known": {None, "documented", "inferred"},
+        "unknown": {None, "unknown", "hardware_confirmation_required"},
+        "ambiguous": {None, "unknown", "hardware_confirmation_required"},
+    }
+    if default_capability not in allowed_default_capabilities[snapshot.default_policy_status]:
+        raise SnapshotSchemaError("Default-policy capability contradicts the observation.")
+    if snapshot.state == "supported" and any(
+        capabilities.get(name) == "unknown"
+        for name in ("connection_inventory", "policy_inventory")
+    ):
+        raise SnapshotSchemaError("Supported snapshot capabilities are internally inconsistent.")
+    if capabilities.get("write_contract") == "documented":
+        raise SnapshotSchemaError("Fixture snapshot cannot claim a completed write contract.")
+
+    category = (
+        "consistent_known_default"
+        if default_identity_proven
+        else "consistent_diagnostic_default"
+    )
+    return SnapshotConsistency(True, default_identity_proven, category)
+
+
+def default_policy_projection(snapshot: RouterStateSnapshot) -> DefaultPolicyProjection:
+    """Return the canonical default-policy semantics used by plan/simulation proofs."""
+
+    validate_snapshot_consistency(snapshot)
+    if snapshot.default_policy_status != "known" or snapshot.default_policy_ref is None:
+        return DefaultPolicyProjection(
+            snapshot.default_policy_status,
+            snapshot.default_policy_ref,
+            None,
+            None,
+        )
+    policy = next(
+        item for item in snapshot.policies if item.object_id == snapshot.default_policy_ref
+    )
+    connection = next(
+        item for item in snapshot.connections if item.object_id == policy.connection_ref
+    )
+    return DefaultPolicyProjection(
+        snapshot.default_policy_status,
+        snapshot.default_policy_ref,
+        (
+            policy.object_id,
+            policy.name,
+            policy.connection_ref,
+            policy.mode,
+            policy.semantic_complete,
+            policy.unrelated_rules,
+            policy.is_default_observed,
+        ),
+        (
+            connection.object_id,
+            connection.name,
+            connection.protocol,
+            connection.host,
+            connection.port,
+            connection.auth_mode,
+            connection.enabled,
+            connection.semantic_complete,
+        ),
+    )
+
+
 def parse_router_state_snapshot(text: str) -> RouterStateSnapshot:
     value = _parse_json_object(text, "Router state fixture")
     _reject_fixture_trust(value)
@@ -477,27 +589,6 @@ def parse_router_state_snapshot(text: str) -> RouterStateSnapshot:
     policies = tuple(_parse_policy(item) for item in raw_policies)
     assignments = tuple(_parse_assignment(item) for item in raw_assignments)
 
-    for label, items in (("connection", connections), ("policy", policies)):
-        ids = [item.object_id for item in items]
-        names = [item.name.casefold() for item in items]
-        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
-            raise SnapshotSchemaError("Router snapshot contains duplicate %s IDs or names." % label)
-    macs = [item.device_mac for item in assignments]
-    if len(macs) != len(set(macs)):
-        raise SnapshotSchemaError("Router snapshot contains duplicate device assignments.")
-
-    policy_ids = {item.object_id for item in policies}
-    if any(item.policy_ref not in policy_ids for item in assignments):
-        raise SnapshotSchemaError("Router assignment references an unknown policy.")
-    observed_defaults = [item.object_id for item in policies if item.is_default_observed]
-    if default_status == "known":
-        if default_ref not in policy_ids or observed_defaults != [default_ref]:
-            raise SnapshotSchemaError("Known default-policy evidence is inconsistent.")
-    elif default_status == "unknown" and observed_defaults:
-        raise SnapshotSchemaError("Unknown default-policy evidence is inconsistent.")
-    elif default_status == "ambiguous" and len(observed_defaults) < 2:
-        raise SnapshotSchemaError("Ambiguous default-policy evidence requires multiple observations.")
-
     raw_capabilities = value.get("capabilities", {})
     if not isinstance(raw_capabilities, dict) or len(raw_capabilities) > 32:
         raise SnapshotSchemaError("Router snapshot capabilities are invalid.")
@@ -509,7 +600,7 @@ def parse_router_state_snapshot(text: str) -> RouterStateSnapshot:
             raise SnapshotSchemaError("Router snapshot capability state is unsupported.")
         capabilities.append((clean_key, clean_state))
 
-    return RouterStateSnapshot(
+    snapshot = RouterStateSnapshot(
         snapshot_id=_clean_text(value.get("snapshot_id"), "Router snapshot ID"),
         state=state,
         stale=_bool(value.get("stale"), "Router snapshot stale state"),
@@ -520,6 +611,8 @@ def parse_router_state_snapshot(text: str) -> RouterStateSnapshot:
         assignments=assignments,
         capabilities=tuple(capabilities),
     )
+    validate_snapshot_consistency(snapshot)
+    return snapshot
 
 
 def load_router_state_snapshot(path: Path) -> RouterStateSnapshot:
@@ -583,15 +676,6 @@ def policy_name(profile: LocalProxyProfile) -> str:
     return "RouterKit-Policy-%d" % profile.port
 
 
-def _proof_for(
-    proofs: Sequence[AdapterOwnershipProof], object_type: str, object_id: str
-) -> Optional[AdapterOwnershipProof]:
-    matches = [item for item in proofs if item.object_type == object_type and item.object_id == object_id]
-    if len(matches) > 1:
-        raise NetcrazePlanError("Duplicate code-owned ownership proofs were supplied.")
-    return matches[0] if matches else None
-
-
 def _preconditions(snapshot: RouterStateSnapshot) -> Tuple[PlanPrecondition, ...]:
     return (
         PlanPrecondition("fresh_snapshot", True, not snapshot.stale, "synthetic fixture observation"),
@@ -610,8 +694,9 @@ def _action(
     observed_id: Optional[str] = None,
     observed_name: Optional[str] = None,
     proposed: Optional[Mapping[str, Any]] = None,
+    dependencies: Sequence[ObjectReference] = (),
     preconditions: Tuple[PlanPrecondition, ...] = (),
-    ownership: str = "none",
+    future_adapter_requirement: str = "none",
     backup_required: bool = True,
     checks: Sequence[Tuple[str, str]] = (),
     rollback_intent: str = "none",
@@ -629,8 +714,9 @@ def _action(
         observed_id=observed_id,
         observed_name=observed_name,
         proposed=tuple(sorted((str(k), str(v)) for k, v in (proposed or {}).items())),
+        dependencies=tuple(dependencies),
         preconditions=preconditions,
-        required_ownership_proof=ownership,
+        future_adapter_requirement=future_adapter_requirement,
         backup_required=backup_required,
         verification_checks=tuple(VerificationCheck(name, expected) for name, expected in checks),
         rollback_intent=rollback_intent,
@@ -642,11 +728,8 @@ def _action(
 def _rollback_for(action: PlanAction) -> Optional[RollbackAction]:
     operations = {
         "create_connection": "remove_created_connection",
-        "update_owned_connection": "restore_owned_connection",
         "create_policy": "remove_created_policy",
-        "update_owned_policy": "restore_owned_policy",
         "assign_device": "remove_created_assignment",
-        "move_owned_assignment": "restore_owned_assignment",
     }
     operation = operations.get(action.operation)
     if operation is None:
@@ -660,20 +743,75 @@ def _rollback_for(action: PlanAction) -> Optional[RollbackAction]:
     )
 
 
+def _simulation_object_id(object_type: str, slot: int) -> str:
+    return "simulation:%s:slot-%d" % (object_type, slot)
+
+
+def _existing_reference(object_type: str, object_id: str) -> ObjectReference:
+    return ObjectReference("existing_%s" % object_type, value=object_id)
+
+
+def _planned_reference(object_type: str, slot: int) -> ObjectReference:
+    return ObjectReference("planned_%s" % object_type, profile_slot=slot)
+
+
+def _reference_identity(reference: ObjectReference) -> Dict[str, Any]:
+    return {
+        "kind": reference.kind,
+        "profile_slot": reference.profile_slot,
+        "existing_reference": reference.value is not None,
+    }
+
+
+def _prove_default_policy_not_targeted(
+    snapshot: RouterStateSnapshot, actions: Sequence[PlanAction]
+) -> bool:
+    consistency = validate_snapshot_consistency(snapshot)
+    if not consistency.default_identity_proven or snapshot.default_policy_ref is None:
+        return False
+    default_policy = next(
+        item for item in snapshot.policies if item.object_id == snapshot.default_policy_ref
+    )
+    default_connection = next(
+        item for item in snapshot.connections if item.object_id == default_policy.connection_ref
+    )
+    mutating_operations = {"create_connection", "create_policy", "assign_device"}
+    for action in actions:
+        if action.operation not in mutating_operations:
+            continue
+        if action.observed_id in (default_policy.object_id, default_connection.object_id):
+            return False
+        if action.object_type == "policy" and action.target_name.casefold() == default_policy.name.casefold():
+            return False
+        if (
+            action.object_type == "connection"
+            and action.target_name.casefold() == default_connection.name.casefold()
+        ):
+            return False
+        for dependency in action.dependencies:
+            if dependency.value in (default_policy.object_id, default_connection.object_id):
+                return False
+    return True
+
+
 def build_change_plan(
     manifest: LocalEndpointManifest,
     snapshot: RouterStateSnapshot,
     selected_device: Optional[SelectedDeviceRef] = None,
-    ownership_proofs: Sequence[AdapterOwnershipProof] = (),
 ) -> ChangePlan:
+    consistency = validate_snapshot_consistency(snapshot)
     actions: List[PlanAction] = []
-    connection_refs: Dict[int, str] = {}
-    policy_refs: Dict[int, str] = {}
-    blocked = snapshot.state != "supported" or snapshot.stale
+    connection_refs: Dict[int, ObjectReference] = {}
+    policy_refs: Dict[int, ObjectReference] = {}
+    blocked = (
+        snapshot.state != "supported"
+        or snapshot.stale
+        or not consistency.default_identity_proven
+    )
     base_preconditions = _preconditions(snapshot)
-
-    if snapshot.default_policy_status != "known":
-        blocked = True
+    all_object_ids = {
+        item.object_id for item in snapshot.connections
+    } | {item.object_id for item in snapshot.policies}
 
     for profile in manifest.profiles:
         target = connection_name(profile)
@@ -683,9 +821,27 @@ def build_change_plan(
         )
         same_name = next((item for item in snapshot.connections if item.name.casefold() == target.casefold()), None)
         action_id = "%02d:connection" % profile.slot
-        if exact:
+        if len(exact) > 1:
+            blocked = True
+            actions.append(
+                _action(
+                    action_id,
+                    "conflict",
+                    "connection",
+                    target,
+                    profile,
+                    proposed={"semantic_match": "ambiguous"},
+                    preconditions=base_preconditions,
+                    future_adapter_requirement="hardware_object_identity_contract",
+                    readiness=READINESS_BLOCKED,
+                    reason="multiple equivalent connections are ambiguous",
+                )
+            )
+        elif exact:
             existing = exact[0]
-            connection_refs[profile.slot] = existing.object_id
+            connection_refs[profile.slot] = _existing_reference(
+                "connection", existing.object_id
+            )
             actions.append(
                 _action(
                     action_id,
@@ -703,8 +859,30 @@ def build_change_plan(
                 )
             )
         elif same_name is not None:
-            proof = _proof_for(ownership_proofs, "connection", same_name.object_id)
-            if proof is None:
+            blocked = True
+            actions.append(
+                _action(
+                    action_id,
+                    "conflict",
+                    "connection",
+                    target,
+                    profile,
+                    observed_id=same_name.object_id,
+                    observed_name=same_name.name,
+                    proposed={"semantic_match": "false"},
+                    preconditions=base_preconditions,
+                    future_adapter_requirement="hardware_update_contract",
+                    readiness=READINESS_BLOCKED,
+                    reason=(
+                        "same-name connection is semantically incomplete"
+                        if not same_name.semantic_complete
+                        else "same-name connection is not exactly equivalent"
+                    ),
+                )
+            )
+        else:
+            simulation_id = _simulation_object_id("connection", profile.slot)
+            if simulation_id in all_object_ids:
                 blocked = True
                 actions.append(
                     _action(
@@ -713,67 +891,85 @@ def build_change_plan(
                         "connection",
                         target,
                         profile,
-                        observed_id=same_name.object_id,
-                        observed_name=same_name.name,
-                        proposed={"semantic_match": "false"},
                         preconditions=base_preconditions,
-                        ownership="code_owned_required",
+                        future_adapter_requirement="collision_free_object_identity",
                         readiness=READINESS_BLOCKED,
-                        reason="same-name connection is not exactly equivalent",
+                        reason="generated connection identity collides with observed state",
                     )
                 )
             else:
-                connection_refs[profile.slot] = same_name.object_id
+                connection_refs[profile.slot] = _planned_reference(
+                    "connection", profile.slot
+                )
                 actions.append(
                     _action(
                         action_id,
-                        "update_owned_connection",
+                        "create_connection",
                         "connection",
                         target,
                         profile,
-                        observed_id=same_name.object_id,
-                        observed_name=same_name.name,
-                        proposed={"protocol": profile.protocol, "host": profile.host, "port": profile.port},
+                        proposed={
+                            "protocol": profile.protocol,
+                            "host": profile.host,
+                            "port": profile.port,
+                            "auth_mode": profile.auth_mode,
+                            "enabled": profile.enabled,
+                        },
                         preconditions=base_preconditions,
-                        ownership="code_owned_exact",
-                        checks=(("connection_equivalent", "true"),),
-                        rollback_intent="restore exact adapter-provided connection state",
+                        checks=(("connection_exists", "true"), ("connection_equivalent", "true")),
+                        rollback_intent="remove only the transaction-created connection",
                     )
                 )
-        else:
-            connection_refs[profile.slot] = "planned-connection:%d" % profile.slot
-            actions.append(
-                _action(
-                    action_id,
-                    "create_connection",
-                    "connection",
-                    target,
-                    profile,
-                    proposed={
-                        "protocol": profile.protocol,
-                        "host": profile.host,
-                        "port": profile.port,
-                        "auth_mode": profile.auth_mode,
-                        "enabled": profile.enabled,
-                    },
-                    preconditions=base_preconditions,
-                    checks=(("connection_exists", "true"), ("connection_equivalent", "true")),
-                    rollback_intent="remove only the transaction-created connection",
-                )
-            )
 
     for profile in manifest.profiles:
         target = policy_name(profile)
-        desired_ref = connection_refs.get(profile.slot, "blocked-connection:%d" % profile.slot)
-        exact = sorted(
-            (item for item in snapshot.policies if policy_equivalence(item, desired_ref).equivalent),
-            key=lambda item: item.object_id,
-        )
+        desired_ref = connection_refs.get(profile.slot)
+        exact: List[ExistingPolicy] = []
+        if desired_ref is not None and desired_ref.kind == "existing_connection":
+            exact = sorted(
+                (
+                    item
+                    for item in snapshot.policies
+                    if policy_equivalence(item, desired_ref.value or "").equivalent
+                ),
+                key=lambda item: item.object_id,
+            )
         same_name = next((item for item in snapshot.policies if item.name.casefold() == target.casefold()), None)
         action_id = "%02d:policy" % profile.slot
-        if exact:
+        if desired_ref is None:
+            blocked = True
+            actions.append(
+                _action(
+                    action_id,
+                    "blocked",
+                    "policy",
+                    target,
+                    profile,
+                    preconditions=base_preconditions,
+                    future_adapter_requirement="resolved_connection_dependency",
+                    readiness=READINESS_BLOCKED,
+                    reason="policy connection dependency is unavailable",
+                )
+            )
+        elif len(exact) > 1:
+            blocked = True
+            actions.append(
+                _action(
+                    action_id,
+                    "conflict",
+                    "policy",
+                    target,
+                    profile,
+                    dependencies=(desired_ref,),
+                    preconditions=base_preconditions,
+                    future_adapter_requirement="hardware_object_identity_contract",
+                    readiness=READINESS_BLOCKED,
+                    reason="multiple equivalent policies are ambiguous",
+                )
+            )
+        elif exact:
             existing = exact[0]
-            policy_refs[profile.slot] = existing.object_id
+            policy_refs[profile.slot] = _existing_reference("policy", existing.object_id)
             actions.append(
                 _action(
                     action_id,
@@ -783,7 +979,8 @@ def build_change_plan(
                     profile,
                     observed_id=existing.object_id,
                     observed_name=existing.name,
-                    proposed={"semantic_match": "exact", "connection_ref": desired_ref},
+                    proposed={"semantic_match": "exact"},
+                    dependencies=(desired_ref,),
                     backup_required=False,
                     checks=(("policy_equivalent", "true"),),
                     rollback_intent="none",
@@ -791,13 +988,36 @@ def build_change_plan(
                 )
             )
         elif same_name is not None:
-            if same_name.object_id == snapshot.default_policy_ref or same_name.is_default_observed:
-                proof = None
-                reason = "default policy is immutable"
-            else:
-                proof = _proof_for(ownership_proofs, "policy", same_name.object_id)
-                reason = "same-name policy is not exactly equivalent"
-            if proof is None:
+            blocked = True
+            actions.append(
+                _action(
+                    action_id,
+                    "conflict",
+                    "policy",
+                    target,
+                    profile,
+                    observed_id=same_name.object_id,
+                    observed_name=same_name.name,
+                    proposed={"semantic_match": "false"},
+                    dependencies=(desired_ref,),
+                    preconditions=base_preconditions,
+                    future_adapter_requirement="hardware_update_contract",
+                    readiness=READINESS_BLOCKED,
+                    reason=(
+                        "default policy is immutable"
+                        if same_name.object_id == snapshot.default_policy_ref
+                        or same_name.is_default_observed
+                        else (
+                            "same-name policy is semantically incomplete"
+                            if not same_name.semantic_complete
+                            else "same-name policy is not exactly equivalent"
+                        )
+                    ),
+                )
+            )
+        else:
+            simulation_id = _simulation_object_id("policy", profile.slot)
+            if simulation_id in all_object_ids:
                 blocked = True
                 actions.append(
                     _action(
@@ -806,56 +1026,52 @@ def build_change_plan(
                         "policy",
                         target,
                         profile,
-                        observed_id=same_name.object_id,
-                        observed_name=same_name.name,
-                        proposed={"semantic_match": "false", "connection_ref": desired_ref},
+                        dependencies=(desired_ref,),
                         preconditions=base_preconditions,
-                        ownership="code_owned_required",
+                        future_adapter_requirement="collision_free_object_identity",
                         readiness=READINESS_BLOCKED,
-                        reason=reason,
+                        reason="generated policy identity collides with observed state",
                     )
                 )
             else:
-                policy_refs[profile.slot] = same_name.object_id
+                policy_refs[profile.slot] = _planned_reference("policy", profile.slot)
                 actions.append(
                     _action(
                         action_id,
-                        "update_owned_policy",
+                        "create_policy",
                         "policy",
                         target,
                         profile,
-                        observed_id=same_name.object_id,
-                        observed_name=same_name.name,
-                        proposed={"mode": "proxy_only", "connection_ref": desired_ref},
+                        proposed={"mode": "proxy_only", "default": False},
+                        dependencies=(desired_ref,),
                         preconditions=base_preconditions,
-                        ownership="code_owned_exact",
-                        checks=(("policy_equivalent", "true"),),
-                        rollback_intent="restore exact adapter-provided policy state",
+                        checks=(("policy_exists", "true"), ("policy_equivalent", "true")),
+                        rollback_intent="remove only the transaction-created policy",
                     )
                 )
-        else:
-            policy_refs[profile.slot] = "planned-policy:%d" % profile.slot
-            actions.append(
-                _action(
-                    action_id,
-                    "create_policy",
-                    "policy",
-                    target,
-                    profile,
-                    proposed={"mode": "proxy_only", "connection_ref": desired_ref, "default": False},
-                    preconditions=base_preconditions,
-                    checks=(("policy_exists", "true"), ("policy_equivalent", "true")),
-                    rollback_intent="remove only the transaction-created policy",
-                )
-            )
 
     if selected_device is not None:
         primary = manifest.profiles[0]
-        desired_policy_ref = policy_refs.get(primary.slot, "blocked-policy:%d" % primary.slot)
+        desired_policy_ref = policy_refs.get(primary.slot)
         existing_assignment = next(
             (item for item in snapshot.assignments if item.device_mac == selected_device.mac), None
         )
-        if existing_assignment is None:
+        if desired_policy_ref is None:
+            blocked = True
+            actions.append(
+                _action(
+                    "80:assignment",
+                    "blocked",
+                    "assignment",
+                    "selected-device",
+                    primary,
+                    preconditions=base_preconditions,
+                    future_adapter_requirement="resolved_policy_dependency",
+                    readiness=READINESS_BLOCKED,
+                    reason="assignment policy dependency is unavailable",
+                )
+            )
+        elif existing_assignment is None:
             actions.append(
                 _action(
                     "80:assignment",
@@ -863,13 +1079,16 @@ def build_change_plan(
                     "assignment",
                     "selected-device",
                     primary,
-                    proposed={"policy_ref": desired_policy_ref},
+                    dependencies=(desired_policy_ref,),
                     preconditions=base_preconditions,
                     checks=(("assignment_matches", "true"),),
                     rollback_intent="remove only the transaction-created assignment",
                 )
             )
-        elif existing_assignment.policy_ref == desired_policy_ref:
+        elif (
+            desired_policy_ref.kind == "existing_policy"
+            and existing_assignment.policy_ref == desired_policy_ref.value
+        ):
             actions.append(
                 _action(
                     "80:assignment",
@@ -878,7 +1097,7 @@ def build_change_plan(
                     "selected-device",
                     primary,
                     observed_id=selected_device.mac,
-                    proposed={"policy_ref": desired_policy_ref},
+                    dependencies=(desired_policy_ref,),
                     backup_required=False,
                     checks=(("assignment_matches", "true"),),
                     rollback_intent="none",
@@ -886,40 +1105,30 @@ def build_change_plan(
                 )
             )
         else:
-            proof = _proof_for(ownership_proofs, "assignment", selected_device.mac)
-            if proof is None:
-                blocked = True
-                actions.append(
-                    _action(
-                        "80:assignment",
-                        "blocked",
-                        "assignment",
-                        "selected-device",
-                        primary,
-                        observed_id=selected_device.mac,
-                        proposed={"policy_ref": desired_policy_ref},
-                        preconditions=base_preconditions,
-                        ownership="code_owned_exact_rollback_required",
-                        readiness=READINESS_BLOCKED,
-                        reason="existing assignment cannot be moved without adapter-owned proof",
-                    )
+            blocked = True
+            actions.append(
+                _action(
+                    "80:assignment",
+                    "blocked",
+                    "assignment",
+                    "selected-device",
+                    primary,
+                    observed_id=selected_device.mac,
+                    dependencies=(desired_policy_ref,),
+                    preconditions=base_preconditions,
+                    future_adapter_requirement="hardware_assignment_move_contract",
+                    readiness=READINESS_BLOCKED,
+                    reason=(
+                        "existing assignment on default policy cannot be moved"
+                        if existing_assignment.policy_ref == snapshot.default_policy_ref
+                        else "existing assignment move is outside the fixture-first contract"
+                    ),
                 )
-            else:
-                actions.append(
-                    _action(
-                        "80:assignment",
-                        "move_owned_assignment",
-                        "assignment",
-                        "selected-device",
-                        primary,
-                        observed_id=selected_device.mac,
-                        proposed={"policy_ref": desired_policy_ref},
-                        preconditions=base_preconditions,
-                        ownership="code_owned_exact",
-                        checks=(("assignment_matches", "true"),),
-                        rollback_intent="restore exact adapter-provided assignment",
-                    )
-                )
+            )
+
+    default_policy_not_targeted = _prove_default_policy_not_targeted(snapshot, actions)
+    if not default_policy_not_targeted:
+        blocked = True
 
     actions.extend(
         (
@@ -967,9 +1176,9 @@ def build_change_plan(
             None,
             observed_id=snapshot.default_policy_ref,
             backup_required=False,
-            checks=(("default_policy_unchanged", "true"),),
-            readiness=READINESS_HARDWARE if snapshot.default_policy_status == "known" else READINESS_BLOCKED,
-            reason=None if snapshot.default_policy_status == "known" else "default policy identity is not unambiguous",
+            checks=(("default_policy_not_targeted", "true"),),
+            readiness=READINESS_HARDWARE if default_policy_not_targeted else READINESS_BLOCKED,
+            reason=None if default_policy_not_targeted else "default policy identity is not proven",
         )
     )
 
@@ -995,11 +1204,15 @@ def build_change_plan(
                 "target": item.target_name,
                 "readiness": item.readiness,
                 "reason_category": bool(item.reason),
+                "dependencies": [
+                    _reference_identity(reference) for reference in item.dependencies
+                ],
             }
             for item in actions
         ],
         "selected_device": selected_device is not None,
         "default_policy_status": snapshot.default_policy_status,
+        "default_policy_not_targeted": default_policy_not_targeted,
     }
     fingerprint = hashlib.sha256(_canonical_json(semantic_identity).encode("utf-8")).hexdigest()
     rollback_actions = tuple(
@@ -1011,7 +1224,7 @@ def build_change_plan(
         fingerprint=fingerprint,
         plan_status=READINESS_BLOCKED if blocked else READINESS_HARDWARE,
         write_readiness=READINESS_BLOCKED,
-        default_policy_unchanged=True,
+        default_policy_not_targeted=default_policy_not_targeted,
         selected_device=selected_device,
     )
 
@@ -1039,8 +1252,9 @@ def _action_json(action: PlanAction, *, public: bool) -> Dict[str, Any]:
             "observed_name": action.observed_name,
             "observed_name_sensitivity": SENSITIVITY_LOCAL,
             "proposed": dict(action.proposed),
+            "dependencies": [asdict(item) for item in action.dependencies],
             "preconditions": [asdict(item) for item in action.preconditions],
-            "required_ownership_proof": action.required_ownership_proof,
+            "future_adapter_requirement": action.future_adapter_requirement,
             "verification_checks": [asdict(item) for item in action.verification_checks],
             "rollback_intent": action.rollback_intent,
             "reason": action.reason,
@@ -1061,7 +1275,7 @@ def render_plan_json(plan: ChangePlan, *, public_evidence: bool = False) -> str:
             "plan_status": plan.plan_status,
             "write_readiness": plan.write_readiness,
             "plan_fingerprint": plan.fingerprint,
-            "default_policy_unchanged": plan.default_policy_unchanged,
+            "default_policy_not_targeted": plan.default_policy_not_targeted,
             "selected_device_present": plan.selected_device is not None,
             "counts": counts,
             "actions": [_action_json(item, public=True) for item in plan.actions],
@@ -1083,7 +1297,7 @@ def render_plan_json(plan: ChangePlan, *, public_evidence: bool = False) -> str:
             "plan_status": plan.plan_status,
             "write_readiness": plan.write_readiness,
             "plan_fingerprint": plan.fingerprint,
-            "default_policy_unchanged": plan.default_policy_unchanged,
+            "default_policy_not_targeted": plan.default_policy_not_targeted,
             "selected_device": selected,
             "actions": [_action_json(item, public=False) for item in plan.actions],
             "rollback": [asdict(item) for item in plan.rollback.actions],
@@ -1112,7 +1326,11 @@ def render_plan_text(plan: ChangePlan) -> str:
         lines.append("- [%s] %s" % (action.readiness, detail))
     lines.extend(
         (
-            "Default policy unchanged proof: explicit verification required; no action targets it.",
+            (
+                "Static plan does not target the observed default policy."
+                if plan.default_policy_not_targeted
+                else "Static default-policy non-targeting invariant is not proven."
+            ),
             "No router connection, policy, device assignment, or default-policy write occurred.",
             "Live write contract remains hardware-confirmation pending.",
         )
@@ -1146,36 +1364,85 @@ def _unrelated_identity(snapshot: RouterStateSnapshot, plan: ChangePlan) -> Tupl
     return connections, policies, assignments
 
 
-def _simulated_connection_for_slot(
-    snapshot: RouterStateSnapshot, plan: ChangePlan, slot: int
-) -> ExistingProxyConnection:
-    action = next(
-        item
-        for item in plan.actions
-        if item.object_type == "connection" and item.profile_slot == slot and item.operation != "verify"
-    )
-    if action.observed_id is not None:
-        match = next(
-            (item for item in snapshot.connections if item.object_id == action.observed_id), None
+def _resolve_simulation_reference(
+    snapshot: RouterStateSnapshot, reference: ObjectReference
+) -> Any:
+    if reference.kind in ("existing_connection", "planned_connection"):
+        object_id = (
+            reference.value
+            if reference.kind == "existing_connection"
+            else _simulation_object_id("connection", reference.profile_slot or 0)
         )
-        if match is not None:
-            return match
-    return next(item for item in snapshot.connections if item.name == action.target_name)
+        match = next(
+            (item for item in snapshot.connections if item.object_id == object_id), None
+        )
+    elif reference.kind in ("existing_policy", "planned_policy"):
+        object_id = (
+            reference.value
+            if reference.kind == "existing_policy"
+            else _simulation_object_id("policy", reference.profile_slot or 0)
+        )
+        match = next((item for item in snapshot.policies if item.object_id == object_id), None)
+    else:
+        match = None
+    if match is None:
+        raise NetcrazePlanError("Synthetic simulation dependency could not be resolved.")
+    return match
 
 
-def _simulated_policy_for_slot(
-    snapshot: RouterStateSnapshot, plan: ChangePlan, slot: int
-) -> ExistingPolicy:
-    action = next(
-        item
-        for item in plan.actions
-        if item.object_type == "policy" and item.profile_slot == slot and item.operation != "verify"
-    )
-    if action.observed_id is not None:
-        match = next((item for item in snapshot.policies if item.object_id == action.observed_id), None)
-        if match is not None:
-            return match
-    return next(item for item in snapshot.policies if item.name == action.target_name)
+def _apply_simulated_action(
+    snapshot: RouterStateSnapshot,
+    action: PlanAction,
+    plan: ChangePlan,
+    profiles: Mapping[int, LocalProxyProfile],
+) -> RouterStateSnapshot:
+    profile = profiles.get(action.profile_slot) if action.profile_slot is not None else None
+    if action.operation == "create_connection" and profile is not None:
+        return _replace_snapshot(
+            snapshot,
+            connections=snapshot.connections
+            + (
+                ExistingProxyConnection(
+                    _simulation_object_id("connection", profile.slot),
+                    action.target_name,
+                    profile.protocol,
+                    profile.host,
+                    profile.port,
+                    profile.auth_mode,
+                    profile.enabled,
+                ),
+            ),
+        )
+    if action.operation == "create_policy" and profile is not None:
+        if len(action.dependencies) != 1:
+            raise NetcrazePlanError("Synthetic policy dependency is invalid.")
+        connection = _resolve_simulation_reference(snapshot, action.dependencies[0])
+        return _replace_snapshot(
+            snapshot,
+            policies=snapshot.policies
+            + (
+                ExistingPolicy(
+                    _simulation_object_id("policy", profile.slot),
+                    action.target_name,
+                    connection.object_id,
+                    "proxy_only",
+                ),
+            ),
+        )
+    if action.operation == "assign_device" and plan.selected_device is not None:
+        if len(action.dependencies) != 1:
+            raise NetcrazePlanError("Synthetic assignment dependency is invalid.")
+        policy = _resolve_simulation_reference(snapshot, action.dependencies[0])
+        return _replace_snapshot(
+            snapshot,
+            assignments=snapshot.assignments
+            + (ExistingDeviceAssignment(plan.selected_device.mac, policy.object_id),),
+        )
+    return snapshot
+
+
+def _restore_simulated_state(snapshot: RouterStateSnapshot) -> RouterStateSnapshot:
+    return snapshot
 
 
 def simulate_change_plan(
@@ -1186,7 +1453,10 @@ def simulate_change_plan(
     fail_after: Optional[str] = None,
     rollback_failure: bool = False,
 ) -> SimulationResult:
+    validate_snapshot_consistency(snapshot)
+    initial_default = default_policy_projection(snapshot)
     if plan.blocked:
+        default_unchanged = default_policy_projection(snapshot) == initial_default
         return SimulationResult(
             success=False,
             stopped_after=None,
@@ -1194,7 +1464,7 @@ def simulate_change_plan(
             rollback_actions=(),
             rollback_succeeded=True,
             restored_initial_state=True,
-            default_policy_unchanged=True,
+            default_policy_unchanged=default_unchanged,
             unrelated_objects_unchanged=True,
             final_state=snapshot,
             error_category="plan_blocked",
@@ -1204,99 +1474,49 @@ def simulate_change_plan(
     completed: List[str] = []
     rollback_stack: List[Tuple[RollbackAction, RouterStateSnapshot]] = []
     profiles = {item.slot: item for item in manifest.profiles}
-    default_before = (snapshot.default_policy_status, snapshot.default_policy_ref)
     unrelated_before = _unrelated_identity(snapshot, plan)
     stopped_after = None
     error_category = None
 
     for action in plan.actions:
         before = current
-        profile = profiles.get(action.profile_slot) if action.profile_slot is not None else None
-        if action.operation == "create_connection" and profile is not None:
-            current = _replace_snapshot(
-                current,
-                connections=current.connections
-                + (
-                    ExistingProxyConnection(
-                        "sim-connection-%d" % profile.slot,
-                        action.target_name,
-                        profile.protocol,
-                        profile.host,
-                        profile.port,
-                        profile.auth_mode,
-                        profile.enabled,
-                    ),
-                ),
-            )
-        elif action.operation == "update_owned_connection" and profile is not None:
-            current = _replace_snapshot(
-                current,
-                connections=tuple(
-                    ExistingProxyConnection(
-                        item.object_id,
-                        action.target_name,
-                        profile.protocol,
-                        profile.host,
-                        profile.port,
-                        profile.auth_mode,
-                        profile.enabled,
-                    )
-                    if item.object_id == action.observed_id
-                    else item
-                    for item in current.connections
-                ),
-            )
-        elif action.operation == "create_policy" and profile is not None:
-            connection = _simulated_connection_for_slot(current, plan, profile.slot)
-            current = _replace_snapshot(
-                current,
-                policies=current.policies
-                + (
-                    ExistingPolicy(
-                        "sim-policy-%d" % profile.slot,
-                        action.target_name,
-                        connection.object_id,
-                        "proxy_only",
-                    ),
-                ),
-            )
-        elif action.operation == "update_owned_policy" and profile is not None:
-            connection = _simulated_connection_for_slot(current, plan, profile.slot)
-            current = _replace_snapshot(
-                current,
-                policies=tuple(
-                    ExistingPolicy(
-                        item.object_id,
-                        action.target_name,
-                        connection.object_id,
-                        "proxy_only",
-                    )
-                    if item.object_id == action.observed_id
-                    else item
-                    for item in current.policies
-                ),
-            )
-        elif action.operation in ("assign_device", "move_owned_assignment") and plan.selected_device is not None:
-            primary = manifest.profiles[0]
-            policy = _simulated_policy_for_slot(current, plan, primary.slot)
-            retained = tuple(
-                item for item in current.assignments if item.device_mac != plan.selected_device.mac
-            )
-            current = _replace_snapshot(
-                current,
-                assignments=retained + (ExistingDeviceAssignment(plan.selected_device.mac, policy.object_id),),
-            )
+        try:
+            current = _apply_simulated_action(current, action, plan, profiles)
+        except NetcrazePlanError:
+            stopped_after = action.action_id
+            error_category = "simulation_dependency"
 
         rollback = _rollback_for(action)
         if rollback is not None and current != before:
             rollback_stack.append((rollback, before))
         completed.append(action.action_id)
-        if fail_after == action.action_id:
+        if current != before and stopped_after is None:
+            try:
+                validate_snapshot_consistency(current)
+                if default_policy_projection(current) != initial_default:
+                    stopped_after = action.action_id
+                    error_category = "default_policy_invariant"
+            except SnapshotSchemaError:
+                stopped_after = action.action_id
+                error_category = "snapshot_consistency"
+        if fail_after == action.action_id and stopped_after is None:
             stopped_after = action.action_id
             error_category = "injected_failure"
+        if stopped_after is not None:
             break
 
     success = stopped_after is None
+    if success:
+        try:
+            validate_snapshot_consistency(current)
+            if default_policy_projection(current) != initial_default:
+                success = False
+                stopped_after = completed[-1] if completed else None
+                error_category = "default_policy_invariant"
+        except SnapshotSchemaError:
+            success = False
+            stopped_after = completed[-1] if completed else None
+            error_category = "snapshot_consistency"
     performed_rollback: List[RollbackAction] = []
     rollback_succeeded = True
     if not success:
@@ -1306,12 +1526,24 @@ def simulate_change_plan(
                 rollback_succeeded = False
                 error_category = "rollback_failure"
                 break
-            current = before
+            current = _restore_simulated_state(before)
+            try:
+                validate_snapshot_consistency(current)
+                if default_policy_projection(current) != initial_default:
+                    raise SnapshotSchemaError("Rollback changed the default-policy projection.")
+            except SnapshotSchemaError:
+                rollback_succeeded = False
+                error_category = "rollback_validation_failure"
+                break
 
-    default_unchanged = (current.default_policy_status, current.default_policy_ref) == default_before
+    try:
+        validate_snapshot_consistency(current)
+        default_unchanged = default_policy_projection(current) == initial_default
+    except SnapshotSchemaError:
+        default_unchanged = False
     unrelated_unchanged = _unrelated_identity(current, plan) == unrelated_before
     return SimulationResult(
-        success=success,
+        success=success and default_unchanged,
         stopped_after=stopped_after,
         completed_actions=tuple(completed),
         rollback_actions=tuple(performed_rollback),

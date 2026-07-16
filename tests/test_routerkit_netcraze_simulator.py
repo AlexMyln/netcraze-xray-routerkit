@@ -1,7 +1,9 @@
 import json
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +35,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertTrue(result.default_policy_unchanged)
         self.assertTrue(result.unrelated_objects_unchanged)
         self.assertFalse(result.restored_initial_state)
+        self.assertTrue(plan.validate_snapshot_consistency(result.final_state).valid)
 
     def test_exact_reuse_is_noop(self):
         initial = snapshot("exact-equivalent-state.json")
@@ -97,6 +100,145 @@ class SimulatorTests(unittest.TestCase):
         result = plan.simulate_change_plan(change, initial, manifest())
         self.assertEqual(result.error_category, "plan_blocked")
         self.assertEqual(result.final_state, initial)
+
+    def test_orphan_state_after_action_is_rejected_and_rolled_back(self):
+        initial = snapshot()
+        change = plan.build_change_plan(manifest(), initial)
+        real_apply = plan._apply_simulated_action
+
+        def corrupt_after_create(state, action, change_plan, profiles):
+            updated = real_apply(state, action, change_plan, profiles)
+            if action.operation == "create_connection":
+                default = updated.policies[0]
+                return replace(
+                    updated,
+                    policies=(replace(default, connection_ref="missing-connection"),),
+                )
+            return updated
+
+        with mock.patch.object(
+            plan, "_apply_simulated_action", side_effect=corrupt_after_create
+        ):
+            result = plan.simulate_change_plan(change, initial, manifest())
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_category, "snapshot_consistency")
+        self.assertTrue(result.rollback_succeeded)
+        self.assertTrue(result.restored_initial_state)
+
+    def test_removing_a_referenced_connection_during_simulation_is_rejected(self):
+        initial = snapshot()
+        change = plan.build_change_plan(manifest(), initial)
+        real_apply = plan._apply_simulated_action
+
+        def remove_default_connection(state, action, change_plan, profiles):
+            updated = real_apply(state, action, change_plan, profiles)
+            if action.operation == "create_connection":
+                return replace(
+                    updated,
+                    connections=tuple(
+                        item
+                        for item in updated.connections
+                        if item.object_id != "synthetic-uplink"
+                    ),
+                )
+            return updated
+
+        with mock.patch.object(
+            plan, "_apply_simulated_action", side_effect=remove_default_connection
+        ):
+            result = plan.simulate_change_plan(change, initial, manifest())
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_category, "snapshot_consistency")
+        self.assertTrue(result.restored_initial_state)
+
+    def test_default_policy_projection_is_compared_not_constant(self):
+        initial = snapshot()
+        change = plan.build_change_plan(manifest(), initial)
+        real_apply = plan._apply_simulated_action
+
+        def mutate_default(state, action, change_plan, profiles):
+            updated = real_apply(state, action, change_plan, profiles)
+            if action.operation == "create_connection":
+                policies = tuple(
+                    replace(item, name="Mutated-Default")
+                    if item.object_id == updated.default_policy_ref
+                    else item
+                    for item in updated.policies
+                )
+                return replace(updated, policies=policies)
+            return updated
+
+        with mock.patch.object(plan, "_apply_simulated_action", side_effect=mutate_default):
+            result = plan.simulate_change_plan(change, initial, manifest())
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_category, "default_policy_invariant")
+        self.assertTrue(result.restored_initial_state)
+
+    def test_referenced_default_connection_mutation_is_detected(self):
+        initial = snapshot()
+        change = plan.build_change_plan(manifest(), initial)
+        real_apply = plan._apply_simulated_action
+
+        def mutate_default_connection(state, action, change_plan, profiles):
+            updated = real_apply(state, action, change_plan, profiles)
+            if action.operation == "create_connection":
+                connections = tuple(
+                    replace(item, enabled=False)
+                    if item.object_id == "synthetic-uplink"
+                    else item
+                    for item in updated.connections
+                )
+                return replace(updated, connections=connections)
+            return updated
+
+        with mock.patch.object(
+            plan, "_apply_simulated_action", side_effect=mutate_default_connection
+        ):
+            result = plan.simulate_change_plan(change, initial, manifest())
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_category, "default_policy_invariant")
+        self.assertTrue(result.restored_initial_state)
+
+    def test_rollback_state_is_revalidated(self):
+        initial = snapshot()
+        change = plan.build_change_plan(manifest(), initial)
+
+        def corrupt_restore(state):
+            policies = tuple(
+                replace(item, connection_ref="missing-connection")
+                if item.object_id == state.default_policy_ref
+                else item
+                for item in state.policies
+            )
+            return replace(state, policies=policies)
+
+        with mock.patch.object(
+            plan, "_restore_simulated_state", side_effect=corrupt_restore
+        ):
+            result = plan.simulate_change_plan(
+                change, initial, manifest(), fail_after="01:connection"
+            )
+
+        self.assertFalse(result.success)
+        self.assertFalse(result.rollback_succeeded)
+        self.assertEqual(result.error_category, "rollback_validation_failure")
+        self.assertFalse(result.default_policy_unchanged)
+
+    def test_invalid_caller_constructed_snapshot_cannot_enter_simulation(self):
+        initial = snapshot()
+        invalid = replace(
+            initial,
+            policies=(
+                replace(initial.policies[0], connection_ref="missing-connection"),
+            ),
+        )
+        change = plan.build_change_plan(manifest(), initial)
+        with self.assertRaises(plan.SnapshotSchemaError):
+            plan.simulate_change_plan(change, invalid, manifest())
 
 
 if __name__ == "__main__":

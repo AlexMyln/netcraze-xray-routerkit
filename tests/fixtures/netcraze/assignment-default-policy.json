@@ -4,7 +4,7 @@
   "state": "supported",
   "stale": false,
   "default_policy": {"status": "known", "observed_ref": "policy-default"},
-  "connections": [],
+  "connections": [{"id": "synthetic-uplink", "name": "Synthetic-Uplink", "protocol": "uplink", "host": "127.0.0.1", "port": 1, "auth_mode": "none", "enabled": true, "semantic_complete": true}],
   "policies": [
     {"id": "policy-default", "name": "Synthetic-Default", "connection_ref": "synthetic-uplink", "mode": "default", "is_default": true, "semantic_complete": true, "unrelated_rules": true}
   ],

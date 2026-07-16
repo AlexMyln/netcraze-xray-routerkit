@@ -927,7 +927,7 @@ def render_setup_pipeline(args: argparse.Namespace) -> str:
     if args.plan_netcraze:
         lines.append(
             f"{index}. run fixture-first Netcraze connection/policy plan "
-            "(not run by dry-run; no router write)"
+            "(OFFLINE PREVIEW ONLY; not run by dry-run; excluded from apply)"
         )
         index += 1
     if args.apply:
@@ -984,6 +984,7 @@ def confirm_setup_apply(
     *,
     bootstrap_apply: bool = False,
     enable_autostart: bool = False,
+    netcraze_plan_excluded: bool = False,
 ) -> bool:
     if bootstrap_apply and enable_autostart:
         prompt = "Proceed with bootstrap, router apply, and autostart stages? [y/N]: "
@@ -993,8 +994,26 @@ def confirm_setup_apply(
         prompt = "Proceed with router apply and autostart stages? [y/N]: "
     else:
         prompt = "Proceed with router apply stages? [y/N]: "
+    if netcraze_plan_excluded:
+        prompt = "Netcraze actions excluded. " + prompt
     answer = input_fn(prompt).strip().lower()
     return answer in {"y", "yes"}
+
+
+def print_netcraze_plan_exclusion() -> None:
+    print("Netcraze plan boundary:")
+    print(
+        "- The displayed Netcraze connection/policy/device plan is "
+        "OFFLINE PREVIEW ONLY."
+    )
+    print(
+        "- This confirmation will NOT create or change Netcraze connections, "
+        "policies, device assignments, or the default policy."
+    )
+    print(
+        "- Apply covers only the existing RouterKit bootstrap/install/autostart "
+        "stages selected below."
+    )
 
 
 def print_setup_bootstrap_warning() -> None:
@@ -1094,6 +1113,7 @@ def print_setup_apply_summary(
     if netcraze_planned:
         print("Offline Netcraze connection/policy plan completed before apply confirmation.")
         print("That stage performed no router policy, connection, or device-assignment write.")
+        print("Netcraze actions were excluded from this RouterKit apply.")
     print("Netcraze proxy connections, policies, and default policy were not changed.")
     print("Firewall rules were not changed.")
     print("xkeen -start was not called.")
@@ -1624,11 +1644,14 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         print_setup_bootstrap_warning()
     if args.enable_autostart:
         print_setup_autostart_warning()
+    if args.plan_netcraze:
+        print_netcraze_plan_exclusion()
 
     if not args.yes and not confirm_setup_apply(
         input_fn=input_fn,
         bootstrap_apply=args.bootstrap_apply,
         enable_autostart=args.enable_autostart,
+        netcraze_plan_excluded=args.plan_netcraze,
     ):
         if args.bootstrap_apply and args.enable_autostart:
             print("Cancelled before bootstrap, router apply, and autostart.")
@@ -1638,7 +1661,10 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
             print("Cancelled before router apply and autostart.")
         else:
             print("Cancelled before router apply.")
-        print("Generated local files may exist, but no router apply stages were started.")
+        print("Generated local files may exist, but no RouterKit apply stages were started.")
+        if args.plan_netcraze:
+            print("The Netcraze plan was preview-only.")
+            print("No Netcraze write was possible.")
         return 1
 
     if args.bootstrap_apply:

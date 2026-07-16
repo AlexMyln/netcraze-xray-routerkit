@@ -28,7 +28,7 @@
 - выполнить healthcheck;
 - с явным `setup --apply --enable-autostart` или `install --apply --enable-autostart` включить только `S23xray-direct` после healthcheck и строгой runtime verification;
 - с явным `setup --discover-devices` запустить read-only fixture-first device discovery и optional no-write selection после strict planning;
-- с явными `setup --plan-netcraze --netcraze-state-file PATH` запустить защищённый fixture-first план connections/policies/optional assignment до confirmation, без Netcraze write;
+- с явными `setup --plan-netcraze --netcraze-state-file PATH` запустить consistency-validated fixture-first preview connections/policies/optional assignment до confirmation; при сочетании с apply явно сообщить, что все Netcraze actions исключены;
 - вывести точные шаги для Web UI proxy connections и policies.
 
 ## Что не входит в первую версию guided installer

@@ -5,6 +5,7 @@
   "stale": false,
   "default_policy": {"status": "known", "observed_ref": "policy-default"},
   "connections": [
+    {"id": "synthetic-uplink", "name": "Synthetic-Uplink", "protocol": "uplink", "host": "127.0.0.1", "port": 1, "auth_mode": "none", "enabled": true, "semantic_complete": true},
     {"id": "connection-foreign", "name": "RouterKit-SOCKS-1082", "protocol": "socks5", "host": "127.0.0.1", "port": 1084, "auth_mode": "none", "enabled": true, "semantic_complete": true}
   ],
   "policies": [

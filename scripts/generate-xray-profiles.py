@@ -17,9 +17,7 @@ import argparse
 import json
 import os
 import re
-import stat
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -39,11 +37,23 @@ from routerkit_profile_network import (  # noqa: E402
     normalize_https_source_value,
     resolve_https_source,
 )
+from routerkit_private_io import (  # noqa: E402
+    PrivateFileError,
+    ensure_private_directory,
+    remove_private_file_if_valid,
+    write_private_bytes_atomic,
+)
 
 
 LOCAL_ENDPOINT_MANIFEST = "routerkit-local-endpoints.json"
 LOCAL_ENDPOINT_SCHEMA = "routerkit.local-endpoints.v1"
 SUPPORTED_LOCAL_PORTS = (1082, 1083, 1084)
+MAX_LOCAL_ENDPOINT_MANIFEST_BYTES = 32 * 1024
+SAFE_MANIFEST_LABELS = {
+    1: "primary",
+    2: "fallback-1",
+    3: "fallback-2",
+}
 
 
 def eprint(*args: Any) -> None:
@@ -236,7 +246,7 @@ def build_local_endpoint_manifest(profiles: List[Dict[str, Any]]) -> Dict[str, A
         endpoints.append(
             {
                 "slot": slot,
-                "label": profile["name"],
+                "label": SAFE_MANIFEST_LABELS[slot],
                 "listen": "127.0.0.1",
                 "port": port,
                 "enabled": True,
@@ -246,60 +256,70 @@ def build_local_endpoint_manifest(profiles: List[Dict[str, Any]]) -> Dict[str, A
     return {"schema": LOCAL_ENDPOINT_SCHEMA, "profiles": endpoints}
 
 
-def write_private_json_atomic(path: Path, value: Dict[str, Any]) -> None:
-    destination = Path(path)
-    encoded = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    if len(encoded) > 32 * 1024:
-        raise SystemExit("Local endpoint manifest exceeds its safety bound")
+def validate_local_endpoint_manifest_text(text: str) -> None:
     try:
-        existing = destination.lstat()
-    except FileNotFoundError:
-        existing = None
-    except OSError:
-        raise SystemExit("Could not inspect local endpoint manifest destination") from None
-    if existing is not None and (
-        stat.S_ISLNK(existing.st_mode)
-        or not stat.S_ISREG(existing.st_mode)
-        or existing.st_nlink != 1
-    ):
-        raise SystemExit("Local endpoint manifest destination is unsafe")
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        raise PrivateFileError("Local endpoint manifest is not recognized.") from None
+    if not isinstance(value, dict) or set(value) != {"schema", "profiles"}:
+        raise PrivateFileError("Local endpoint manifest is not recognized.")
+    if value.get("schema") != LOCAL_ENDPOINT_SCHEMA:
+        raise PrivateFileError("Local endpoint manifest is not recognized.")
+    profiles = value.get("profiles")
+    if not isinstance(profiles, list) or not 1 <= len(profiles) <= 3:
+        raise PrivateFileError("Local endpoint manifest is not recognized.")
+    seen_ports = set()
+    for expected_slot, profile in enumerate(profiles, start=1):
+        if not isinstance(profile, dict) or set(profile) != {
+            "slot",
+            "label",
+            "listen",
+            "port",
+            "enabled",
+            "protocol",
+        }:
+            raise PrivateFileError("Local endpoint manifest is not recognized.")
+        port = profile.get("port")
+        if (
+            profile.get("slot") != expected_slot
+            or profile.get("label") != SAFE_MANIFEST_LABELS[expected_slot]
+            or profile.get("listen") not in ("127.0.0.1", "::1")
+            or not isinstance(port, int)
+            or isinstance(port, bool)
+            or port not in SUPPORTED_LOCAL_PORTS
+            or port in seen_ports
+            or not isinstance(profile.get("enabled"), bool)
+            or profile.get("protocol") != "socks5"
+        ):
+            raise PrivateFileError("Local endpoint manifest is not recognized.")
+        seen_ports.add(port)
 
-    fd = -1
-    temporary = None
+
+def write_private_json_atomic(path: Path, value: Dict[str, Any]) -> None:
+    encoded = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
-        fd, temporary_name = tempfile.mkstemp(prefix=".routerkit-endpoints-", dir=str(destination.parent))
-        temporary = Path(temporary_name)
-        if os.name == "posix":
-            os.fchmod(fd, 0o600)
-        offset = 0
-        while offset < len(encoded):
-            written = os.write(fd, encoded[offset:])
-            if written <= 0:
-                raise OSError("short write")
-            offset += written
-        os.fsync(fd)
-        os.close(fd)
-        fd = -1
-        temporary_metadata = temporary.lstat()
-        if not stat.S_ISREG(temporary_metadata.st_mode) or temporary_metadata.st_nlink != 1:
-            raise OSError("unsafe temporary file")
-        os.replace(temporary, destination)
-        temporary = None
-        if os.name == "posix":
-            os.chmod(destination, 0o600)
-    except OSError:
-        raise SystemExit("Could not write local endpoint manifest safely") from None
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        if temporary is not None:
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
+        validate_local_endpoint_manifest_text(encoded.decode("utf-8"))
+        write_private_bytes_atomic(
+            Path(path),
+            encoded,
+            maximum_bytes=MAX_LOCAL_ENDPOINT_MANIFEST_BYTES,
+            description="Local endpoint manifest",
+            validate_existing_text=validate_local_endpoint_manifest_text,
+        )
+    except PrivateFileError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def retire_stale_local_endpoint_manifest(path: Path) -> None:
+    try:
+        remove_private_file_if_valid(
+            Path(path),
+            maximum_bytes=MAX_LOCAL_ENDPOINT_MANIFEST_BYTES,
+            description="Local endpoint manifest",
+            validate_text=validate_local_endpoint_manifest_text,
+        )
+    except PrivateFileError as exc:
+        raise SystemExit(str(exc)) from None
 
 
 def main() -> int:
@@ -311,6 +331,14 @@ def main() -> int:
     cfg = load_json(Path(args.profiles))
     profiles = cfg.get("profiles", [])
     validate_profile_names(profiles)
+
+    out_dir = Path(args.out)
+    try:
+        ensure_private_directory(out_dir, description="Generated output directory")
+    except PrivateFileError as exc:
+        raise SystemExit(str(exc)) from None
+    manifest_path = out_dir / LOCAL_ENDPOINT_MANIFEST
+    retire_stale_local_endpoint_manifest(manifest_path)
 
     nodes: Dict[str, NodeRecord] = {}
 
@@ -333,9 +361,6 @@ def main() -> int:
             f"flow={node.get('flow') or 'none'}"
         )
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     files = {
         "03_inbounds.json": build_inbounds(profiles),
         "04_outbounds.json": build_outbounds(profiles, nodes),
@@ -347,7 +372,7 @@ def main() -> int:
         os.chmod(out_dir / filename, 0o600)
 
     write_private_json_atomic(
-        out_dir / LOCAL_ENDPOINT_MANIFEST,
+        manifest_path,
         build_local_endpoint_manifest(profiles),
     )
 
