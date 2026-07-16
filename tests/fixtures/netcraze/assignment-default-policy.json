@@ -1,0 +1,13 @@
+{
+  "schema": "routerkit.netcraze.state.fixture.v1",
+  "snapshot_id": "synthetic-default-assignment",
+  "state": "supported",
+  "stale": false,
+  "default_policy": {"status": "known", "observed_ref": "policy-default"},
+  "connections": [],
+  "policies": [
+    {"id": "policy-default", "name": "Synthetic-Default", "connection_ref": "synthetic-uplink", "mode": "default", "is_default": true, "semantic_complete": true, "unrelated_rules": true}
+  ],
+  "assignments": [{"device_mac": "02:00:5e:00:00:10", "policy_ref": "policy-default"}],
+  "capabilities": {}
+}

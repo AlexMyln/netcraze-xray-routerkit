@@ -103,6 +103,23 @@ Bootstrap apply does not activate Entware, restart or manage services, enable au
 
 Read-only device discovery is fixture-first. `routerkit devices status` reports the live Netcraze/Keenetic adapter as `contract_unverified` until the hardware probe confirms whether the target firmware should use local CLI, `/rci`, another structured interface, or a combination. Offline validation can use a protected synthetic inventory with `routerkit devices discover --inventory-file PATH` or `routerkit devices select --inventory-file PATH`; JSON marks local-sensitive names, addresses, stable identifiers, source names, and raw errors, while `--public-evidence` is discover-only JSON that uses controlled source categories and counted generic error codes. Nonzero selection fails closed unless every required source is `supported`, no sanitized errors exist, and the chosen device has a valid unicast MAC identity; fixture data cannot elevate vendor, router, unknown, or IP-only identifiers into assignment trust. `setup --discover-devices --device-inventory-file PATH` adds the same read-only selection stage after strict planning and before any apply confirmation. Option `0`, blank input, and EOF mean no device assignment. No command execution, policy write, proxy write, default-policy change, active scan, persisted inventory, persisted selection handle, or device assignment occurs in #21; #15 remains the write boundary. See [device discovery architecture](docs/architecture/device-discovery.md), [interface research](docs/research/device-discovery-interface.md), and the [read-only hardware probe packet](docs/hardware/device-discovery-probe.md).
 
+Fixture-first #15 planning is also available without a live adapter:
+
+```sh
+python3 scripts/routerkit.py netcraze-plan status
+python3 scripts/routerkit.py netcraze-plan plan \
+  --manifest-file /protected/path/routerkit-local-endpoints.json \
+  --state-file /protected/path/synthetic-router-state.json
+python3 scripts/routerkit.py netcraze-plan simulate \
+  --manifest-file /protected/path/routerkit-local-endpoints.json \
+  --state-file /protected/path/synthetic-router-state.json \
+  --fixture-simulation
+```
+
+The generator now emits an owner-only, atomic `routerkit.local-endpoints.v1` manifest containing only slots, safe labels, loopback addresses, ports 1082–1084, enabled state, and SOCKS5 protocol. The planner detects exact reuse, conflicts, optional explicit assignment, and default-policy invariants; fixture input cannot grant ownership or write authority. `setup --plan-netcraze --netcraze-state-file PATH` runs the same offline stage after optional #21 selection and before any apply confirmation. There is no Netcraze apply mode or live adapter. The verdict remains `SOFTWARE_PLAN_CORE_READY_HARDWARE_WRITE_CONTRACT_PENDING`; see the [architecture](docs/architecture/netcraze-policy-plan.md), [interface research](docs/research/netcraze-policy-interface.md), and [hardware packet](docs/hardware/netcraze-policy-contract.md).
+
+Standalone optional assignment reuses the protected #21 inventory contract and requires both `--device-inventory-file PATH` and an explicit `--device-choice N`; choice `0` means no assignment. No selection handle is serialized or persisted.
+
 While the private workspace exists, catchable `SIGTERM` and `SIGHUP` requests trigger coordinated source/generator process-group shutdown, child reaping, and workspace cleanup before setup exits. `SIGINT` keeps normal interactive cancellation behavior. `SIGKILL`, power loss, kernel failure, and host crashes cannot run in-process cleanup and may leave the owner-only workspace for manual removal.
 
 For setup, `--source-env` accepts only a valid dedicated `ROUTERKIT_*` variable name. The raw value stays out of argv and output, is available only to the profile-source acquisition child, and is consumed there before URL classification, DNS resolver worker creation, parsing, or selection. Generator, strict-plan, integrated bootstrap, preflight, backup, install, and healthcheck subprocesses receive a copy of the normal environment with that one selected variable removed. Standalone `profile-source --source-env` keeps its existing general environment-name compatibility unless its internal consume option is explicitly used by setup.

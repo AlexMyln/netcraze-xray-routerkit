@@ -227,7 +227,7 @@ class BuildConfigTests(unittest.TestCase):
             ],
         )
 
-    def test_profiles_document_from_shared_core_generates_three_fragments(self):
+    def test_profiles_document_from_shared_core_generates_fragments_and_safe_manifest(self):
         import routerkit_profile_source as core
 
         nodes = [core.parse_vless(fake_vless_link(name=name, host=f"{name}.example")) for name in ("one", "two", "three")]
@@ -245,8 +245,40 @@ class BuildConfigTests(unittest.TestCase):
                 sys.argv = old_argv
             self.assertEqual(
                 sorted(path.name for path in output.iterdir()),
-                ["03_inbounds.json", "04_outbounds.json", "05_routing.json"],
+                [
+                    "03_inbounds.json",
+                    "04_outbounds.json",
+                    "05_routing.json",
+                    "routerkit-local-endpoints.json",
+                ],
             )
+            manifest = json.loads((output / "routerkit-local-endpoints.json").read_text())
+            self.assertEqual(manifest["schema"], "routerkit.local-endpoints.v1")
+            self.assertEqual([item["port"] for item in manifest["profiles"]], [1082, 1083, 1084])
+            serialized = json.dumps(manifest).casefold()
+            for forbidden in ("uuid", "publickey", "shortid", "subscription", "remote", "sni"):
+                self.assertNotIn(forbidden, serialized)
+            if os.name == "posix":
+                self.assertEqual((output / "routerkit-local-endpoints.json").stat().st_mode & 0o777, 0o600)
+
+    def test_manifest_rejects_ports_duplicates_and_unsafe_destination(self):
+        with self.assertRaises(SystemExit):
+            generator.build_local_endpoint_manifest([{"name": "bad", "port": 9999}])
+        with self.assertRaises(SystemExit):
+            generator.build_local_endpoint_manifest(
+                [{"name": "one", "port": 1082}, {"name": "two", "port": 1082}]
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "manifest.json"
+            real = root / "real.json"
+            real.write_text("{}", encoding="utf-8")
+            target.symlink_to(real)
+            with self.assertRaises(SystemExit):
+                generator.write_private_json_atomic(
+                    target,
+                    generator.build_local_endpoint_manifest([{"name": "one", "port": 1082}]),
+                )
 
     def test_generator_reexports_shared_parser(self):
         import routerkit_profile_source as core

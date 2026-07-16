@@ -36,6 +36,18 @@ from routerkit_devices import (
     run_setup_selection_stage,
     validate_args as validate_device_args,
 )
+from routerkit_netcraze_plan import (
+    CliUsageError as NetcrazeCliUsageError,
+    ManifestSchemaError as NetcrazeManifestSchemaError,
+    NetcrazePlanError,
+    SnapshotSchemaError as NetcrazeSnapshotSchemaError,
+    build_change_plan as build_netcraze_change_plan,
+    load_local_endpoint_manifest,
+    load_router_state_snapshot,
+    render_plan_text as render_netcraze_plan_text,
+    selected_device_from_device_selection,
+    validate_args as validate_netcraze_args,
+)
 from routerkit_profile_source import PayloadValidationError, validate_env_name
 
 INSTALL_PLAN_NOTICE = (
@@ -59,6 +71,14 @@ SETUP_DEVICE_FILE_REQUIRES_DISCOVERY_MESSAGE = (
 
 SETUP_DEVICE_CHOICE_REQUIRES_DISCOVERY_MESSAGE = (
     "setup --device-choice requires --discover-devices."
+)
+
+SETUP_NETCRAZE_STATE_REQUIRES_PLAN_MESSAGE = (
+    "setup --netcraze-state-file requires --plan-netcraze."
+)
+
+SETUP_NETCRAZE_PLAN_REQUIRES_STATE_MESSAGE = (
+    "setup --plan-netcraze requires --netcraze-state-file."
 )
 
 INSTALL_AUTOSTART_REQUIRES_APPLY_MESSAGE = "install --enable-autostart requires --apply."
@@ -352,6 +372,10 @@ def validate_setup_args(args: argparse.Namespace) -> None:
         raise RouterkitCliError(SETUP_DEVICE_FILE_REQUIRES_DISCOVERY_MESSAGE, exit_code=2)
     if args.device_choice is not None and not args.discover_devices:
         raise RouterkitCliError(SETUP_DEVICE_CHOICE_REQUIRES_DISCOVERY_MESSAGE, exit_code=2)
+    if args.netcraze_state_file and not args.plan_netcraze:
+        raise RouterkitCliError(SETUP_NETCRAZE_STATE_REQUIRES_PLAN_MESSAGE, exit_code=2)
+    if args.plan_netcraze and not args.netcraze_state_file:
+        raise RouterkitCliError(SETUP_NETCRAZE_PLAN_REQUIRES_STATE_MESSAGE, exit_code=2)
 
 
 def validate_setup_source_env_name(name: str) -> None:
@@ -460,6 +484,32 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
             command.extend(["--redaction-salt", args.redaction_salt])
         if args.choice is not None:
             command.extend(["--choice", str(args.choice)])
+        return command
+
+    if args.command == "netcraze-plan":
+        try:
+            validate_netcraze_args(args)
+        except NetcrazeCliUsageError as exc:
+            raise RouterkitCliError(str(exc), exit_code=2) from None
+        command = [sys.executable, _repo_script(repo_root, "routerkit-netcraze-plan.py"), args.mode]
+        if args.manifest_file:
+            command.extend(["--manifest-file", args.manifest_file])
+        if args.state_file:
+            command.extend(["--state-file", args.state_file])
+        if args.json:
+            command.append("--json")
+        if args.public_evidence:
+            command.append("--public-evidence")
+        if args.device_inventory_file:
+            command.extend(["--device-inventory-file", args.device_inventory_file])
+        if args.device_choice is not None:
+            command.extend(["--device-choice", str(args.device_choice)])
+        if args.fixture_simulation:
+            command.append("--fixture-simulation")
+        if args.fail_after:
+            command.extend(["--fail-after", args.fail_after])
+        if args.rollback_failure:
+            command.append("--rollback-failure")
         return command
 
     if args.command == "wizard":
@@ -874,6 +924,12 @@ def render_setup_pipeline(args: argparse.Namespace) -> str:
             "(not run by dry-run; no policy or assignment write)"
         )
         index += 1
+    if args.plan_netcraze:
+        lines.append(
+            f"{index}. run fixture-first Netcraze connection/policy plan "
+            "(not run by dry-run; no router write)"
+        )
+        index += 1
     if args.apply:
         if not args.yes:
             lines.append(f"{index}. confirmation gate")
@@ -914,6 +970,8 @@ def render_setup_steps(
         bootstrap_apply=bootstrap_apply,
         enable_autostart=False,
         discover_devices=False,
+        plan_netcraze=False,
+        netcraze_state_file=None,
         yes=not include_confirmation,
         generated=generated,
         target_root="/opt",
@@ -986,6 +1044,7 @@ def print_setup_plan_summary(
     *,
     discover_devices: bool = False,
     selected_for_future_planning: bool = False,
+    netcraze_planned: bool = False,
 ) -> None:
     print("Setup plan completed.")
     _print_setup_source_summary(mode)
@@ -999,6 +1058,10 @@ def print_setup_plan_summary(
     )
     if discover_devices:
         _print_device_selection_summary(selected_for_future_planning=selected_for_future_planning)
+    if netcraze_planned:
+        print("Offline Netcraze connection/policy plan completed.")
+        print("No router policy, connection, or device-assignment write occurred.")
+        print("The live Netcraze write contract remains hardware-confirmation pending.")
 
 
 def print_setup_apply_summary(
@@ -1008,6 +1071,7 @@ def print_setup_apply_summary(
     enable_autostart: bool = False,
     discover_devices: bool = False,
     selected_for_future_planning: bool = False,
+    netcraze_planned: bool = False,
 ) -> None:
     print("Setup apply completed.")
     _print_setup_source_summary(mode)
@@ -1027,6 +1091,9 @@ def print_setup_apply_summary(
         print("Autostart was not enabled.")
     if discover_devices:
         _print_device_selection_summary(selected_for_future_planning=selected_for_future_planning)
+    if netcraze_planned:
+        print("Offline Netcraze connection/policy plan completed before apply confirmation.")
+        print("That stage performed no router policy, connection, or device-assignment write.")
     print("Netcraze proxy connections, policies, and default policy were not changed.")
     print("Firewall rules were not changed.")
     print("xkeen -start was not called.")
@@ -1508,6 +1575,7 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         return code
 
     selected_for_future_planning = False
+    selected_device = None
     if args.discover_devices:
         code, selected_device = run_setup_selection_stage(
             inventory_file=args.device_inventory_file,
@@ -1519,11 +1587,36 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         accept_read_only_device_selection(selected_device)
         selected_for_future_planning = bool(selected_device and selected_device.selected)
 
+    if args.plan_netcraze:
+        try:
+            endpoint_manifest = load_local_endpoint_manifest(
+                Path(args.generated) / "routerkit-local-endpoints.json"
+            )
+            router_snapshot = load_router_state_snapshot(Path(args.netcraze_state_file))
+            selected_ref = selected_device_from_device_selection(selected_device)
+            netcraze_plan = build_netcraze_change_plan(
+                endpoint_manifest,
+                router_snapshot,
+                selected_ref,
+            )
+        except (
+            NetcrazeManifestSchemaError,
+            NetcrazeSnapshotSchemaError,
+            NetcrazePlanError,
+        ) as exc:
+            print(f"routerkit: Netcraze offline plan failed: {exc}", file=sys.stderr)
+            return 2
+        sys.stdout.write(render_netcraze_plan_text(netcraze_plan))
+        if netcraze_plan.blocked:
+            print("routerkit: Netcraze offline plan is blocked; stopping before confirmation.", file=sys.stderr)
+            return 2
+
     if not args.apply:
         print_setup_plan_summary(
             mode,
             discover_devices=args.discover_devices,
             selected_for_future_planning=selected_for_future_planning,
+            netcraze_planned=args.plan_netcraze,
         )
         return 0
 
@@ -1595,6 +1688,7 @@ def run_setup(args: argparse.Namespace, repo_root: Path, input_fn=input) -> int:
         enable_autostart=args.enable_autostart,
         discover_devices=args.discover_devices,
         selected_for_future_planning=selected_for_future_planning,
+        netcraze_planned=args.plan_netcraze,
     )
     return code
 
@@ -1928,6 +2022,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Advanced fixture/demo only: non-interactive device choice; 0 means no assignment.",
     )
     setup.add_argument(
+        "--plan-netcraze",
+        action="store_true",
+        help="Run the fixture-first offline Netcraze connection/policy plan before confirmation.",
+    )
+    setup.add_argument(
+        "--netcraze-state-file",
+        metavar="PATH",
+        help="Protected synthetic router-state fixture for --plan-netcraze.",
+    )
+    setup.add_argument(
         "--yes",
         action="store_true",
         help="Skip only the apply confirmation prompt; requires --apply.",
@@ -2023,6 +2127,25 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     devices.add_argument("--public-evidence", action="store_true", help="Discover mode only; implies JSON.")
     devices.add_argument("--redaction-salt", help="Discover public-evidence only.")
     devices.add_argument("--choice", type=int, help="Select mode only; 0 means no assignment.")
+
+    netcraze_plan = subparsers.add_parser(
+        "netcraze-plan",
+        help="Run offline Netcraze planning or synthetic simulation; no live adapter exists.",
+        description="Fixture-first connection/policy planning with no router write mode.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    netcraze_plan.add_argument(
+        "mode", choices=("status", "plan", "simulate"), nargs="?", default="status"
+    )
+    netcraze_plan.add_argument("--manifest-file", metavar="PATH")
+    netcraze_plan.add_argument("--state-file", metavar="PATH")
+    netcraze_plan.add_argument("--json", action="store_true")
+    netcraze_plan.add_argument("--public-evidence", action="store_true")
+    netcraze_plan.add_argument("--device-inventory-file", metavar="PATH")
+    netcraze_plan.add_argument("--device-choice", type=int)
+    netcraze_plan.add_argument("--fixture-simulation", action="store_true")
+    netcraze_plan.add_argument("--fail-after", metavar="ACTION_ID")
+    netcraze_plan.add_argument("--rollback-failure", action="store_true")
 
     plan = subparsers.add_parser(
         "plan",

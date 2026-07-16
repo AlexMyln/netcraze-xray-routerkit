@@ -241,7 +241,17 @@ python3 scripts/routerkit.py devices discover --inventory-file /protected/path/d
 python3 scripts/routerkit.py setup --discover-devices --device-inventory-file /protected/path/device-inventory.json
 ```
 
-Live Netcraze/Keenetic adapter показывает `contract_unverified`, пока hardware probe не подтвердит, должен ли target-firmware contract использовать CLI, `/rci`, другой structured interface или их сочетание. Inventory-file mode предназначен только для synthetic offline validation и требует owner-only regular file без symlink или hardlink. Selection всегда содержит option `0` для no assignment; blank input и EOF тоже выбирают no assignment. Любой nonzero choice требует complete trusted evidence: adapter state `supported`, без sanitized errors, все sources в `supported` и valid unicast MAC identity. Fixture data не может превратить vendor IDs, router IDs, unknown identifiers или IP-only records в assignment identities. Stage может передать ephemeral in-memory selection handle через no-op #15 boundary, но никогда не печатает и не сохраняет этот handle. Он не выполняет router command, не пишет policy, не создаёт proxy connection, не меняет default policy, не выполняет active scan и не сохраняет real inventories.
+Live Netcraze/Keenetic adapter показывает `contract_unverified`, пока hardware probe не подтвердит, должен ли target-firmware contract использовать CLI, `/rci`, другой structured interface или их сочетание. Inventory-file mode предназначен только для synthetic offline validation и требует owner-only regular file без symlink или hardlink. Selection всегда содержит option `0` для no assignment; blank input и EOF тоже выбирают no assignment. Любой nonzero choice требует complete trusted evidence: adapter state `supported`, без sanitized errors, все sources в `supported` и valid unicast MAC identity. Fixture data не может превратить vendor IDs, router IDs, unknown identifiers или IP-only records в assignment identities. Stage может передать `DeviceSelection` напрямую в optional offline planner #15, но никогда не сериализует, не печатает и не сохраняет ephemeral handle. Он не выполняет router command, не пишет policy, не создаёт proxy connection, не меняет default policy, не выполняет active scan и не сохраняет real inventories.
+
+Явный stage #15 остаётся plan-only:
+
+```sh
+python3 scripts/routerkit.py netcraze-plan status
+python3 scripts/routerkit.py netcraze-plan plan --manifest-file /protected/path/routerkit-local-endpoints.json --state-file /protected/path/synthetic-state.json
+python3 scripts/routerkit.py setup --plan-netcraze --netcraze-state-file /protected/path/synthetic-state.json
+```
+
+Generator атомарно создаёт owner-only `generated/routerkit-local-endpoints.json` только с безопасными локальными endpoint-данными. Setup читает его после generation и strict plan; optional selection выполняется раньше, Netcraze plan — до apply confirmation. Конфликт останавливает setup. Успех явно сообщает, что connection/policy/assignment/default-policy write не было. `simulate` требует `--fixture-simulation` и доказывает только software rollback. Netcraze apply-команды нет; статус остаётся `SOFTWARE_PLAN_CORE_READY_HARDWARE_WRITE_CONTRACT_PENDING`.
 
 Dry-run показывает абстрактный secret-free flow без чтения source, reuse file, secret input или environment value; без stdin prompt; и без DNS/HTTPS request, subprocess, private workspace, profiles, generated files, write или router actions:
 
@@ -253,7 +263,7 @@ python3 scripts/routerkit.py setup --apply --bootstrap-apply --dry-run
 
 Этот setup dry-run contract отличается от standalone `profile-source --dry-run`: standalone profile-source может выполнить HTTPS network read для validation selection, а setup dry-run не выполняет secret-input или network access. Загрузка Python modules и определение repository path не входят в secret-input contract.
 
-Эта integration функционально завершает #29 и parent #13, но не epic #5. Autostart — #14, Netcraze proxy/policy — #15, read-only fixture-first device discovery — software часть #21 с pending hardware contract confirmation, hardware validation — #16. Path не считается hardware-tested до завершения #16. Обычный `setup` и `setup --apply` не запускают bootstrap, не включают autostart и не обнаруживают devices; только explicit flags добавляют эти stages. Ни один setup mode не активирует Entware, не доказывает reboot persistence, не пишет политики Netcraze или default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
+Эта integration функционально завершает #29 и parent #13, но не epic #5. Autostart — #14; у #15 готов fixture-first software plan core, но pending hardware write contract; read-only fixture-first device discovery — software часть #21 с pending hardware confirmation; hardware validation — #16. Path не считается hardware-tested до завершения #16. Обычные `setup` и `setup --apply` не запускают bootstrap, autostart, discovery или Netcraze planning; stages добавляются только explicit flags. Ни один setup mode не активирует Entware, не доказывает reboot persistence, не пишет Netcraze/default policy, не автоматизирует Web UI, не создаёт firewall/TPROXY/REDIRECT rules и не вызывает `xkeen -start`. Generated fragments остаются secret-bearing local operational artifacts, которые нельзя публиковать.
 
 ## Команда install
 

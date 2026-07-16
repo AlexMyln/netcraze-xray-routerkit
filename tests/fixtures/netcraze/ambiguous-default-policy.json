@@ -1,0 +1,14 @@
+{
+  "schema": "routerkit.netcraze.state.fixture.v1",
+  "snapshot_id": "synthetic-ambiguous-default",
+  "state": "supported",
+  "stale": false,
+  "default_policy": {"status": "ambiguous", "observed_ref": null},
+  "connections": [],
+  "policies": [
+    {"id": "possible-default-a", "name": "Synthetic-Possible-A", "connection_ref": "synthetic-a", "mode": "default", "is_default": true, "semantic_complete": true, "unrelated_rules": true},
+    {"id": "possible-default-b", "name": "Synthetic-Possible-B", "connection_ref": "synthetic-b", "mode": "default", "is_default": true, "semantic_complete": true, "unrelated_rules": true}
+  ],
+  "assignments": [],
+  "capabilities": {"default_policy_identity": "hardware_confirmation_required"}
+}

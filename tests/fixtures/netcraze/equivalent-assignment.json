@@ -1,0 +1,14 @@
+{
+  "schema": "routerkit.netcraze.state.fixture.v1",
+  "snapshot_id": "synthetic-equivalent-assignment",
+  "state": "supported",
+  "stale": false,
+  "default_policy": {"status": "known", "observed_ref": "policy-default"},
+  "connections": [{"id": "connection-1082", "name": "RouterKit-SOCKS-1082", "protocol": "socks5", "host": "127.0.0.1", "port": 1082, "auth_mode": "none", "enabled": true, "semantic_complete": true}],
+  "policies": [
+    {"id": "policy-default", "name": "Synthetic-Default", "connection_ref": "synthetic-uplink", "mode": "default", "is_default": true, "semantic_complete": true, "unrelated_rules": true},
+    {"id": "policy-1082", "name": "RouterKit-Policy-1082", "connection_ref": "connection-1082", "mode": "proxy_only", "is_default": false, "semantic_complete": true, "unrelated_rules": false}
+  ],
+  "assignments": [{"device_mac": "02:00:5e:00:00:10", "policy_ref": "policy-1082"}],
+  "capabilities": {}
+}

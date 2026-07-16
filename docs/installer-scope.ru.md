@@ -28,6 +28,7 @@
 - выполнить healthcheck;
 - с явным `setup --apply --enable-autostart` или `install --apply --enable-autostart` включить только `S23xray-direct` после healthcheck и строгой runtime verification;
 - с явным `setup --discover-devices` запустить read-only fixture-first device discovery и optional no-write selection после strict planning;
+- с явными `setup --plan-netcraze --netcraze-state-file PATH` запустить защищённый fixture-first план connections/policies/optional assignment до confirmation, без Netcraze write;
 - вывести точные шаги для Web UI proxy connections и policies.
 
 ## Что не входит в первую версию guided installer
@@ -50,4 +51,4 @@
 
 Подготовка USB, установка Entware, компоненты прошивки и назначение Web UI policies зависят от модели, прошивки и конкретной домашней сети. Эти шаги могут быть разрушительными, если автоматизировать их вслепую.
 
-Установщик должен fail closed: если prerequisites не выполнены, он должен остановиться, а не угадывать. Package additions явного bootstrap могут остаться, а Xray replacement имеет отдельную проверенную границу backup/rollback. Autostart enable не является шагом firewall, Web UI, policy, default-policy, device-discovery или reboot validation. Fixture-first device discovery не является policy или assignment write. Hardware validation остаётся в #16.
+Установщик должен fail closed: если prerequisites не выполнены, он должен остановиться, а не угадывать. Package additions явного bootstrap могут остаться, а Xray replacement имеет отдельную проверенную границу backup/rollback. Autostart enable не является шагом firewall, Web UI, policy, default-policy, device-discovery или reboot validation. Fixture-first device discovery и offline план #15 не являются policy или assignment write. Hardware validation остаётся в #16.

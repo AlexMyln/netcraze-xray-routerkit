@@ -1,0 +1,8 @@
+{
+  "schema": "routerkit.local-endpoints.v1",
+  "profiles": [
+    {"slot": 1, "label": "primary", "listen": "127.0.0.1", "port": 1082, "enabled": true, "protocol": "socks5"},
+    {"slot": 2, "label": "fallback-one", "listen": "::1", "port": 1083, "enabled": true, "protocol": "socks5"},
+    {"slot": 3, "label": "fallback-two", "listen": "127.0.0.1", "port": 1084, "enabled": true, "protocol": "socks5"}
+  ]
+}

@@ -30,6 +30,8 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Fixture-first Netcraze policy planning with a secret-safe local-endpoint manifest, strict synthetic router snapshots, exact equivalence/conflict detection, code-owned ownership proofs, default-policy invariants, deterministic fingerprints, local/public renderers, and an in-memory rollback simulator.
+- Standalone and unified `netcraze-plan status|plan|simulate`, explicit plan-only setup integration, an inert #15 hardware-contract packet, EN/RU research and architecture documentation, synthetic fixtures, and focused static/behavioral tests.
 - Read-only `routerkit devices` and `scripts/routerkit-devices.py` with deterministic synthetic inventory normalization, stable-ID deduplication, text/JSON output, public-evidence redaction, and explicit no-assignment selection.
 - Explicit `routerkit setup --discover-devices` fixture/offline stage after strict planning, with no policy writes, proxy writes, active scanning, or device assignment.
 - Device-discovery architecture, interface research, read-only hardware probe packet, synthetic fixtures, focused tests, and CI fixture guards.
@@ -75,6 +77,7 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- The generator atomically publishes an owner-only `routerkit.local-endpoints.v1` manifest containing no upstream VLESS or subscription material.
 - The roadmap documentation now distinguishes fixture-first #21 software readiness from pending target-hardware discovery contract confirmation and #15 assignment writes.
 - `install --apply --enable-autostart` and `setup --apply --enable-autostart` run the explicit autostart stage after healthcheck through the transactional child supervisor; neither performs reboot proof or policy/firewall/Web UI work.
 - The unused autostart receipt is removed from the trust/idempotency boundary; stale receipt state is removed during enable/disable cleanup.
@@ -87,6 +90,8 @@ All notable changes to this project will be documented in this file.
 - Bootstrap plans retain explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`; standalone apply now installs only missing fixed prerequisites, while the initial arm64/aarch64 package names still require hardware validation.
 
 ### Security
+- Protected private-file reads now reject hard-linked files in addition to symlinks, public POSIX permissions, identity changes, excessive size, and invalid UTF-8.
+- Netcraze fixture input cannot grant ownership, update/delete permission, trusted revision, backup success, or live capability; no live Netcraze adapter or apply command exists.
 - HTTPS resolution now uses fixed reviewed special-purpose CIDR tables plus standard-library defense-in-depth checks, rejects IPv4-mapped/NAT64/Teredo/6to4/ORCHID forms conservatively, and preserves ordinary cancellation while attempting bounded best-effort resource cleanup.
 - Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
 

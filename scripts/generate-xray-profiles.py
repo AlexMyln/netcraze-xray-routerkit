@@ -17,7 +17,9 @@ import argparse
 import json
 import os
 import re
+import stat
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -37,6 +39,11 @@ from routerkit_profile_network import (  # noqa: E402
     normalize_https_source_value,
     resolve_https_source,
 )
+
+
+LOCAL_ENDPOINT_MANIFEST = "routerkit-local-endpoints.json"
+LOCAL_ENDPOINT_SCHEMA = "routerkit.local-endpoints.v1"
+SUPPORTED_LOCAL_PORTS = (1082, 1083, 1084)
 
 
 def eprint(*args: Any) -> None:
@@ -214,6 +221,87 @@ def validate_profile_names(profiles: List[Dict[str, Any]]) -> None:
         seen.add(name)
 
 
+def build_local_endpoint_manifest(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not 1 <= len(profiles) <= 3:
+        raise SystemExit("One to three local profiles are required")
+    seen_ports = set()
+    endpoints = []
+    for slot, profile in enumerate(profiles, start=1):
+        port = profile.get("port")
+        if not isinstance(port, int) or isinstance(port, bool) or port not in SUPPORTED_LOCAL_PORTS:
+            raise SystemExit("Profile local SOCKS port is outside the supported scope")
+        if port in seen_ports:
+            raise SystemExit("Duplicate profile local SOCKS port")
+        seen_ports.add(port)
+        endpoints.append(
+            {
+                "slot": slot,
+                "label": profile["name"],
+                "listen": "127.0.0.1",
+                "port": port,
+                "enabled": True,
+                "protocol": "socks5",
+            }
+        )
+    return {"schema": LOCAL_ENDPOINT_SCHEMA, "profiles": endpoints}
+
+
+def write_private_json_atomic(path: Path, value: Dict[str, Any]) -> None:
+    destination = Path(path)
+    encoded = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    if len(encoded) > 32 * 1024:
+        raise SystemExit("Local endpoint manifest exceeds its safety bound")
+    try:
+        existing = destination.lstat()
+    except FileNotFoundError:
+        existing = None
+    except OSError:
+        raise SystemExit("Could not inspect local endpoint manifest destination") from None
+    if existing is not None and (
+        stat.S_ISLNK(existing.st_mode)
+        or not stat.S_ISREG(existing.st_mode)
+        or existing.st_nlink != 1
+    ):
+        raise SystemExit("Local endpoint manifest destination is unsafe")
+
+    fd = -1
+    temporary = None
+    try:
+        fd, temporary_name = tempfile.mkstemp(prefix=".routerkit-endpoints-", dir=str(destination.parent))
+        temporary = Path(temporary_name)
+        if os.name == "posix":
+            os.fchmod(fd, 0o600)
+        offset = 0
+        while offset < len(encoded):
+            written = os.write(fd, encoded[offset:])
+            if written <= 0:
+                raise OSError("short write")
+            offset += written
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        temporary_metadata = temporary.lstat()
+        if not stat.S_ISREG(temporary_metadata.st_mode) or temporary_metadata.st_nlink != 1:
+            raise OSError("unsafe temporary file")
+        os.replace(temporary, destination)
+        temporary = None
+        if os.name == "posix":
+            os.chmod(destination, 0o600)
+    except OSError:
+        raise SystemExit("Could not write local endpoint manifest safely") from None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profiles", required=True, help="Path to profiles JSON")
@@ -257,6 +345,11 @@ def main() -> int:
     for filename, data in files.items():
         (out_dir / filename).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.chmod(out_dir / filename, 0o600)
+
+    write_private_json_atomic(
+        out_dir / LOCAL_ENDPOINT_MANIFEST,
+        build_local_endpoint_manifest(profiles),
+    )
 
     eprint(f"Wrote Xray configs to: {out_dir}")
     return 0

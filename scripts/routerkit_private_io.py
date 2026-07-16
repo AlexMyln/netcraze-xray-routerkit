@@ -23,6 +23,8 @@ class PrivateFileEncodingError(PrivateFileError):
 def _validate_private_metadata(metadata: os.stat_result, *, description: str) -> None:
     if not stat.S_ISREG(metadata.st_mode):
         raise PrivateFileError(f"{description} must be a regular, non-symlink file.")
+    if metadata.st_nlink != 1:
+        raise PrivateFileError(f"{description} must not have hard links.")
     if os.name == "posix" and stat.S_IMODE(metadata.st_mode) & 0o077:
         raise PrivateFileError(f"{description} permissions must be owner-only on POSIX.")
 
