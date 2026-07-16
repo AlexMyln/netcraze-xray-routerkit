@@ -45,6 +45,51 @@ def one_profile_manifest():
     )
 
 
+def find_simulator_api_signature_violations(source):
+    tree = ast.parse(source)
+    simulators = [
+        item
+        for item in tree.body
+        if isinstance(item, ast.FunctionDef)
+        and item.name == "simulate_change_plan"
+    ]
+    if len(simulators) != 1:
+        return ["simulate_change_plan must have exactly one top-level definition"]
+
+    arguments = simulators[0].args
+    violations = []
+    if arguments.posonlyargs:
+        violations.append("positional-only parameters are forbidden")
+    if [item.arg for item in arguments.args] != ["plan", "snapshot"]:
+        violations.append("positional parameters must be exactly plan and snapshot")
+    if arguments.vararg is not None:
+        violations.append("variadic positional parameters are forbidden")
+    if arguments.kwarg is not None:
+        violations.append("variadic keyword parameters are forbidden")
+    if [item.arg for item in arguments.kwonlyargs] != [
+        "fail_after",
+        "rollback_failure",
+    ]:
+        violations.append(
+            "keyword-only parameters must be exactly fail_after and rollback_failure"
+        )
+    if len(arguments.kw_defaults) != 2:
+        violations.append("exactly two keyword-only defaults are required")
+    else:
+        fail_after_default, rollback_failure_default = arguments.kw_defaults
+        if not (
+            isinstance(fail_after_default, ast.Constant)
+            and fail_after_default.value is None
+        ):
+            violations.append("fail_after must default to None")
+        if not (
+            isinstance(rollback_failure_default, ast.Constant)
+            and rollback_failure_default.value is False
+        ):
+            violations.append("rollback_failure must default to False")
+    return violations
+
+
 class ManifestContractTests(unittest.TestCase):
     def test_valid_manifest_accepts_ipv4_ipv6_and_expected_ports(self):
         manifest = plan.parse_local_endpoint_manifest(fixture("local-endpoints.json"))
@@ -686,10 +731,189 @@ class StaticGuardTests(unittest.TestCase):
                 self.assertTrue(find_live_execution_guard_violations(source))
         self.assertEqual(find_live_execution_guard_violations("import json\nvalue = json.loads('{}')"), [])
 
+    def test_simulator_api_signature_guard_rejects_hidden_channels(self):
+        def source_for(signature):
+            return "def simulate_change_plan({}):\n    pass\n".format(signature)
+
+        safe_control = (
+            "plan, snapshot, *, fail_after=None, rollback_failure=False"
+        )
+        mutations = {
+            "kwargs": safe_control + ", **kwargs",
+            "varargs": (
+                "plan, snapshot, *args, fail_after=None, "
+                "rollback_failure=False"
+            ),
+            "varargs_and_kwargs": (
+                "plan, snapshot, *args, fail_after=None, "
+                "rollback_failure=False, **kwargs"
+            ),
+            "manifest_keyword_only": safe_control + ", manifest=None",
+            "profiles_keyword_only": safe_control + ", profiles=None",
+            "options_keyword_only": safe_control + ", options=None",
+            "renamed_fail_after": (
+                "plan, snapshot, *, failure_after=None, "
+                "rollback_failure=False"
+            ),
+            "renamed_rollback_failure": (
+                "plan, snapshot, *, fail_after=None, rollback_failed=False"
+            ),
+            "missing_fail_after_default": (
+                "plan, snapshot, *, fail_after, rollback_failure=False"
+            ),
+            "missing_rollback_failure_default": (
+                "plan, snapshot, *, fail_after=None, rollback_failure"
+            ),
+            "changed_rollback_failure_default": (
+                "plan, snapshot, *, fail_after=None, rollback_failure=True"
+            ),
+            "third_positional_manifest": (
+                "plan, snapshot, manifest, *, fail_after=None, "
+                "rollback_failure=False"
+            ),
+            "hidden_positional_only": (
+                "hidden, /, plan, snapshot, *, fail_after=None, "
+                "rollback_failure=False"
+            ),
+            "reordered_keyword_only": (
+                "plan, snapshot, *, rollback_failure=False, fail_after=None"
+            ),
+        }
+
+        self.assertEqual(
+            find_simulator_api_signature_violations(source_for(safe_control)),
+            [],
+        )
+        for label, signature in mutations.items():
+            with self.subTest(label=label):
+                self.assertTrue(
+                    find_simulator_api_signature_violations(
+                        source_for(signature)
+                    )
+                )
+
+    def test_simulator_runtime_signature_and_rejected_calls_are_exact(self):
+        signature = inspect.signature(plan.simulate_change_plan)
+        self.assertEqual(
+            [
+                (item.name, item.kind, item.default)
+                for item in signature.parameters.values()
+            ],
+            [
+                (
+                    "plan",
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.empty,
+                ),
+                (
+                    "snapshot",
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.empty,
+                ),
+                ("fail_after", inspect.Parameter.KEYWORD_ONLY, None),
+                ("rollback_failure", inspect.Parameter.KEYWORD_ONLY, False),
+            ],
+        )
+        self.assertFalse(
+            any(
+                item.kind
+                in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                )
+                for item in signature.parameters.values()
+            )
+        )
+
+        snapshot = plan.parse_router_state_snapshot(
+            fixture("empty-clean-state.json")
+        )
+        change = plan.build_change_plan(one_profile_manifest(), snapshot)
+        snapshot_fingerprint = plan.snapshot_semantic_fingerprint(snapshot)
+        rejected_calls = {
+            "manifest_keyword": lambda: plan.simulate_change_plan(
+                change, snapshot, manifest=object()
+            ),
+            "expanded_manifest_keyword": lambda: plan.simulate_change_plan(
+                change, snapshot, **{"manifest": object()}
+            ),
+            "legacy_manifest_keyword": lambda: plan.simulate_change_plan(
+                change, snapshot, legacy_manifest=object()
+            ),
+            "options_keyword": lambda: plan.simulate_change_plan(
+                change, snapshot, options={"manifest": object()}
+            ),
+            "third_positional": lambda: plan.simulate_change_plan(
+                change, snapshot, object()
+            ),
+            "four_positional": lambda: plan.simulate_change_plan(
+                change, snapshot, None, False
+            ),
+        }
+        with mock.patch.object(
+            plan,
+            "validate_snapshot_consistency",
+            side_effect=AssertionError("simulator body must not be entered"),
+        ):
+            for label, rejected_call in rejected_calls.items():
+                with self.subTest(label=label), self.assertRaises(TypeError):
+                    rejected_call()
+        self.assertEqual(
+            plan.snapshot_semantic_fingerprint(snapshot),
+            snapshot_fingerprint,
+        )
+
+    def test_simulator_exact_signature_preserves_supported_calls(self):
+        snapshot = plan.parse_router_state_snapshot(
+            fixture("empty-clean-state.json")
+        )
+        change = plan.build_change_plan(one_profile_manifest(), snapshot)
+        snapshot_fingerprint = plan.snapshot_semantic_fingerprint(snapshot)
+
+        for label, result in (
+            ("default", plan.simulate_change_plan(change, snapshot)),
+            (
+                "explicit_fail_after",
+                plan.simulate_change_plan(change, snapshot, fail_after=None),
+            ),
+            (
+                "explicit_rollback_failure",
+                plan.simulate_change_plan(
+                    change, snapshot, rollback_failure=False
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                self.assertTrue(result.success)
+
+        failure = plan.simulate_change_plan(
+            change,
+            snapshot,
+            fail_after="01:connection",
+        )
+        self.assertFalse(failure.success)
+        self.assertTrue(failure.rollback_succeeded)
+        self.assertTrue(failure.restored_initial_state)
+
+        rollback_failure = plan.simulate_change_plan(
+            change,
+            snapshot,
+            fail_after="01:connection",
+            rollback_failure=True,
+        )
+        self.assertFalse(rollback_failure.success)
+        self.assertFalse(rollback_failure.rollback_succeeded)
+        self.assertEqual(rollback_failure.error_category, "rollback_failure")
+        self.assertEqual(
+            plan.snapshot_semantic_fingerprint(snapshot),
+            snapshot_fingerprint,
+        )
+
     def test_semantic_binding_guard_covers_simulator_selected_input_and_public_evidence(self):
         source = (SCRIPTS / "routerkit_netcraze_plan.py").read_text(
             encoding="utf-8"
         )
+        self.assertEqual(find_simulator_api_signature_violations(source), [])
         tree = ast.parse(source)
         functions = {
             item.name: item
@@ -697,10 +921,6 @@ class StaticGuardTests(unittest.TestCase):
             if isinstance(item, ast.FunctionDef)
         }
         simulator = functions["simulate_change_plan"]
-        self.assertEqual(
-            [item.arg for item in simulator.args.args],
-            ["plan", "snapshot"],
-        )
         simulator_calls = {
             node.func.id
             for node in ast.walk(simulator)
