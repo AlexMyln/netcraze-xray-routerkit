@@ -1,0 +1,1607 @@
+{
+  "schema": "routerkit.netcraze.hardware-canary.v1",
+  "packet_version": 1,
+  "released_baseline": "v0.2.0-alpha.16",
+  "expected_main": "c8f697635c93584e85e76a1d734f8fa797a76b51",
+  "target_scope": {
+    "planned_model": {
+      "value": "Netcraze Hopper 4G+ NC-2312",
+      "status": "expected_unverified"
+    },
+    "planned_firmware": {
+      "value": "5.00.C.12.0-0",
+      "status": "expected_unverified"
+    },
+    "planned_architecture": {
+      "value": "aarch64",
+      "status": "expected_unverified"
+    },
+    "planned_storage": {
+      "value": "EXT4 USB with Entware mounted under /opt",
+      "status": "expected_unverified"
+    },
+    "observed_target_policy": {
+      "mismatch_action": "stop_and_record_private_category",
+      "support_expansion": "prohibited_without_separate_review"
+    }
+  },
+  "global_invariants": [
+    {
+      "id": "I_NO_WRAPPER_START",
+      "description": "Do not invoke any external wrapper that changes routing behavior."
+    },
+    {
+      "id": "I_NO_TRANSPARENT_ROUTING",
+      "description": "Do not add transparent-routing or firewall rules."
+    },
+    {
+      "id": "I_DEFAULT_POLICY_IMMUTABLE",
+      "description": "The canonical default or global policy projection must remain unchanged."
+    },
+    {
+      "id": "I_UNRELATED_STATE_IMMUTABLE",
+      "description": "Unrelated connections, policies, assignments, and configuration must remain unchanged."
+    },
+    {
+      "id": "I_EXPLICIT_DEVICE_SELECTION",
+      "description": "No device is selected implicitly and no assignment is based only on an address."
+    },
+    {
+      "id": "I_LOOPBACK_LISTENERS",
+      "description": "Local Xray listeners remain loopback-only at 127.0.0.1 ports 1082, 1083, and 1084."
+    },
+    {
+      "id": "I_EXPECTED_RUNTIME",
+      "description": "The expected runtime paths are /opt/sbin/xray and /opt/etc/init.d/S23xray-direct."
+    },
+    {
+      "id": "I_LEGACY_INIT_DISABLED",
+      "description": "The legacy S24xray init entry remains disabled."
+    },
+    {
+      "id": "I_WRITE_GATES",
+      "description": "Every write requires observed state, explicit authorization, backup, preconditions, verification, and rollback."
+    },
+    {
+      "id": "I_STOP_ON_FIRST_FAILURE",
+      "description": "Stop forward progress on the first failed or ambiguous check and preserve cleanup time."
+    },
+    {
+      "id": "I_NO_HARDWARE_CLAIM",
+      "description": "No hardware-tested or live-contract-confirmed claim is allowed before the hardware matrix passes."
+    }
+  ],
+  "session_budget": {
+    "hard_session_ceiling_minutes": 120,
+    "cleanup_reserve_minutes": 15,
+    "patch_reentry_minimum_reserve_minutes": 30
+  },
+  "phases": [
+    {
+      "id": "P0_OPERATOR_PREFLIGHT",
+      "category": "offline",
+      "dependencies": [],
+      "estimated_minutes": 5,
+      "hard_timeout_minutes": 10,
+      "optional": false,
+      "required_operator_authorization": "none",
+      "required_inputs": [
+        "exact released repository baseline",
+        "private evidence location plan",
+        "planned session window and cleanup reserve"
+      ],
+      "checks": [
+        {
+          "id": "P0_BASELINE",
+          "description": "Verify release, tag, commit, packet version, and clean operator checkout.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "baseline_metadata",
+          "public_field": "baseline_verified"
+        },
+        {
+          "id": "P0_AUTHORITY",
+          "description": "Confirm owner authorization, recovery authority, and a non-production-critical device window.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "operator_decision",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P0_PRIVACY",
+          "description": "Confirm private evidence permissions, no public terminal recording, and no repository evidence placement.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "operator_decision",
+          "public_field": "phase_result"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_BASELINE_MISMATCH",
+        "S_AUTHORIZATION_MISSING",
+        "S_PRIVATE_EVIDENCE_UNSAFE",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "baseline_metadata",
+        "operator_decision"
+      ],
+      "public_evidence_fields": [
+        "baseline_verified",
+        "phase_result"
+      ],
+      "rollback_check_ids": [],
+      "completion_criteria": [
+        "all preflight checks pass",
+        "the cleanup reserve is protected"
+      ]
+    },
+    {
+      "id": "P1_READ_ONLY_PLATFORM_INVENTORY",
+      "category": "read_only_hardware",
+      "dependencies": [
+        "P0_OPERATOR_PREFLIGHT"
+      ],
+      "estimated_minutes": 5,
+      "hard_timeout_minutes": 10,
+      "optional": false,
+      "required_operator_authorization": "read_only_session",
+      "required_inputs": [
+        "authorized local administrative access",
+        "known backup and recovery availability"
+      ],
+      "checks": [
+        {
+          "id": "P1_TARGET",
+          "description": "Record observed model, firmware, architecture, and storage categories separately from planned values.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "target_inventory",
+          "public_field": "target_match"
+        },
+        {
+          "id": "P1_PLATFORM",
+          "description": "Record generic kernel, tool, mount, Entware, Xray, init, listener, and RouterKit artifact categories.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "medium",
+          "evidence_category": "target_inventory",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P1_MANAGEMENT",
+          "description": "Record management-interface and authentication-mode categories without retaining secret material.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "interface_contract",
+          "public_field": "interface_category"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_UNEXPECTED_TARGET",
+        "S_SENSITIVE_SPILLOVER",
+        "S_AUTHORIZATION_MISSING",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "target_inventory",
+        "interface_contract"
+      ],
+      "public_evidence_fields": [
+        "target_match",
+        "phase_result",
+        "interface_category"
+      ],
+      "rollback_check_ids": [],
+      "completion_criteria": [
+        "the observed target is either an exact planned match or the session stops without scope expansion",
+        "backup and recovery availability are known"
+      ]
+    },
+    {
+      "id": "P2_READ_ONLY_DEVICE_DISCOVERY_CONTRACT",
+      "category": "read_only_hardware",
+      "dependencies": [
+        "P1_READ_ONLY_PLATFORM_INVENTORY"
+      ],
+      "estimated_minutes": 10,
+      "hard_timeout_minutes": 15,
+      "optional": false,
+      "required_operator_authorization": "read_only_session",
+      "required_inputs": [
+        "confirmed read-only management boundary",
+        "private evidence manifest"
+      ],
+      "checks": [
+        {
+          "id": "P2_SCHEMAS",
+          "description": "Capture the minimum DHCP, association, client-summary, corroboration, and policy-visibility schema categories.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "interface_contract",
+          "public_field": "interface_category"
+        },
+        {
+          "id": "P2_JOIN",
+          "description": "Confirm stable identity, source precedence, joins, duplicate behavior, stale behavior, and online state.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "interface_contract",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P2_UI",
+          "description": "Compare the sanitized semantic result with the local management UI.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "medium",
+          "evidence_category": "interface_contract",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P2_ERRORS",
+          "description": "Classify authentication and error outcomes without publishing local identifiers.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "medium",
+          "evidence_category": "interface_contract",
+          "public_field": "limitations"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_INTERFACE_AMBIGUOUS",
+        "S_SENSITIVE_SPILLOVER",
+        "S_VERIFICATION_MISMATCH",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "interface_contract"
+      ],
+      "public_evidence_fields": [
+        "interface_category",
+        "phase_result",
+        "limitations"
+      ],
+      "rollback_check_ids": [],
+      "completion_criteria": [
+        "the device discovery read contract is pass or explicitly partial",
+        "no write has occurred"
+      ]
+    },
+    {
+      "id": "P3_READ_ONLY_POLICY_CONTRACT",
+      "category": "read_only_hardware",
+      "dependencies": [
+        "P2_READ_ONLY_DEVICE_DISCOVERY_CONTRACT"
+      ],
+      "estimated_minutes": 10,
+      "hard_timeout_minutes": 15,
+      "optional": false,
+      "required_operator_authorization": "read_only_session",
+      "required_inputs": [
+        "confirmed scoped read boundary",
+        "private evidence manifest",
+        "backup and restore availability"
+      ],
+      "checks": [
+        {
+          "id": "P3_INVENTORY",
+          "description": "Capture connection, policy, device-assignment, and default-policy inventory schema categories.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "counts"
+        },
+        {
+          "id": "P3_IDENTIFIERS",
+          "description": "Confirm name uniqueness, stable identifiers, ownership markers, and revision or state preconditions.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "interface_contract",
+          "public_field": "interface_category"
+        },
+        {
+          "id": "P3_BACKUP",
+          "description": "Confirm backup or export, save behavior, verification readback, and rollback mechanism categories.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "backup_metadata",
+          "public_field": "rollback_result"
+        },
+        {
+          "id": "P3_DEFAULT",
+          "description": "Prove an unambiguous canonical default-policy identity before any write decision.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_BACKUP_UNAVAILABLE",
+        "S_DEFAULT_POLICY_AMBIGUOUS",
+        "S_REVISION_OR_PRECONDITION_MISSING",
+        "S_INTERFACE_AMBIGUOUS",
+        "S_SENSITIVE_SPILLOVER",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "router_state_projection",
+        "interface_contract",
+        "backup_metadata"
+      ],
+      "public_evidence_fields": [
+        "counts",
+        "interface_category",
+        "rollback_result",
+        "default_policy_unchanged"
+      ],
+      "rollback_check_ids": [],
+      "completion_criteria": [
+        "all required read fields are captured",
+        "default policy identity is unambiguous",
+        "backup and rollback categories are confirmed"
+      ]
+    },
+    {
+      "id": "P4_OFF_DEVICE_COMPATIBILITY_DECISION",
+      "category": "offline",
+      "dependencies": [
+        "P3_READ_ONLY_POLICY_CONTRACT"
+      ],
+      "estimated_minutes": 5,
+      "hard_timeout_minutes": 10,
+      "optional": false,
+      "required_operator_authorization": "none",
+      "required_inputs": [
+        "sanitized read-contract findings",
+        "remaining session and cleanup budget"
+      ],
+      "checks": [
+        {
+          "id": "P4_DECISION",
+          "description": "Choose exactly GO_WITH_EXISTING_ALPHA16_CONTRACT, OFF_DEVICE_NARROW_PATCH_REQUIRED, or STOP_UNSUPPORTED_OR_AMBIGUOUS.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "operator_decision",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P4_PATCH_SCOPE",
+          "description": "If required, constrain the patch to one observed schema mapping, capability check, or disabled disposable serialization boundary.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "operator_decision",
+          "public_field": "limitations"
+        },
+        {
+          "id": "P4_REENTRY",
+          "description": "Permit hardware reentry only after focused and full offline checks, delta review, authorization, and preserved cleanup reserve.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "operator_decision",
+          "public_field": "phase_result"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_UNSUPPORTED_OR_AMBIGUOUS",
+        "S_REVISION_OR_PRECONDITION_MISSING",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "operator_decision"
+      ],
+      "public_evidence_fields": [
+        "phase_result",
+        "limitations"
+      ],
+      "rollback_check_ids": [],
+      "completion_criteria": [
+        "one exact compatibility decision is recorded",
+        "no router-side patching occurs"
+      ]
+    },
+    {
+      "id": "P5_DISPOSABLE_CONNECTION_CANARY",
+      "category": "authorized_disposable_write",
+      "dependencies": [
+        "P4_OFF_DEVICE_COMPATIBILITY_DECISION"
+      ],
+      "estimated_minutes": 10,
+      "hard_timeout_minutes": 15,
+      "optional": false,
+      "required_operator_authorization": "explicit_disposable_write",
+      "required_inputs": [
+        "GO decision",
+        "fresh state and preconditions",
+        "verified backup",
+        "synthetic collision-checked name"
+      ],
+      "checks": [
+        {
+          "id": "P5_CREATE",
+          "description": "Create one disposable local SOCKS connection only under the confirmed contract.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P5_READBACK",
+          "description": "Verify exact semantic readback and expected object counts.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "counts"
+        },
+        {
+          "id": "P5_DEFAULT_POLICY_AUDIT",
+          "description": "Prove the canonical default-policy projection is unchanged after create and remove.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        },
+        {
+          "id": "P5_REMOVE",
+          "description": "Remove the disposable connection and verify unrelated state is unchanged.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "unrelated_state_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_AUTHORIZATION_MISSING",
+        "S_BACKUP_UNAVAILABLE",
+        "S_REVISION_OR_PRECONDITION_MISSING",
+        "S_VERIFICATION_MISMATCH",
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "disposable_object_state",
+        "router_state_projection"
+      ],
+      "public_evidence_fields": [
+        "phase_result",
+        "counts",
+        "default_policy_unchanged",
+        "unrelated_state_unchanged"
+      ],
+      "rollback_check_ids": [
+        "P5_REMOVE",
+        "P5_DEFAULT_POLICY_AUDIT"
+      ],
+      "completion_criteria": [
+        "create and readback pass",
+        "removal is verified",
+        "default and unrelated state are unchanged"
+      ]
+    },
+    {
+      "id": "P6_DISPOSABLE_POLICY_CANARY",
+      "category": "authorized_disposable_write",
+      "dependencies": [
+        "P5_DISPOSABLE_CONNECTION_CANARY"
+      ],
+      "estimated_minutes": 10,
+      "hard_timeout_minutes": 15,
+      "optional": false,
+      "required_operator_authorization": "explicit_disposable_write",
+      "required_inputs": [
+        "passed disposable connection contract",
+        "fresh state and preconditions",
+        "verified backup",
+        "synthetic collision-checked name"
+      ],
+      "checks": [
+        {
+          "id": "P6_CREATE",
+          "description": "Create one disposable non-default policy that references only the disposable connection.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P6_READBACK",
+          "description": "Verify exact policy and connection-reference semantics.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "counts"
+        },
+        {
+          "id": "P6_DEFAULT_POLICY_AUDIT",
+          "description": "Prove the canonical default-policy projection is unchanged after create and remove.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        },
+        {
+          "id": "P6_REMOVE",
+          "description": "Remove the disposable policy and connection and verify unrelated state.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "unrelated_state_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_AUTHORIZATION_MISSING",
+        "S_BACKUP_UNAVAILABLE",
+        "S_REVISION_OR_PRECONDITION_MISSING",
+        "S_VERIFICATION_MISMATCH",
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "disposable_object_state",
+        "router_state_projection"
+      ],
+      "public_evidence_fields": [
+        "phase_result",
+        "counts",
+        "default_policy_unchanged",
+        "unrelated_state_unchanged"
+      ],
+      "rollback_check_ids": [
+        "P6_REMOVE",
+        "P6_DEFAULT_POLICY_AUDIT"
+      ],
+      "completion_criteria": [
+        "policy create and readback pass",
+        "all disposable objects are removed",
+        "default and unrelated state are unchanged"
+      ]
+    },
+    {
+      "id": "P7_OPTIONAL_DISPOSABLE_ASSIGNMENT_CANARY",
+      "category": "authorized_disposable_write",
+      "dependencies": [
+        "P6_DISPOSABLE_POLICY_CANARY"
+      ],
+      "estimated_minutes": 5,
+      "hard_timeout_minutes": 10,
+      "optional": true,
+      "required_operator_authorization": "explicit_disposable_write",
+      "required_inputs": [
+        "explicit expendable client selection",
+        "trusted stable device identity",
+        "recorded prior assignment"
+      ],
+      "checks": [
+        {
+          "id": "P7_ASSIGN",
+          "description": "Assign only an explicitly selected expendable client under the confirmed relationship contract.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P7_READBACK",
+          "description": "Verify the selected client and policy relationship without publishing local identity.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "counts"
+        },
+        {
+          "id": "P7_DEFAULT_POLICY_AUDIT",
+          "description": "Prove the canonical default-policy projection is unchanged after assignment and restore.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        },
+        {
+          "id": "P7_RESTORE",
+          "description": "Restore the exact prior assignment and verify unrelated assignments are unchanged.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "disposable_object_state",
+          "public_field": "unrelated_state_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_AUTHORIZATION_MISSING",
+        "S_REVISION_OR_PRECONDITION_MISSING",
+        "S_VERIFICATION_MISMATCH",
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "disposable_object_state",
+        "router_state_projection"
+      ],
+      "public_evidence_fields": [
+        "phase_result",
+        "counts",
+        "default_policy_unchanged",
+        "unrelated_state_unchanged"
+      ],
+      "rollback_check_ids": [
+        "P7_RESTORE",
+        "P7_DEFAULT_POLICY_AUDIT"
+      ],
+      "completion_criteria": [
+        "the optional phase is explicitly skipped or fully restored",
+        "no production-critical client is moved"
+      ]
+    },
+    {
+      "id": "P8_FULL_ROUTERKIT_INSTALL_CANARY",
+      "category": "full_canary",
+      "dependencies": [
+        "P6_DISPOSABLE_POLICY_CANARY"
+      ],
+      "estimated_minutes": 15,
+      "hard_timeout_minutes": 25,
+      "optional": false,
+      "required_operator_authorization": "explicit_full_canary",
+      "required_inputs": [
+        "passed disposable connection and policy contracts",
+        "released alpha.16 checkout",
+        "documented prerequisite state",
+        "verified backup"
+      ],
+      "checks": [
+        {
+          "id": "P8_PREREQUISITES",
+          "description": "Verify the documented manual storage and Entware prerequisite state.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "setup_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P8_CLEAN_PLAN",
+          "description": "Run the released offline plan and explicit setup path with no hidden Netcraze apply.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "setup_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P8_RUNTIME",
+          "description": "Verify pinned binary identity, generated configuration, expected runtime path, and health checks.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "setup_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P8_LISTENERS",
+          "description": "Verify all selected listeners are loopback-only.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "setup_result",
+          "public_field": "loopback_only"
+        },
+        {
+          "id": "P8_DISCOVERY_PLAN",
+          "description": "Verify device discovery and Netcraze planning remain explicit and separate from live apply.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "setup_result",
+          "public_field": "limitations"
+        },
+        {
+          "id": "P8_EGRESS",
+          "description": "Verify selected local profiles reach the expected generic egress category without publishing secret values.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "setup_result",
+          "public_field": "egress_result"
+        },
+        {
+          "id": "P8_DEFAULT_POLICY_AUDIT",
+          "description": "Prove default policy and unrelated router state remain unchanged.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_AUTHORIZATION_MISSING",
+        "S_BACKUP_UNAVAILABLE",
+        "S_VERIFICATION_MISMATCH",
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "setup_result",
+        "router_state_projection"
+      ],
+      "public_evidence_fields": [
+        "phase_result",
+        "loopback_only",
+        "limitations",
+        "egress_result",
+        "default_policy_unchanged"
+      ],
+      "rollback_check_ids": [
+        "P10_INSTALL_ROLLBACK",
+        "P10_HEALTHCHECK_ROLLBACK"
+      ],
+      "completion_criteria": [
+        "the released software path passes",
+        "live interface prototype proof remains a separately reviewed claim",
+        "no final one-command hardware-tested claim is made"
+      ]
+    },
+    {
+      "id": "P9_IDEMPOTENT_RERUN",
+      "category": "full_canary",
+      "dependencies": [
+        "P8_FULL_ROUTERKIT_INSTALL_CANARY"
+      ],
+      "estimated_minutes": 5,
+      "hard_timeout_minutes": 10,
+      "optional": false,
+      "required_operator_authorization": "explicit_full_canary",
+      "required_inputs": [
+        "successful first full software-path canary"
+      ],
+      "checks": [
+        {
+          "id": "P9_RERUN",
+          "description": "Repeat the supported setup path and verify exact reuse with no duplicate artifacts.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "setup_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P9_PROFILE_UPDATE",
+          "description": "Exercise one bounded profile update over the existing installation and verify the documented transaction boundary.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "setup_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P9_DEFAULT_POLICY_AUDIT",
+          "description": "Prove no implicit assignment, duplicate policy, default-policy delta, or unrelated-state delta.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_VERIFICATION_MISMATCH",
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "setup_result",
+        "router_state_projection"
+      ],
+      "public_evidence_fields": [
+        "phase_result",
+        "default_policy_unchanged"
+      ],
+      "rollback_check_ids": [
+        "P10_INSTALL_ROLLBACK",
+        "P10_HEALTHCHECK_ROLLBACK"
+      ],
+      "completion_criteria": [
+        "rerun creates no duplicate configuration, connection, policy, or assignment",
+        "listener and default-policy invariants remain stable"
+      ]
+    },
+    {
+      "id": "P10_FAILURE_AND_ROLLBACK",
+      "category": "full_canary",
+      "dependencies": [
+        "P9_IDEMPOTENT_RERUN"
+      ],
+      "estimated_minutes": 10,
+      "hard_timeout_minutes": 20,
+      "optional": false,
+      "required_operator_authorization": "explicit_full_canary",
+      "required_inputs": [
+        "reviewed low-risk failure injection plan",
+        "verified backup",
+        "remaining cleanup reserve"
+      ],
+      "checks": [
+        {
+          "id": "P10_PLAN_FAILURE",
+          "description": "Prove a safe planning failure stops before mutation.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "medium",
+          "evidence_category": "failure_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P10_BOOTSTRAP_PRECONDITION_FAILURE",
+          "description": "Prove a bootstrap precondition failure stops before replacement.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "failure_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P10_PREFLIGHT_FAILURE",
+          "description": "Prove a router preflight failure stops before backup, install, autostart, or disposable policy work.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "failure_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P10_BACKUP_GATE_FAILURE",
+          "description": "Prove backup-gate failure blocks all later mutation.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "failure_result",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P10_INSTALL_ROLLBACK",
+          "description": "Inject a safe install-staging failure and verify rollback or clean-install removal.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "failure_result",
+          "public_field": "rollback_result"
+        },
+        {
+          "id": "P10_AUTOSTART_FAILURE",
+          "description": "Prove an autostart precondition or verification failure stops and preserves the reviewed runtime boundary.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "failure_result",
+          "public_field": "rollback_result"
+        },
+        {
+          "id": "P10_HEALTHCHECK_ROLLBACK",
+          "description": "Inject a safe healthcheck failure and follow the documented recovery decision.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "failure_result",
+          "public_field": "rollback_result"
+        },
+        {
+          "id": "P10_DISPOSABLE_WRITE_FAILURES",
+          "description": "Prove connection, policy, and optional assignment failures stop forward progress and restore prior state.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "failure_result",
+          "public_field": "rollback_result"
+        },
+        {
+          "id": "P10_DEFAULT_POLICY_AUDIT",
+          "description": "Prove every failure and rollback leaves the default and unrelated state unchanged.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_VERIFICATION_MISMATCH",
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "failure_result",
+        "router_state_projection"
+      ],
+      "public_evidence_fields": [
+        "phase_result",
+        "rollback_result",
+        "default_policy_unchanged"
+      ],
+      "rollback_check_ids": [
+        "P10_INSTALL_ROLLBACK",
+        "P10_HEALTHCHECK_ROLLBACK",
+        "P10_DISPOSABLE_WRITE_FAILURES",
+        "P10_DEFAULT_POLICY_AUDIT"
+      ],
+      "completion_criteria": [
+        "all applicable low-risk failures are covered",
+        "no destructive failure is injected only to fill the matrix",
+        "rollback is proven or the session ends in manual recovery"
+      ]
+    },
+    {
+      "id": "P11_REBOOT_AND_RECOVERY",
+      "category": "full_canary",
+      "dependencies": [
+        "P10_FAILURE_AND_ROLLBACK"
+      ],
+      "estimated_minutes": 10,
+      "hard_timeout_minutes": 20,
+      "optional": false,
+      "required_operator_authorization": "explicit_full_canary",
+      "required_inputs": [
+        "passed prior phases",
+        "verified backup and recovery path",
+        "stable power",
+        "remaining cleanup reserve"
+      ],
+      "checks": [
+        {
+          "id": "P11_REBOOT",
+          "description": "Perform the separately authorized reboot and record the generic result category.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "reboot_state",
+          "public_field": "reboot_result"
+        },
+        {
+          "id": "P11_RUNTIME_RECOVERY",
+          "description": "Verify storage, expected Xray process, loopback listeners, reviewed autostart, and disabled legacy init state.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "reboot_state",
+          "public_field": "loopback_only"
+        },
+        {
+          "id": "P11_RERUN",
+          "description": "Repeat the supported read-only verification and idempotent setup checks after reboot.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "reboot_state",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P11_USB_RECOVERY",
+          "description": "If explicitly safe and authorized, exercise storage detach and reattach recovery; otherwise record a limitation.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "reboot_state",
+          "public_field": "limitations"
+        },
+        {
+          "id": "P11_DEFAULT_POLICY_AUDIT",
+          "description": "Prove reboot and recovery do not change default policy or unrelated state.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_AUTHORIZATION_MISSING",
+        "S_VERIFICATION_MISMATCH",
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "reboot_state",
+        "router_state_projection"
+      ],
+      "public_evidence_fields": [
+        "reboot_result",
+        "loopback_only",
+        "phase_result",
+        "limitations",
+        "default_policy_unchanged"
+      ],
+      "rollback_check_ids": [
+        "P11_RUNTIME_RECOVERY",
+        "P11_USB_RECOVERY",
+        "P11_DEFAULT_POLICY_AUDIT"
+      ],
+      "completion_criteria": [
+        "reboot recovery is proven or the exact limitation is recorded",
+        "storage recovery is either safely proven or explicitly skipped"
+      ]
+    },
+    {
+      "id": "P12_FINAL_INVARIANT_AUDIT",
+      "category": "full_canary",
+      "dependencies": [
+        "P11_REBOOT_AND_RECOVERY"
+      ],
+      "estimated_minutes": 5,
+      "hard_timeout_minutes": 10,
+      "optional": false,
+      "required_operator_authorization": "explicit_full_canary",
+      "required_inputs": [
+        "preflight canonical state projection",
+        "final canonical state projection",
+        "phase result matrix"
+      ],
+      "checks": [
+        {
+          "id": "P12_DEFAULT_POLICY_AUDIT",
+          "description": "Compare the final canonical default-policy projection with preflight.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "default_policy_unchanged"
+        },
+        {
+          "id": "P12_UNRELATED_STATE",
+          "description": "Compare unrelated connections, policies, assignments, and configuration with preflight.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "router_state_projection",
+          "public_field": "unrelated_state_unchanged"
+        },
+        {
+          "id": "P12_RUNTIME_INVARIANTS",
+          "description": "Verify loopback-only listeners, reviewed runtime paths, disabled legacy init state, and no prohibited routing markers.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "reboot_state",
+          "public_field": "loopback_only"
+        },
+        {
+          "id": "P12_PRIVACY",
+          "description": "Verify no secret or local identity leaked into public evidence.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "cleanup_state",
+          "public_field": "phase_result"
+        },
+        {
+          "id": "P12_UNSUPPORTED_REJECTION",
+          "description": "Record proof that unsupported architecture, model, or firmware mismatch routes to stop and cleanup.",
+          "outcome_categories": [
+            "pass",
+            "partial",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "failure_result",
+          "public_field": "unsupported_rejected"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_DEFAULT_POLICY_DELTA",
+        "S_UNRELATED_STATE_DELTA",
+        "S_VERIFICATION_MISMATCH",
+        "S_ROLLBACK_UNCERTAIN",
+        "S_CLEANUP_RESERVE_REACHED"
+      ],
+      "private_evidence_categories": [
+        "router_state_projection",
+        "reboot_state",
+        "cleanup_state",
+        "failure_result"
+      ],
+      "public_evidence_fields": [
+        "default_policy_unchanged",
+        "unrelated_state_unchanged",
+        "loopback_only",
+        "phase_result",
+        "unsupported_rejected"
+      ],
+      "rollback_check_ids": [
+        "P13_REMOVE_DISPOSABLE",
+        "P13_RESTORE_ASSIGNMENT",
+        "P13_FINAL_STATE"
+      ],
+      "completion_criteria": [
+        "all invariants pass before public evidence is prepared",
+        "any failed invariant changes the final outcome from pass"
+      ]
+    },
+    {
+      "id": "P13_CLEANUP_AND_DEVICE_RETURN",
+      "category": "cleanup",
+      "dependencies": [
+        "P0_OPERATOR_PREFLIGHT"
+      ],
+      "estimated_minutes": 15,
+      "hard_timeout_minutes": 20,
+      "optional": false,
+      "required_operator_authorization": "cleanup_authority",
+      "required_inputs": [
+        "preflight state projection",
+        "all created disposable object records",
+        "recorded prior assignment",
+        "private evidence retention decision"
+      ],
+      "checks": [
+        {
+          "id": "P13_REMOVE_DISPOSABLE",
+          "description": "Remove every disposable connection, policy, test user, and temporary RouterKit artifact.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "cleanup_state",
+          "public_field": "cleanup_complete"
+        },
+        {
+          "id": "P13_RESTORE_ASSIGNMENT",
+          "description": "Restore the exact prior device assignment or prove that no assignment occurred.",
+          "outcome_categories": [
+            "pass",
+            "skip",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "cleanup_state",
+          "public_field": "cleanup_complete"
+        },
+        {
+          "id": "P13_FINAL_STATE",
+          "description": "Verify default policy, unrelated state, storage, services, locks, process records, and temporary paths are in the expected return state.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "cleanup_state",
+          "public_field": "unrelated_state_unchanged"
+        },
+        {
+          "id": "P13_PRIVATE_EVIDENCE",
+          "description": "Apply the private retention or secure-disposal decision and retain only the manifest needed for review.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "high",
+          "evidence_category": "cleanup_state",
+          "public_field": "cleanup_complete"
+        },
+        {
+          "id": "P13_DEVICE_RETURN",
+          "description": "Record owner notification, observed limitations, final private hash, and physical device return.",
+          "outcome_categories": [
+            "pass",
+            "fail"
+          ],
+          "risk_class": "critical",
+          "evidence_category": "cleanup_state",
+          "public_field": "device_returned"
+        }
+      ],
+      "stop_condition_ids": [
+        "S_ROLLBACK_UNCERTAIN"
+      ],
+      "private_evidence_categories": [
+        "cleanup_state"
+      ],
+      "public_evidence_fields": [
+        "cleanup_complete",
+        "unrelated_state_unchanged",
+        "device_returned"
+      ],
+      "rollback_check_ids": [
+        "P13_REMOVE_DISPOSABLE",
+        "P13_RESTORE_ASSIGNMENT",
+        "P13_FINAL_STATE"
+      ],
+      "completion_criteria": [
+        "all cleanup checks pass",
+        "device return is recorded",
+        "manual recovery is declared if cleanup cannot be proven"
+      ]
+    }
+  ],
+  "stop_conditions": [
+    {
+      "id": "S_BASELINE_MISMATCH",
+      "description": "Repository, release, tag, or packet baseline differs from the approved exact baseline.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_AUTHORIZATION_MISSING",
+      "description": "The required operator authorization is absent or ambiguous.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_UNEXPECTED_TARGET",
+      "description": "Observed target values differ from the planned scope.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_PRIVATE_EVIDENCE_UNSAFE",
+      "description": "Private evidence location, permissions, recording, or retention cannot be kept safe.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_BACKUP_UNAVAILABLE",
+      "description": "A complete backup or tested recovery path is unavailable.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_INTERFACE_AMBIGUOUS",
+      "description": "The scoped read or write interface remains incomplete or ambiguous.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_DEFAULT_POLICY_AMBIGUOUS",
+      "description": "The canonical default-policy identity cannot be proven.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_REVISION_OR_PRECONDITION_MISSING",
+      "description": "Fresh state, stable identity, revision evidence, ownership, or another required precondition is missing.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_SENSITIVE_SPILLOVER",
+      "description": "A scoped read exposes unrelated or secret-bearing material beyond the reviewed evidence boundary.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_VERIFICATION_MISMATCH",
+      "description": "Readback or semantic verification differs from the intended single operation.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_DEFAULT_POLICY_DELTA",
+      "description": "The default-policy projection changes at any point.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_UNRELATED_STATE_DELTA",
+      "description": "Any unrelated connection, policy, assignment, or configuration changes.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_ROLLBACK_UNCERTAIN",
+      "description": "Rollback, removal, restoration, or final cleanup cannot be proven.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_CLEANUP_RESERVE_REACHED",
+      "description": "Continuing would consume the protected cleanup and device-return reserve.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    },
+    {
+      "id": "S_UNSUPPORTED_OR_AMBIGUOUS",
+      "description": "The observed contract is unsupported, ambiguous, or broader than a narrow off-device patch.",
+      "route_to_phase": "P13_CLEANUP_AND_DEVICE_RETURN"
+    }
+  ],
+  "evidence_contract": {
+    "private_manifest_schema": "hardware/netcraze-canary-evidence.v1.schema.json",
+    "public_templates": [
+      "docs/hardware/netcraze-canary-public-evidence-template.md",
+      "docs/hardware/netcraze-canary-public-evidence-template.ru.md"
+    ],
+    "sensitivity_classes": [
+      "public_safe",
+      "local_sensitive",
+      "secret_bearing",
+      "router_backup",
+      "device_inventory",
+      "credential_adjacent"
+    ],
+    "raw_evidence_rules": [
+      "private directory mode is exactly 0700",
+      "private file mode is exactly 0600",
+      "symlinks and hardlinks are rejected",
+      "cloud synchronization is disabled by default",
+      "raw artifacts never enter the repository or public issue attachments",
+      "checksums are recorded before sanitization",
+      "retention or secure disposal is an explicit operator decision"
+    ],
+    "required_categories": [
+      "baseline_metadata",
+      "target_inventory",
+      "interface_contract",
+      "router_state_projection",
+      "backup_metadata",
+      "disposable_object_state",
+      "setup_result",
+      "failure_result",
+      "reboot_state",
+      "cleanup_state",
+      "operator_decision"
+    ]
+  },
+  "cleanup_contract": {
+    "cleanup_phase_id": "P13_CLEANUP_AND_DEVICE_RETURN",
+    "minimum_reserve_minutes": 15,
+    "required_check_ids": [
+      "P13_REMOVE_DISPOSABLE",
+      "P13_RESTORE_ASSIGNMENT",
+      "P13_FINAL_STATE",
+      "P13_PRIVATE_EVIDENCE",
+      "P13_DEVICE_RETURN"
+    ],
+    "final_outcomes": [
+      "PASS_CONTRACT_CAPTURE_ONLY",
+      "PASS_DISPOSABLE_WRITE_CONTRACT",
+      "PASS_FULL_CANARY",
+      "PARTIAL_NEEDS_OFF_DEVICE_PATCH",
+      "FAILED_ROLLBACK_COMPLETE",
+      "FAILED_MANUAL_RECOVERY_REQUIRED",
+      "STOP_UNSUPPORTED"
+    ]
+  },
+  "readiness_requirements": [
+    {
+      "id": "R_EXACT_BASELINE",
+      "description": "The alpha.16 release and exact expected main commit are recorded.",
+      "required_reference": "CHANGELOG.md"
+    },
+    {
+      "id": "R_PHASE_GRAPH",
+      "description": "All fourteen phases, dependencies, timeouts, and authorization gates are valid.",
+      "required_reference": "hardware/netcraze-canary-packet.v1.json"
+    },
+    {
+      "id": "R_READ_CONTRACT",
+      "description": "The #21 and #15 read-only contract checklists are consolidated.",
+      "required_reference": "docs/hardware/netcraze-hardware-canary.md"
+    },
+    {
+      "id": "R_DISPOSABLE_WRITE",
+      "description": "Connection, policy, and optional assignment writes have explicit verification and rollback.",
+      "required_reference": "docs/hardware/netcraze-canary-checklist.md"
+    },
+    {
+      "id": "R_FULL_MATRIX",
+      "description": "The complete #16 install, rerun, failure, reboot, recovery, and invariant matrix is represented.",
+      "required_reference": "docs/hardware/netcraze-hardware-canary.md"
+    },
+    {
+      "id": "R_EVIDENCE",
+      "description": "Private manifest and public evidence contracts are strict and secret-free.",
+      "required_reference": "hardware/netcraze-canary-evidence.v1.schema.json"
+    },
+    {
+      "id": "R_PATCH_BRANCH",
+      "description": "A narrow off-device compatibility-patch decision branch is documented.",
+      "required_reference": "docs/hardware/netcraze-canary-compatibility-patch.md"
+    },
+    {
+      "id": "R_CLEANUP",
+      "description": "Cleanup reserve, rollback, final invariant audit, and device return are mandatory.",
+      "required_reference": "docs/hardware/netcraze-canary-checklist.md"
+    },
+    {
+      "id": "R_STATIC_GUARDS",
+      "description": "Offline helpers and packet content have mutation-tested no-live and no-secret guards.",
+      "required_reference": "tests/test_routerkit_hardware_canary.py"
+    },
+    {
+      "id": "R_REVIEW_ZERO_FINDINGS",
+      "description": "Independent offline review must have zero unresolved findings before the final repository verdict.",
+      "required_reference": "docs/architecture/hardware-canary-readiness.md"
+    }
+  ],
+  "references": [
+    "README.md",
+    "README.ru.md",
+    "CHANGELOG.md",
+    "docs/hardware/device-discovery-probe.md",
+    "docs/hardware/device-discovery-probe.ru.md",
+    "docs/hardware/netcraze-policy-contract.md",
+    "docs/hardware/netcraze-policy-contract.ru.md",
+    "docs/hardware/netcraze-hardware-canary.md",
+    "docs/hardware/netcraze-hardware-canary.ru.md",
+    "docs/hardware/netcraze-canary-checklist.md",
+    "docs/hardware/netcraze-canary-checklist.ru.md",
+    "docs/hardware/netcraze-canary-public-evidence-template.md",
+    "docs/hardware/netcraze-canary-public-evidence-template.ru.md",
+    "docs/hardware/netcraze-canary-compatibility-patch.md",
+    "docs/hardware/netcraze-canary-compatibility-patch.ru.md",
+    "docs/architecture/device-discovery.md",
+    "docs/architecture/device-discovery.ru.md",
+    "docs/architecture/netcraze-policy-plan.md",
+    "docs/architecture/netcraze-policy-plan.ru.md",
+    "docs/architecture/hardware-canary-readiness.md",
+    "docs/architecture/hardware-canary-readiness.ru.md",
+    "scripts/probe-device-discovery-readonly.sh",
+    "scripts/probe-netcraze-policy-contract.sh",
+    "scripts/probe-netcraze-hardware-canary.sh",
+    "scripts/routerkit_hardware_canary.py",
+    "scripts/routerkit-hardware-canary.py",
+    "scripts/routerkit_devices.py",
+    "scripts/routerkit_netcraze_plan.py",
+    "tests/test_routerkit_hardware_canary.py"
+  ]
+}

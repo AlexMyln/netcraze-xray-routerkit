@@ -34,6 +34,9 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Versioned `routerkit.netcraze.hardware-canary.v1` packet with the exact alpha.16 baseline, P0–P13 dependency graph, bounded timeouts, 120-minute session ceiling, protected 15-minute cleanup reserve, stop routes, authorization gates, evidence mapping, rollback, device return, and the complete #16 matrix.
+- Pure offline `routerkit-hardware-canary.py status|validate|render|matrix`, a consolidated print-only inert probe, strict private evidence-manifest schema, bilingual primary runbooks/checklists/public-evidence/compatibility-patch templates, and readiness architecture.
+- Mutation-tested hardware-canary guards covering unknown fields, cycles, time bounds, read-before-write order, rollback/default-policy audits, secret-like fields, live primitives, inert probe behavior, EN/RU synchronization, and public-evidence boundaries.
 - Fixture-first Netcraze policy planning with a secret-safe local-endpoint manifest, strict cross-reference validation, typed future-object dependencies, exact equivalence/conflict detection, derived default-policy invariants, deterministic fingerprints, local/public renderers, and an in-memory rollback simulator.
 - Standalone and unified `netcraze-plan status|plan|simulate`, explicit plan-only setup integration, an inert #15 hardware-contract packet, EN/RU research and architecture documentation, synthetic fixtures, and focused static/behavioral tests.
 - Read-only `routerkit devices` and `scripts/routerkit-devices.py` with deterministic synthetic inventory normalization, stable-ID deduplication, text/JSON output, public-evidence redaction, and explicit no-assignment selection.
@@ -81,6 +84,7 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- The repository can now report `READY_FOR_HARDWARE_CANARY` only as an offline preparation gate; every validator result also states `hardware_validated=false` and `live_contract_confirmed=false`, and normal `routerkit setup` remains unchanged with no live Netcraze adapter.
 - The generator publishes an owner-only `routerkit.local-endpoints.v1` manifest with fixed code-owned labels, validated no-clobber replacement, file and parent-directory synchronization, and stale-current-manifest retirement.
 - Fixture-first Netcraze planning no longer exposes caller-created update authorization; non-equivalent existing objects and assignment moves remain blocked until the hardware ownership/revision/rollback contract is defined.
 - Combined `setup --plan-netcraze --apply` confirmation, `--yes`, cancellation, dry-run, and final summaries explicitly state that Netcraze actions are offline preview only and excluded from RouterKit apply.
