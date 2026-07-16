@@ -1,0 +1,12 @@
+{
+  "schema": "routerkit.netcraze.state.fixture.v1",
+  "snapshot_id": "synthetic-unsupported",
+  "state": "supported",
+  "stale": false,
+  "default_policy": {"status": "unknown", "observed_ref": null},
+  "connections": [],
+  "policies": [],
+  "assignments": [],
+  "capabilities": {},
+  "write_authority": true
+}

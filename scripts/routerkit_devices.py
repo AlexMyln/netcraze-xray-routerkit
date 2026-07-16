@@ -221,16 +221,24 @@ def _clean_text(
     return cleaned or None
 
 
-def _normalize_mac(value: str) -> str:
-    compact = re.sub(r"[^0-9a-fA-F]", "", value)
-    if len(compact) != 12 or not re.fullmatch(r"[0-9a-fA-F]{12}", compact):
+def normalize_trusted_device_mac(value: Any) -> str:
+    """Return one canonical assignment-safe unicast MAC identity."""
+
+    if not isinstance(value, str) or re.search(r"[\x00-\x1f\x7f]", value):
         raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
+    text = value.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{12}", text):
+        compact = text
+    else:
+        separated = re.fullmatch(
+            r"([0-9a-fA-F]{2})([.:-])([0-9a-fA-F]{2})(?:\2([0-9a-fA-F]{2})){4}",
+            text,
+        )
+        if separated is None:
+            raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
+        compact = re.sub(r"[.:-]", "", text)
     raw = bytes.fromhex(compact)
-    if raw == b"\x00" * 6:
-        raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
-    if raw == b"\xff" * 6:
-        raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
-    if raw[0] & 0x01:
+    if raw in (b"\x00" * 6, b"\xff" * 6) or raw[0] & 0x01:
         raise DeviceDiscoveryError("Device inventory contains an invalid stable identifier.")
     octets = [compact[index : index + 2].lower() for index in range(0, 12, 2)]
     return ":".join(octets)
@@ -256,7 +264,7 @@ def _normalize_stable_identifier(
     if identifier is None:
         return None, None
     if identifier_type == "mac":
-        return _normalize_mac(identifier), "mac"
+        return normalize_trusted_device_mac(identifier), "mac"
     if identifier_type not in ("router_id", "vendor_record_id", "unknown"):
         raise DeviceDiscoveryError("Device inventory contains an unsupported identifier type.")
     return identifier.lower(), identifier_type

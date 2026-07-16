@@ -27,6 +27,7 @@ ALLOWED_FIXTURE_MODULE_IMPORTS = {
     "os",
     "pathlib",
     "re",
+    "routerkit_devices",
     "routerkit_private_io",
     "secrets",
     "stat",
@@ -107,6 +108,22 @@ LEGACY_EXECUTION_MARKERS = {
     "CommandExecutionError",
     "CommandResult",
 }
+
+PLANNER_TRUST_SYMBOLS = {
+    "AdapterOwnershipProof",
+    "from_reviewed_adapter",
+}
+
+PLANNER_TRUST_PREFIXES = (
+    "update_owned_",
+    "move_owned_assignment",
+)
+
+
+def _is_forbidden_planner_trust_symbol(name: str) -> bool:
+    return name in PLANNER_TRUST_SYMBOLS or any(
+        name.startswith(prefix) for prefix in PLANNER_TRUST_PREFIXES
+    )
 
 
 def _matches_namespace(name: str, namespaces: Set[str]) -> bool:
@@ -206,6 +223,8 @@ def find_live_execution_guard_violations(source: str) -> List[str]:
         if isinstance(node, ast.Name):
             if node.id in LEGACY_EXECUTION_MARKERS:
                 add("legacy-execution-marker", node, "identifier {!r}".format(node.id))
+            if _is_forbidden_planner_trust_symbol(node.id):
+                add("planner-trust-symbol", node, "identifier {!r}".format(node.id))
             if not isinstance(node.ctx, ast.Load):
                 continue
             if node.id in DYNAMIC_EXECUTION_NAMES:
@@ -229,6 +248,8 @@ def find_live_execution_guard_violations(source: str) -> List[str]:
         elif isinstance(node, ast.Attribute):
             if node.attr in LEGACY_EXECUTION_MARKERS:
                 add("legacy-execution-marker", node, "attribute {!r}".format(node.attr))
+            if _is_forbidden_planner_trust_symbol(node.attr):
+                add("planner-trust-symbol", node, "attribute {!r}".format(node.attr))
             parent = _qualified_name(node.value, module_aliases)
             qualified = _qualified_name(node, module_aliases)
             if parent == "os" and node.attr in OS_EXECUTION_ATTRIBUTES:
@@ -243,6 +264,8 @@ def find_live_execution_guard_violations(source: str) -> List[str]:
         elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name in LEGACY_EXECUTION_MARKERS:
                 add("legacy-execution-marker", node, "definition {!r}".format(node.name))
+            if _is_forbidden_planner_trust_symbol(node.name):
+                add("planner-trust-symbol", node, "definition {!r}".format(node.name))
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id == "getattr":

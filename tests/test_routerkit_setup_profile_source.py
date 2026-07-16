@@ -803,7 +803,15 @@ class SetupOfflineIntegrationTests(unittest.TestCase):
             )
             with mock.patch.object(cli, "create_setup_workspace", side_effect=create_workspace):
                 self.assertEqual(cli.run_setup(args, ROOT), 0)
-            self.assertEqual(sorted(path.name for path in generated.iterdir()), ["03_inbounds.json", "04_outbounds.json", "05_routing.json"])
+            self.assertEqual(
+                sorted(path.name for path in generated.iterdir()),
+                [
+                    "03_inbounds.json",
+                    "04_outbounds.json",
+                    "05_routing.json",
+                    "routerkit-local-endpoints.json",
+                ],
+            )
             self.assertFalse(workspace_path.exists())
             self.assertFalse((root / "profiles.json").exists())
 

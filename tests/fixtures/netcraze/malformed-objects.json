@@ -1,0 +1,11 @@
+{
+  "schema": "routerkit.netcraze.state.fixture.v1",
+  "snapshot_id": "synthetic-malformed",
+  "state": "supported",
+  "stale": false,
+  "default_policy": {"status": "unknown", "observed_ref": null},
+  "connections": [{"id": "missing-fields"}],
+  "policies": [],
+  "assignments": [],
+  "capabilities": {}
+}

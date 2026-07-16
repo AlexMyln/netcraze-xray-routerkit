@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- Netcraze fixture simulation is now cryptographically bound to immutable desired endpoint semantics and the exact canonical source snapshot, validates complete plan/action/rollback integrity before mutation, verifies actual synthetic objects after every action, and proves reuse-only idempotent reruns without accepting an independent manifest.
+- Direct `SelectedDeviceRef` input now passes the same public trusted-unicast MAC normalizer as #21 device discovery before planning; malformed, zero, broadcast, multicast/group, non-text, control-character, and invalid display-name input fails before any action.
+- Local plan/snapshot integrity fingerprints are separated from public evidence; the public fingerprint covers every canonical default-policy projection field through a minimized digest and is never used as simulation or write authorization.
+- Private POSIX publication directories now require exact mode `0700`; group/world-readable, traversal-only, missing-owner-permission, and special-bit directories are rejected without chmod or publication residue.
 - Hardened fixture-first device discovery selection: nonzero choices now fail closed on degraded/partial inventories, raw public-evidence output no longer exposes source names or errors, selection handles are ephemeral/internal only, fixture data cannot elevate identifier trust, only valid unicast MACs are assignment-selectable, and the premature generic command runner has been removed until the hardware contract chooses an interface-specific execution boundary.
 - Device discovery is fixture-first and read-only: live Netcraze/Keenetic command execution remains disabled as `contract_unverified`, protected inventory-file mode rejects symlinks/hardlinks/oversized/invalid UTF-8 input, IP-only devices cannot be selected, and public-evidence JSON redacts local identifiers.
 - Autostart apply no longer exposes a public `--proc-root` override; production status, verify, and apply inspect real `/proc` only.
@@ -30,6 +34,8 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Fixture-first Netcraze policy planning with a secret-safe local-endpoint manifest, strict cross-reference validation, typed future-object dependencies, exact equivalence/conflict detection, derived default-policy invariants, deterministic fingerprints, local/public renderers, and an in-memory rollback simulator.
+- Standalone and unified `netcraze-plan status|plan|simulate`, explicit plan-only setup integration, an inert #15 hardware-contract packet, EN/RU research and architecture documentation, synthetic fixtures, and focused static/behavioral tests.
 - Read-only `routerkit devices` and `scripts/routerkit-devices.py` with deterministic synthetic inventory normalization, stable-ID deduplication, text/JSON output, public-evidence redaction, and explicit no-assignment selection.
 - Explicit `routerkit setup --discover-devices` fixture/offline stage after strict planning, with no policy writes, proxy writes, active scanning, or device assignment.
 - Device-discovery architecture, interface research, read-only hardware probe packet, synthetic fixtures, focused tests, and CI fixture guards.
@@ -75,6 +81,9 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- The generator publishes an owner-only `routerkit.local-endpoints.v1` manifest with fixed code-owned labels, validated no-clobber replacement, file and parent-directory synchronization, and stale-current-manifest retirement.
+- Fixture-first Netcraze planning no longer exposes caller-created update authorization; non-equivalent existing objects and assignment moves remain blocked until the hardware ownership/revision/rollback contract is defined.
+- Combined `setup --plan-netcraze --apply` confirmation, `--yes`, cancellation, dry-run, and final summaries explicitly state that Netcraze actions are offline preview only and excluded from RouterKit apply.
 - The roadmap documentation now distinguishes fixture-first #21 software readiness from pending target-hardware discovery contract confirmation and #15 assignment writes.
 - `install --apply --enable-autostart` and `setup --apply --enable-autostart` run the explicit autostart stage after healthcheck through the transactional child supervisor; neither performs reboot proof or policy/firewall/Web UI work.
 - The unused autostart receipt is removed from the trust/idempotency boundary; stale receipt state is removed during enable/disable cleanup.
@@ -87,6 +96,10 @@ All notable changes to this project will be documented in this file.
 - Bootstrap plans retain explicit command-to-Entware-package mappings, including `sha256sum -> coreutils-sha256sum`; standalone apply now installs only missing fixed prerequisites, while the initial arm64/aarch64 package names still require hardware validation.
 
 ### Security
+- Protected private-file reads now reject hard-linked files in addition to symlinks, public POSIX permissions, identity changes, excessive size, and invalid UTF-8.
+- Netcraze snapshots now reject orphan policy/assignment/default references, duplicate or multi-policy assignments, inconsistent default evidence, and incomplete proven-default semantics; simulation revalidates every mutation and rollback.
+- Local-endpoint manifest publication preserves unrelated files byte-for-byte, rejects unsafe parents and targets, and reports parent-sync failures without falsely claiming rollback.
+- Netcraze fixture input cannot grant ownership, update/delete permission, trusted revision, backup success, or live capability; no live Netcraze adapter or apply command exists.
 - HTTPS resolution now uses fixed reviewed special-purpose CIDR tables plus standard-library defense-in-depth checks, rejects IPv4-mapped/NAT64/Teredo/6to4/ORCHID forms conservatively, and preserves ordinary cancellation while attempting bounded best-effort resource cleanup.
 - Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
 
