@@ -29,6 +29,7 @@ The guided installer may:
 - with explicit `setup --apply --enable-autostart` or `install --apply --enable-autostart`, enable `S23xray-direct` only after healthcheck and strict runtime verification;
 - with explicit `setup --discover-devices`, run read-only fixture-first device discovery and optional no-write selection after strict planning;
 - with explicit `setup --plan-netcraze --netcraze-state-file PATH`, run a consistency-validated fixture-first connection/policy/optional-assignment preview whose desired inputs and exact source snapshot are bound into the plan; reject invalid selected-device identities and require exact POSIX `0700` private generation directories; if combined with apply, print that every Netcraze action is excluded;
+- provide a separate offline hardware-canary validator, machine-readable phase/evidence contracts, runbook, and checklist for the limited #16 device window; this development/operator workflow is not part of setup;
 - print exact Web UI steps for proxy connections and policies.
 
 ## Out of scope for the first guided installer
@@ -43,6 +44,7 @@ The first version will not:
 - automate Web UI clicks;
 - change default router policies;
 - apply the #15 diagnostic plan to a router before the target write contract and #16 canary are complete;
+- invoke the hardware-canary packet from normal `routerkit setup` or treat offline readiness as hardware proof;
 - actively scan the LAN by default;
 - create TPROXY/REDIRECT/firewall rules;
 - publish or store real secrets.
