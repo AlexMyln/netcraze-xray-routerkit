@@ -25,9 +25,10 @@ It has no process/thread primitive, network client, socket, hardware transport, 
 - exact alpha.16 release and commit;
 - strict packet and private-manifest schemas;
 - exact P0–P13 phase set;
+- exact canonical phase, check, cleanup, rollback, and stop-route contracts;
 - acyclic dependencies;
-- complete estimates and hard timeouts;
-- 120-minute ceiling and protected 15-minute cleanup reserve;
+- complete positive integer estimates and hard timeouts;
+- globally feasible hard-timeout routes under the 120-minute ceiling, with a protected 15-minute cleanup reserve and 30-minute patch re-entry reserve;
 - stop conditions routing to cleanup;
 - read-only #21 and #15 contract checklists;
 - disposable connection, policy, and optional assignment verification/rollback;
@@ -36,9 +37,11 @@ It has no process/thread primitive, network client, socket, hardware transport, 
 - narrow off-device compatibility-patch branch;
 - cleanup and device-return checklist;
 - static guards and tests;
-- independent offline review with zero unresolved Critical, High, Medium, or Low findings.
+- an explicit external-review gate. A committed readiness ID can require that review, but it cannot self-certify that the review passed.
 
 The validator's readiness result describes packet/repository contract completeness. The final repository verdict additionally requires the actual test run and external review report for the current change.
+
+`READY_FOR_HARDWARE_CANARY` is reserved for the canonical repository packet. A custom `--packet` may validate and render neutral checklist text, but it cannot borrow repository documents or tests to become ready.
 
 Every ready output must include:
 
@@ -123,6 +126,12 @@ Requires `WRITE_CONTRACT_CONFIRMED` plus:
 ## Cleanup reachability
 
 P13 depends only on successful P0, not on the success of P1–P12. Every global stop condition routes to P13. Forward progress stops when the remaining session equals the 15-minute reserve.
+
+## Evidence lifecycle
+
+Schema v1 accepts only released-baseline provenance: `baseline_commit` and `execution_commit` must both equal `c8f697635c93584e85e76a1d734f8fa797a76b51`, `execution_source` must be `released_baseline`, and `compatibility_patch` must be `null`. Compatibility patches require a future schema version rather than an arbitrary 40-hex execution commit.
+
+Private evidence phase records use structured `checks` with per-check outcomes. Timestamps must be timezone-aware, ordered, inside the session, and non-overlapping by phase. P4 must record exactly one of `GO_WITH_EXISTING_ALPHA16_CONTRACT`, `OFF_DEVICE_NARROW_PATCH_REQUIRED`, or `STOP_UNSUPPORTED_OR_AMBIGUOUS`; only GO permits P5. Cleanup `complete` requires P13 pass and every canonical cleanup check, including `P13_PRIVATE_EVIDENCE`. PASS final outcomes require P12 and P13 pass.
 
 ## Normal setup boundary
 

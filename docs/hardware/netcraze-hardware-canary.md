@@ -77,7 +77,7 @@ Do not request or begin the window if any prerequisite is uncertain.
 
 ## 5. Time budget
 
-The default hard ceiling is 120 minutes. Phase timeout or stop conditions override the schedule.
+The default hard ceiling is 120 minutes. Phase hard timeouts equal the phase budgets in packet v1; route-level validation proves the normal route with optional P7, the normal route without P7, read-contract stop-and-cleanup, and patch stop-and-cleanup all fit the ceiling.
 
 | Window | Phase | Budget |
 | --- | --- | ---: |
@@ -101,6 +101,7 @@ Rules:
 - protect at least 15 minutes for P13;
 - stop new work when the cleanup reserve begins;
 - a narrow patch may reenter hardware only with at least 30 minutes remaining;
+- no write or reboot starts inside the cleanup reserve;
 - no phase may exceed its packet timeout;
 - optional P7 is skipped before consuming cleanup reserve.
 

@@ -82,7 +82,7 @@
       "category": "offline",
       "dependencies": [],
       "estimated_minutes": 5,
-      "hard_timeout_minutes": 10,
+      "hard_timeout_minutes": 5,
       "optional": false,
       "required_operator_authorization": "none",
       "required_inputs": [
@@ -152,7 +152,7 @@
         "P0_OPERATOR_PREFLIGHT"
       ],
       "estimated_minutes": 5,
-      "hard_timeout_minutes": 10,
+      "hard_timeout_minutes": 5,
       "optional": false,
       "required_operator_authorization": "read_only_session",
       "required_inputs": [
@@ -225,7 +225,7 @@
         "P1_READ_ONLY_PLATFORM_INVENTORY"
       ],
       "estimated_minutes": 10,
-      "hard_timeout_minutes": 15,
+      "hard_timeout_minutes": 10,
       "optional": false,
       "required_operator_authorization": "read_only_session",
       "required_inputs": [
@@ -309,7 +309,7 @@
         "P2_READ_ONLY_DEVICE_DISCOVERY_CONTRACT"
       ],
       "estimated_minutes": 10,
-      "hard_timeout_minutes": 15,
+      "hard_timeout_minutes": 10,
       "optional": false,
       "required_operator_authorization": "read_only_session",
       "required_inputs": [
@@ -399,7 +399,7 @@
         "P3_READ_ONLY_POLICY_CONTRACT"
       ],
       "estimated_minutes": 5,
-      "hard_timeout_minutes": 10,
+      "hard_timeout_minutes": 5,
       "optional": false,
       "required_operator_authorization": "none",
       "required_inputs": [
@@ -469,7 +469,7 @@
         "P4_OFF_DEVICE_COMPATIBILITY_DECISION"
       ],
       "estimated_minutes": 10,
-      "hard_timeout_minutes": 15,
+      "hard_timeout_minutes": 10,
       "optional": false,
       "required_operator_authorization": "explicit_disposable_write",
       "required_inputs": [
@@ -561,7 +561,7 @@
         "P5_DISPOSABLE_CONNECTION_CANARY"
       ],
       "estimated_minutes": 10,
-      "hard_timeout_minutes": 15,
+      "hard_timeout_minutes": 10,
       "optional": false,
       "required_operator_authorization": "explicit_disposable_write",
       "required_inputs": [
@@ -653,7 +653,7 @@
         "P6_DISPOSABLE_POLICY_CANARY"
       ],
       "estimated_minutes": 5,
-      "hard_timeout_minutes": 10,
+      "hard_timeout_minutes": 5,
       "optional": true,
       "required_operator_authorization": "explicit_disposable_write",
       "required_inputs": [
@@ -746,7 +746,7 @@
         "P6_DISPOSABLE_POLICY_CANARY"
       ],
       "estimated_minutes": 15,
-      "hard_timeout_minutes": 25,
+      "hard_timeout_minutes": 15,
       "optional": false,
       "required_operator_authorization": "explicit_full_canary",
       "required_inputs": [
@@ -872,7 +872,7 @@
         "P8_FULL_ROUTERKIT_INSTALL_CANARY"
       ],
       "estimated_minutes": 5,
-      "hard_timeout_minutes": 10,
+      "hard_timeout_minutes": 5,
       "optional": false,
       "required_operator_authorization": "explicit_full_canary",
       "required_inputs": [
@@ -945,7 +945,7 @@
         "P9_IDEMPOTENT_RERUN"
       ],
       "estimated_minutes": 10,
-      "hard_timeout_minutes": 20,
+      "hard_timeout_minutes": 10,
       "optional": false,
       "required_operator_authorization": "explicit_full_canary",
       "required_inputs": [
@@ -1090,7 +1090,7 @@
         "P10_FAILURE_AND_ROLLBACK"
       ],
       "estimated_minutes": 10,
-      "hard_timeout_minutes": 20,
+      "hard_timeout_minutes": 10,
       "optional": false,
       "required_operator_authorization": "explicit_full_canary",
       "required_inputs": [
@@ -1194,7 +1194,7 @@
         "P11_REBOOT_AND_RECOVERY"
       ],
       "estimated_minutes": 5,
-      "hard_timeout_minutes": 10,
+      "hard_timeout_minutes": 5,
       "optional": false,
       "required_operator_authorization": "explicit_full_canary",
       "required_inputs": [
@@ -1297,7 +1297,7 @@
         "P0_OPERATOR_PREFLIGHT"
       ],
       "estimated_minutes": 15,
-      "hard_timeout_minutes": 20,
+      "hard_timeout_minutes": 15,
       "optional": false,
       "required_operator_authorization": "cleanup_authority",
       "required_inputs": [

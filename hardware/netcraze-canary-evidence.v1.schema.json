@@ -9,7 +9,10 @@
     "session_id",
     "packet_version",
     "release",
-    "commit",
+    "baseline_commit",
+    "execution_commit",
+    "execution_source",
+    "compatibility_patch",
     "started_at",
     "ended_at",
     "expected_target",
@@ -17,6 +20,8 @@
     "phases",
     "artifacts",
     "cleanup_status",
+    "manual_recovery_required",
+    "final_outcome",
     "retention_decision"
   ],
   "properties": {
@@ -33,9 +38,17 @@
     "release": {
       "const": "v0.2.0-alpha.16"
     },
-    "commit": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
+    "baseline_commit": {
+      "const": "c8f697635c93584e85e76a1d734f8fa797a76b51"
+    },
+    "execution_commit": {
+      "const": "c8f697635c93584e85e76a1d734f8fa797a76b51"
+    },
+    "execution_source": {
+      "const": "released_baseline"
+    },
+    "compatibility_patch": {
+      "type": "null"
     },
     "started_at": {
       "type": "string",
@@ -74,6 +87,25 @@
         "in_progress",
         "complete",
         "manual_recovery_required"
+      ]
+    },
+    "manual_recovery_required": {
+      "type": "boolean"
+    },
+    "final_outcome": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "PASS_CONTRACT_CAPTURE_ONLY",
+        "PASS_DISPOSABLE_WRITE_CONTRACT",
+        "PASS_FULL_CANARY",
+        "PARTIAL_NEEDS_OFF_DEVICE_PATCH",
+        "FAILED_ROLLBACK_COMPLETE",
+        "FAILED_MANUAL_RECOVERY_REQUIRED",
+        "STOP_UNSUPPORTED",
+        null
       ]
     },
     "retention_decision": {
@@ -131,7 +163,8 @@
         "started_at",
         "ended_at",
         "outcome",
-        "check_ids",
+        "decision",
+        "checks",
         "notes_category"
       ],
       "properties": {
@@ -173,13 +206,23 @@
             "skip"
           ]
         },
-        "check_ids": {
+        "decision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "GO_WITH_EXISTING_ALPHA16_CONTRACT",
+            "OFF_DEVICE_NARROW_PATCH_REQUIRED",
+            "STOP_UNSUPPORTED_OR_AMBIGUOUS",
+            null
+          ]
+        },
+        "checks": {
           "type": "array",
-          "uniqueItems": true,
           "maxItems": 64,
           "items": {
-            "type": "string",
-            "pattern": "^P(?:[0-9]|1[0-3])_[A-Z0-9_]+$"
+            "$ref": "#/$defs/checkResult"
           }
         },
         "notes_category": {
@@ -190,6 +233,28 @@
             "stop_reason",
             "rollback",
             "cleanup"
+          ]
+        }
+      }
+    },
+    "checkResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_id",
+        "outcome"
+      ],
+      "properties": {
+        "check_id": {
+          "type": "string",
+          "pattern": "^P(?:[0-9]|1[0-3])_[A-Z0-9_]+$"
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "partial",
+            "fail",
+            "skip"
           ]
         }
       }

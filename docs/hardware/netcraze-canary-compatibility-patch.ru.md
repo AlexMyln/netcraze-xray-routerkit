@@ -8,6 +8,8 @@ OFF_DEVICE_NARROW_PATCH_REQUIRED
 
 Router writes прекращены. Patch выполняется off-device.
 
+Private evidence schema v1 не принимает execution через compatibility patch. Manifest valid только при `execution_source=released_baseline`, оба commits равны `c8f697635c93584e85e76a1d734f8fa797a76b51`, `compatibility_patch=null`. Reviewed patch требует будущей schema version со strict receipt; arbitrary 40-hex patch commit не является evidence.
+
 ## Contract gap
 
 - Private evidence reference: `<opaque reference>`
@@ -49,6 +51,13 @@ Router writes прекращены. Patch выполняется off-device.
 - Reviewer/reference: `<value>`
 - Findings: `<none/list>`
 - Unresolved: `0`
+- Receipt base commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`
+- Receipt patch commit: `<reviewed execution commit>`
+- Review verdict: `READY_FOR_HARDWARE_REENTRY`
+- Focused tests passed: `<true>`
+- Full tests passed: `<true>`
+- Static guard passed: `<true>`
+- Explicit user authorization: `<true>`
 - [ ] Scope соответствует выбранному классу
 - [ ] Нет invented vendor command/endpoint
 - [ ] Нет secret material

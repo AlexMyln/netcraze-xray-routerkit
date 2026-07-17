@@ -199,8 +199,8 @@ class PacketContractTests(unittest.TestCase):
         self.assert_error_contains(category, "invalid category")
 
         timeout = copy.deepcopy(packet)
-        timeout["phases"][1]["hard_timeout_minutes"] = 1
-        self.assert_error_contains(timeout, "must be from estimate to 60")
+        timeout["phases"][1]["hard_timeout_minutes"] = 10
+        self.assert_error_contains(timeout, "does not match the canonical v1 contract")
 
         authorization = copy.deepcopy(packet)
         authorization["phases"][5]["required_operator_authorization"] = "none"
@@ -228,6 +228,18 @@ class PacketContractTests(unittest.TestCase):
         overrun["phases"][0]["estimated_minutes"] += 1
         self.assert_error_contains(overrun, "must exactly fill the hard session ceiling")
 
+        infeasible = copy.deepcopy(packet)
+        infeasible["phases"][8]["hard_timeout_minutes"] = 30
+        self.assert_error_contains(infeasible, "normal without optional assignment")
+
+        patch_reserve = copy.deepcopy(packet)
+        patch_reserve["session_budget"]["patch_reentry_minimum_reserve_minutes"] = 29
+        self.assert_error_contains(patch_reserve, "no smaller than 30")
+
+        p13 = copy.deepcopy(packet)
+        p13["phases"][-1]["hard_timeout_minutes"] = 14
+        self.assert_error_contains(p13, "must cover the cleanup reserve")
+
     def test_required_stop_condition_and_cleanup_route(self):
         packet = load_packet()
         missing = copy.deepcopy(packet)
@@ -251,6 +263,42 @@ class PacketContractTests(unittest.TestCase):
         audit = copy.deepcopy(packet)
         audit["phases"][5]["checks"][2]["id"] = "P5_INVARIANT_CHECK"
         self.assert_error_contains(audit, "requires a default-policy audit")
+
+    def test_canonical_required_gate_removal_is_rejected(self):
+        for check_id in ("P3_BACKUP", "P5_READBACK", "P13_PRIVATE_EVIDENCE"):
+            packet = load_packet()
+            for phase in packet["phases"]:
+                phase["checks"] = [
+                    check for check in phase["checks"] if check["id"] != check_id
+                ]
+            with self.subTest(check_id=check_id):
+                self.assert_error_contains(packet, "missing canonical IDs")
+
+    def test_canonical_check_contract_mutations_are_rejected(self):
+        mutations = (
+            ("risk_class", "low"),
+            ("evidence_category", "operator_decision"),
+            ("public_field", "phase_result"),
+            ("outcome_categories", ["pass", "skip"]),
+        )
+        for field, value in mutations:
+            packet = load_packet()
+            packet["phases"][5]["checks"][1][field] = value
+            with self.subTest(field=field):
+                self.assert_error_contains(packet, "canonical v1 check contract")
+
+    def test_canonical_phase_contract_mutations_are_rejected(self):
+        mutations = (
+            ("stop_condition_ids", []),
+            ("private_evidence_categories", ["operator_decision"]),
+            ("public_evidence_fields", ["phase_result"]),
+            ("rollback_check_ids", ["P5_READBACK"]),
+        )
+        for field, value in mutations:
+            packet = load_packet()
+            packet["phases"][5][field] = value
+            with self.subTest(field=field):
+                self.assert_error_contains(packet, "canonical v1 contract")
 
     def test_evidence_mapping_and_secret_like_fields_rejected(self):
         packet = load_packet()
@@ -348,6 +396,18 @@ class ReadinessFunctionTests(unittest.TestCase):
 
     def test_each_missing_repository_condition_changes_verdict(self):
         for key in (
+            "canonical_repository_packet",
+            "phase_contract_present",
+            "check_contract_present",
+            "stop_routes_present",
+            "time_feasibility_present",
+            "cleanup_contract_present",
+            "read_contract_present",
+            "write_contract_present",
+            "rollback_contract_present",
+            "full_matrix_present",
+            "evidence_contract_present",
+            "docs_checklist_contract_present",
             "static_guard_contract_present",
             "test_contract_present",
             "review_gate_present",
@@ -389,6 +449,22 @@ class ReadinessFunctionTests(unittest.TestCase):
             canary.CHANGES_REQUIRED,
         )
 
+    def test_custom_packet_cannot_borrow_repository_readiness(self):
+        contract = canary._structural_repository_contract(
+            self.packet,
+            ROOT,
+            canonical_repository_packet=False,
+        )
+        self.assertEqual(
+            canary.evaluate_offline_hardware_readiness(self.packet, contract),
+            canary.CHANGES_REQUIRED,
+        )
+
+    def test_render_uses_evaluated_verdict(self):
+        rendered = canary.render_checklist(self.packet, canary.CHANGES_REQUIRED)
+        self.assertIn("Offline packet verdict: {}".format(canary.CHANGES_REQUIRED), rendered)
+        self.assertNotIn("Offline packet verdict: {}".format(canary.READY), rendered)
+
 
 class EvidenceSchemaTests(unittest.TestCase):
     def valid_manifest(self):
@@ -397,7 +473,10 @@ class EvidenceSchemaTests(unittest.TestCase):
             "session_id": "canary-session-01",
             "packet_version": 1,
             "release": canary.RELEASED_BASELINE,
-            "commit": canary.EXPECTED_MAIN,
+            "baseline_commit": canary.EXPECTED_MAIN,
+            "execution_commit": canary.EXPECTED_MAIN,
+            "execution_source": "released_baseline",
+            "compatibility_patch": None,
             "started_at": "2026-07-16T20:00:00+04:00",
             "ended_at": None,
             "expected_target": {
@@ -420,7 +499,13 @@ class EvidenceSchemaTests(unittest.TestCase):
                     "started_at": "2026-07-16T20:00:00+04:00",
                     "ended_at": None,
                     "outcome": "not_started",
-                    "check_ids": ["P0_BASELINE"],
+                    "decision": None,
+                    "checks": [
+                        {
+                            "check_id": "P0_BASELINE",
+                            "outcome": "fail",
+                        }
+                    ],
                     "notes_category": "none",
                 }
             ],
@@ -440,6 +525,8 @@ class EvidenceSchemaTests(unittest.TestCase):
                 }
             ],
             "cleanup_status": "not_started",
+            "manual_recovery_required": False,
+            "final_outcome": None,
             "retention_decision": "retain_private",
         }
 
@@ -482,6 +569,12 @@ class EvidenceSchemaTests(unittest.TestCase):
             [],
         )
 
+    def test_private_manifest_rejects_random_execution_commit(self):
+        manifest = self.valid_manifest()
+        manifest["execution_commit"] = "a" * 40
+        errors = canary.validate_private_manifest(manifest, load_packet())
+        self.assertTrue(any("execution_commit" in error for error in errors))
+
     def test_private_manifest_rejects_raw_content_duplicate_ids_and_paths(self):
         raw = self.valid_manifest()
         raw["artifacts"][0]["raw_contents"] = "forbidden"
@@ -513,6 +606,48 @@ class EvidenceSchemaTests(unittest.TestCase):
         wrong_check["artifacts"][0]["check_id"] = "P1_TARGET"
         errors = canary.validate_private_manifest(wrong_check, load_packet())
         self.assertTrue(any("does not belong to the phase" in error for error in errors))
+
+    def test_private_manifest_rejects_lifecycle_inconsistencies(self):
+        reversed_session = self.valid_manifest()
+        reversed_session["ended_at"] = "2026-07-16T19:59:00+04:00"
+        errors = canary.validate_private_manifest(reversed_session, load_packet())
+        self.assertTrue(any("earlier than started_at" in error for error in errors))
+
+        naive = self.valid_manifest()
+        naive["started_at"] = "2026-07-16T20:00:00"
+        errors = canary.validate_private_manifest(naive, load_packet())
+        self.assertTrue(any("timezone" in error for error in errors))
+
+        pass_empty = self.valid_manifest()
+        pass_empty["phases"][0]["outcome"] = "pass"
+        pass_empty["phases"][0]["checks"] = []
+        errors = canary.validate_private_manifest(pass_empty, load_packet())
+        self.assertTrue(any("phase pass requires" in error for error in errors))
+
+        p8_without_prereqs = self.valid_manifest()
+        p8_without_prereqs["phases"].append(
+            {
+                "phase_id": "P8_FULL_ROUTERKIT_INSTALL_CANARY",
+                "started_at": "2026-07-16T20:01:00+04:00",
+                "ended_at": None,
+                "outcome": "pass",
+                "decision": None,
+                "checks": [
+                    {"check_id": check_id, "outcome": "pass"}
+                    for check_id in canary.CANONICAL_PHASE_CONTRACTS[
+                        "P8_FULL_ROUTERKIT_INSTALL_CANARY"
+                    ][7]
+                ],
+                "notes_category": "expected",
+            }
+        )
+        errors = canary.validate_private_manifest(p8_without_prereqs, load_packet())
+        self.assertTrue(any("requires P6 pass" in error for error in errors))
+
+        cleanup_without_p13 = self.valid_manifest()
+        cleanup_without_p13["cleanup_status"] = "complete"
+        errors = canary.validate_private_manifest(cleanup_without_p13, load_packet())
+        self.assertTrue(any("complete requires P13 pass" in error for error in errors))
 
 
 class CliAndProbeTests(unittest.TestCase):

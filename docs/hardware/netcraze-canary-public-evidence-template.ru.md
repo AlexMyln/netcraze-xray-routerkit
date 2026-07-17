@@ -5,7 +5,10 @@
 ## Release и scope
 
 - Release: `v0.2.0-alpha.16`
-- Merge SHA: `<40-hex-sha>`
+- Baseline commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`
+- Execution commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`
+- Execution source: `released_baseline`
+- Compatibility patch: `none in schema v1`
 - Packet: `routerkit.netcraze.hardware-canary.v1` / `1`
 - Model family category: `<planned-family-match | other-family-not-supported>`
 - Firmware, если безопасно: `<version | withheld>`
@@ -49,6 +52,8 @@
 | P12 invariant audit | `<pass/fail>` | `<n>` | `<summary>` |
 | P13 cleanup/return | `<pass/fail>` | `<n>` | `<summary>` |
 
+P4 decision — ровно одно значение: `GO_WITH_EXISTING_ALPHA16_CONTRACT`, `OFF_DEVICE_NARROW_PATCH_REQUIRED` или `STOP_UNSUPPORTED_OR_AMBIGUOUS`. Только GO разрешает P5; PATCH/STOP идут в cleanup без writes.
+
 ## Counts и invariants
 
 - Connection count category: `<0 | 1–5 | 6–15 | >15 | withheld>`
@@ -85,6 +90,8 @@
 | Artifact | SHA-256 | Sensitivity | Decision |
 | --- | --- | --- | --- |
 | `<public-safe name>` | `<64-hex>` | `public_safe` | `<publish/withhold>` |
+
+Sanitized publication использует отдельные public-safe derived artifacts. Router backups, device inventory и secret-bearing raw artifacts нельзя делать public одной redaction flag.
 
 ## Limitations и next action
 

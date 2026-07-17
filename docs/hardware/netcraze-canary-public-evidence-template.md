@@ -5,7 +5,10 @@ Publish only after comparing this document with the private evidence manifest an
 ## Release and scope
 
 - Release: `v0.2.0-alpha.16`
-- Merge SHA: `<40-hex-sha>`
+- Baseline commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`
+- Execution commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`
+- Execution source: `released_baseline`
+- Compatibility patch: `none in schema v1`
 - Packet schema/version: `routerkit.netcraze.hardware-canary.v1` / `1`
 - Model family category: `<planned-family-match | other-family-not-supported>`
 - Firmware version, if safe to publish: `<version | withheld>`
@@ -49,6 +52,8 @@ Do not publish exact management paths, session material, object IDs, or raw resp
 | P12 invariant audit | `<pass/fail>` | `<minutes>` | `<summary>` |
 | P13 cleanup/return | `<pass/fail>` | `<minutes>` | `<summary>` |
 
+P4 decision must be one exact value: `GO_WITH_EXISTING_ALPHA16_CONTRACT`, `OFF_DEVICE_NARROW_PATCH_REQUIRED`, or `STOP_UNSUPPORTED_OR_AMBIGUOUS`. Only GO permits P5; PATCH and STOP proceed to cleanup without writes.
+
 ## Public-safe counts and invariants
 
 - Existing connection count category: `<0 | 1–5 | 6–15 | >15 | withheld>`
@@ -85,6 +90,8 @@ Do not publish exact management paths, session material, object IDs, or raw resp
 | Artifact | SHA-256 | Sensitivity after review | Publication decision |
 | --- | --- | --- | --- |
 | `<public-safe artifact name>` | `<64-hex>` | `public_safe` | `<publish/withhold>` |
+
+Sanitized publication uses separate public-safe derived artifacts. Do not mark router backups, device inventory, or secret-bearing raw artifacts as public by redaction flag.
 
 ## Limitations and next action
 

@@ -25,9 +25,10 @@ scripts/routerkit_hardware_canary.py
 - exact alpha.16 release/commit;
 - strict packet и evidence schemas;
 - exact P0–P13;
+- exact canonical phase/check/cleanup/rollback/stop-route contracts;
 - acyclic dependencies;
-- estimates/timeouts;
-- ceiling 120 min и cleanup reserve 15 min;
+- positive integer estimates/timeouts;
+- feasible hard-timeout routes inside ceiling 120 min, cleanup reserve 15 min и patch re-entry reserve 30 min;
 - stop routes to cleanup;
 - read contracts #21/#15;
 - disposable connection/policy/optional assignment verification и rollback;
@@ -36,9 +37,11 @@ scripts/routerkit_hardware_canary.py
 - narrow off-device patch branch;
 - cleanup/device return;
 - static guards/tests;
-- independent offline review с zero unresolved Critical/High/Medium/Low findings.
+- external-review gate. Readiness ID может требовать review, но не self-certify, что review passed.
 
 Validator показывает completeness packet/repository contract. Итоговый repository verdict дополнительно требует реального test run и external review текущего change.
+
+`READY_FOR_HARDWARE_CANARY` зарезервирован для canonical repository packet. Custom `--packet` может validate/render neutral checklist, но не может занять repository docs/tests и стать ready.
 
 Каждый ready output содержит:
 
@@ -93,6 +96,12 @@ READY_FOR_HARDWARE_CANARY
 ## Cleanup reachability
 
 P13 зависит только от successful P0. Все stop conditions ведут в P13. Forward progress прекращается при достижении 15-minute reserve.
+
+## Evidence lifecycle
+
+Schema v1 принимает только released-baseline provenance: `baseline_commit` и `execution_commit` равны `c8f697635c93584e85e76a1d734f8fa797a76b51`, `execution_source=released_baseline`, `compatibility_patch=null`. Compatibility patch требует будущей версии schema, а не arbitrary 40-hex commit.
+
+Private evidence phases используют structured `checks` с per-check outcomes. Timestamps должны быть timezone-aware, ordered, inside session и без phase overlap. P4 записывает ровно `GO_WITH_EXISTING_ALPHA16_CONTRACT`, `OFF_DEVICE_NARROW_PATCH_REQUIRED` или `STOP_UNSUPPORTED_OR_AMBIGUOUS`; только GO разрешает P5. Cleanup `complete` требует P13 pass и все canonical cleanup checks, включая `P13_PRIVATE_EVIDENCE`. PASS final outcomes требуют P12 и P13 pass.
 
 ## Normal setup boundary
 

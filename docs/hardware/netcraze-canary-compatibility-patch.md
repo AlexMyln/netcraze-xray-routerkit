@@ -8,6 +8,8 @@ OFF_DEVICE_NARROW_PATCH_REQUIRED
 
 Router writes stop before patch work. The patch is developed and reviewed off-device.
 
+Private evidence schema v1 does not accept compatibility-patch execution. A hardware session manifest remains valid only when `execution_source=released_baseline`, both commits equal `c8f697635c93584e85e76a1d734f8fa797a76b51`, and `compatibility_patch=null`. A reviewed patch requires a future schema version with a strict receipt; an arbitrary 40-hex patch commit is not evidence.
+
 ## Observed contract gap
 
 - Private evidence reference: `<opaque private reference>`
@@ -60,6 +62,13 @@ The patch must not include:
 - Reviewer: `<local review reference>`
 - Findings by severity: `<none or list>`
 - Unresolved findings: `0`
+- Receipt base commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`
+- Receipt patch commit: `<reviewed execution commit>`
+- Review verdict: `READY_FOR_HARDWARE_REENTRY`
+- Focused tests passed: `<true>`
+- Full tests passed: `<true>`
+- Static guard passed: `<true>`
+- Explicit user authorization: `<true>`
 - Patch stays within the selected class: [ ]
 - No vendor command or endpoint invented: [ ]
 - No secret material entered the repository: [ ]
