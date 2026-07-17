@@ -253,6 +253,19 @@ python3 scripts/routerkit.py setup --plan-netcraze --netcraze-state-file /protec
 
 Generation writes `generated/routerkit-local-endpoints.json` with owner-only permissions, fixed code-owned labels, validated no-clobber replacement, file and parent-directory synchronization, and stale-manifest retirement before current generation. On POSIX the generated directory must be exact owner-private `0700`; a reused public/traversable directory is rejected without chmod or residue. It contains no raw profile names or upstream profile secrets. Setup reads it only after generation and strict install planning; optional device selection runs first, is revalidated through the shared assignment-safe MAC boundary, then the Netcraze plan runs before any apply confirmation. The plan embeds the exact desired endpoint semantics and binds to the canonical source snapshot. `simulate` accepts only that plan plus the same snapshot, fails before mutation on mismatch/tampering, verifies actual synthetic state, and proves an idempotent reuse-only rerun. Local integrity/snapshot fingerprints remain local; public evidence uses a separate minimized default-semantics-complete fingerprint that never authorizes writes. A conflict, orphan reference, inconsistent default, stale state, invalid selected device, existing-object update, or assignment move stops setup. When combined with `--apply`, an exclusion block immediately before confirmation or the first `--yes` mutation states that Netcraze actions are offline preview only and excluded from RouterKit apply. No Netcraze apply command exists, and the status remains `SOFTWARE_PLAN_CORE_READY_HARDWARE_WRITE_CONTRACT_PENDING`.
 
+### Consolidated hardware-canary preparation
+
+The limited-device workflow is intentionally separate from normal setup. The repository contains a versioned secret-free packet and a pure offline validator:
+
+```sh
+python3 scripts/routerkit-hardware-canary.py status
+python3 scripts/routerkit-hardware-canary.py validate
+python3 scripts/routerkit-hardware-canary.py render
+python3 scripts/routerkit-hardware-canary.py matrix
+```
+
+`READY_FOR_HARDWARE_CANARY` means the operator packet, read/write contract capture, full #16 matrix, evidence schema, time budget, rollback, cleanup, and device-return gates are prepared. It always includes `hardware_validated=false` and `live_contract_confirmed=false`. The packet neither contacts a router nor adds a live adapter or write mode, and it is not callable through `routerkit setup`. See the [primary runbook](hardware/netcraze-hardware-canary.md) and [readiness contract](architecture/hardware-canary-readiness.md).
+
 Use dry-run to render an abstract secret-free flow with no source, reuse-file, secret-input, or environment-value read; no stdin prompt; and no DNS/HTTPS request, subprocess, private workspace, profile, generated file, write, or router action:
 
 ```sh

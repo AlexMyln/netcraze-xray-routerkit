@@ -29,6 +29,7 @@
 - с явным `setup --apply --enable-autostart` или `install --apply --enable-autostart` включить только `S23xray-direct` после healthcheck и строгой runtime verification;
 - с явным `setup --discover-devices` запустить read-only fixture-first device discovery и optional no-write selection после strict planning;
 - с явными `setup --plan-netcraze --netcraze-state-file PATH` запустить consistency-validated fixture-first preview connections/policies/optional assignment с plan-bound desired inputs и exact source snapshot, отвергать invalid selected-device identity и требовать exact POSIX `0700` для private generation directory; при сочетании с apply явно сообщить, что все Netcraze actions исключены;
+- предоставить отдельный offline hardware-canary validator, machine-readable phase/evidence contracts, runbook и checklist для ограниченного окна #16; этот development/operator workflow не является частью setup;
 - вывести точные шаги для Web UI proxy connections и policies.
 
 ## Что не входит в первую версию guided installer
@@ -43,6 +44,7 @@
 - автоматически кликать Web UI;
 - менять default policy роутера;
 - назначать discovered devices на policies до #15;
+- вызывать hardware-canary packet из normal `routerkit setup` или считать offline readiness hardware proof;
 - по умолчанию активно сканировать LAN;
 - создавать TPROXY/REDIRECT/firewall rules;
 - публиковать или хранить реальные секреты.
