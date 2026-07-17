@@ -3,6 +3,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,30 @@ def find_no_live_violations(source):
     for literal in FORBIDDEN_COMMAND_LITERALS:
         if literal in lowered:
             violations.append("literal:{}".format(literal))
+    return sorted(set(violations))
+
+
+def find_canonical_identity_violations(source):
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return ["syntax:{}".format(exc.lineno or 0)]
+    scoped_functions = {"_select_packet_from_request", "run_cli"}
+    path_identity_calls = {"resolve", "samefile", "stat", "read_bytes"}
+    path_identity_names = {"hash", "samefile"}
+    path_identity_attrs = {"st_dev", "st_ino"}
+    violations = []
+    for item in tree.body:
+        if not isinstance(item, ast.FunctionDef) or item.name not in scoped_functions:
+            continue
+        for node in ast.walk(item):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and node.func.attr in path_identity_calls:
+                    violations.append("{}:call:{}".format(item.name, node.func.attr))
+                elif isinstance(node.func, ast.Name) and node.func.id in path_identity_names:
+                    violations.append("{}:call:{}".format(item.name, node.func.id))
+            elif isinstance(node, ast.Attribute) and node.attr in path_identity_attrs:
+                violations.append("{}:attr:{}".format(item.name, node.attr))
     return sorted(set(violations))
 
 
@@ -661,6 +686,40 @@ class CliAndProbeTests(unittest.TestCase):
             check=False,
         )
 
+    def assert_ready_validate(self, *args):
+        result = self.run_cli("validate", "--json", *args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["verdict"], canary.READY)
+        self.assertFalse(payload["hardware_validated"])
+        self.assertFalse(payload["live_contract_confirmed"])
+        self.assertEqual(payload["errors"], [])
+
+    def assert_valid_custom_packet_not_ready(self, packet_arg):
+        validate = self.run_cli("validate", "--json", "--packet", str(packet_arg))
+        self.assertEqual(validate.returncode, 2, validate.stderr)
+        payload = json.loads(validate.stdout)
+        self.assertEqual(payload["verdict"], canary.CHANGES_REQUIRED)
+        self.assertFalse(payload["hardware_validated"])
+        self.assertFalse(payload["live_contract_confirmed"])
+        self.assertEqual(payload["errors"], [])
+
+        render = self.run_cli("render", "--packet", str(packet_arg))
+        self.assertEqual(render.returncode, 0, render.stderr)
+        self.assertIn("Offline packet verdict: {}".format(canary.CHANGES_REQUIRED), render.stdout)
+        self.assertNotIn("Offline packet verdict: {}".format(canary.READY), render.stdout)
+
+        matrix = self.run_cli("matrix", "--json", "--packet", str(packet_arg))
+        self.assertEqual(matrix.returncode, 0, matrix.stderr)
+        self.assertEqual(len(json.loads(matrix.stdout)), 14)
+
+    def assert_invalid_packet_path_fails_safely(self, packet_arg):
+        result = self.run_cli("validate", "--json", "--packet", str(packet_arg))
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("routerkit hardware-canary:", result.stderr)
+        self.assertNotIn(canary.READY, result.stdout + result.stderr)
+
     def test_status_reads_no_packet(self):
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -672,6 +731,25 @@ class CliAndProbeTests(unittest.TestCase):
         self.assertIn("hardware_validated=false", stdout.getvalue())
         self.assertIn("live_contract_confirmed=false", stdout.getvalue())
         self.assertEqual(stderr.getvalue(), "")
+
+    def test_packet_request_identity_is_argparse_level(self):
+        parser = canary.build_parser()
+        default_args = parser.parse_args(["validate"])
+        default_path, default_canonical = canary._select_packet_from_request(default_args)
+        self.assertEqual(default_path, canary.default_packet_path())
+        self.assertTrue(default_canonical)
+
+        for supplied in (
+            "hardware/netcraze-canary-packet.v1.json",
+            str(PACKET_PATH),
+            "./hardware/netcraze-canary-packet.v1.json",
+            "hardware/../hardware/netcraze-canary-packet.v1.json",
+        ):
+            with self.subTest(supplied=supplied):
+                args = parser.parse_args(["validate", "--packet", supplied])
+                packet_path, canonical = canary._select_packet_from_request(args)
+                self.assertEqual(packet_path, Path(supplied))
+                self.assertFalse(canonical)
 
     def test_validate_render_and_matrix(self):
         validate = self.run_cli("validate", "--json")
@@ -688,6 +766,79 @@ class CliAndProbeTests(unittest.TestCase):
         self.assertNotIn("private evidence reference", render.stdout.casefold())
         self.assertEqual(matrix.returncode, 0, matrix.stderr)
         self.assertEqual(len(json.loads(matrix.stdout)), 14)
+
+    def test_only_implicit_default_request_can_ready_for_path_tricks(self):
+        self.assert_ready_validate()
+
+        with tempfile.TemporaryDirectory() as external_dir:
+            external_root = Path(external_dir)
+            external_symlink = external_root / "external-link.json"
+            external_symlink.symlink_to(PACKET_PATH)
+
+            symlink_chain_a = external_root / "chain-a.json"
+            symlink_chain_b = external_root / "chain-b.json"
+            symlink_chain_a.symlink_to(PACKET_PATH)
+            symlink_chain_b.symlink_to(symlink_chain_a)
+
+            byte_copy = external_root / "byte-identical-copy.json"
+            byte_copy.write_bytes(PACKET_PATH.read_bytes())
+
+            semantic_copy = external_root / "semantic-copy.json"
+            semantic_copy.write_text(
+                json.dumps(json.loads(PACKET_PATH.read_text(encoding="utf-8")), sort_keys=True),
+                encoding="utf-8",
+            )
+
+            hardlink = external_root / "hardlink.json"
+            try:
+                os.link(str(PACKET_PATH), str(hardlink))
+                hardlink_case = ("hardlink", hardlink)
+            except OSError as exc:
+                hardlink_case = ("hardlink", exc)
+
+            with tempfile.TemporaryDirectory(dir=str(ROOT), prefix=".canary-test-") as repo_dir:
+                in_repo_symlink = Path(repo_dir) / "repo-link.json"
+                in_repo_symlink.symlink_to(PACKET_PATH)
+
+                cases = [
+                    ("explicit relative default", "hardware/netcraze-canary-packet.v1.json"),
+                    ("explicit absolute default", PACKET_PATH),
+                    ("dot relative default", "./hardware/netcraze-canary-packet.v1.json"),
+                    ("parent-normalized default", "hardware/../hardware/netcraze-canary-packet.v1.json"),
+                    ("external symlink", external_symlink),
+                    ("in-repository symlink", in_repo_symlink),
+                    ("byte-identical copy", byte_copy),
+                    ("semantic JSON copy", semantic_copy),
+                    ("symlink chain", symlink_chain_b),
+                ]
+                if isinstance(hardlink_case[1], OSError):
+                    with self.subTest(label=hardlink_case[0]):
+                        self.skipTest("hardlink unsupported: {}".format(hardlink_case[1]))
+                else:
+                    cases.append(hardlink_case)
+
+                for label, packet_arg in cases:
+                    with self.subTest(label=label):
+                        self.assert_valid_custom_packet_not_ready(packet_arg)
+
+    def test_invalid_packet_paths_fail_safely(self):
+        with tempfile.TemporaryDirectory() as external_dir:
+            external_root = Path(external_dir)
+            dangling_symlink = external_root / "dangling.json"
+            dangling_symlink.symlink_to(external_root / "missing-target.json")
+
+            directory = external_root / "packet-directory"
+            directory.mkdir()
+
+            nonexistent = external_root / "missing.json"
+
+            for label, packet_arg in (
+                ("dangling symlink", dangling_symlink),
+                ("directory", directory),
+                ("nonexistent", nonexistent),
+            ):
+                with self.subTest(label=label):
+                    self.assert_invalid_packet_path_fails_safely(packet_arg)
 
     def test_consolidated_probe_is_inert(self):
         syntax = subprocess.run(["sh", "-n", str(PROBE)], check=False)
@@ -739,6 +890,48 @@ class StaticGuardTests(unittest.TestCase):
                     find_no_live_violations(path.read_text(encoding="utf-8")),
                     [],
                 )
+
+    def test_canonical_request_identity_uses_no_path_target_identity(self):
+        source = (SCRIPTS / "routerkit_hardware_canary.py").read_text(encoding="utf-8")
+        self.assertEqual(find_canonical_identity_violations(source), [])
+
+    def test_canonical_identity_guard_mutations(self):
+        mutations = (
+            (
+                "resolve",
+                "def _select_packet_from_request(args):\n"
+                "    packet = Path(args.packet)\n"
+                "    return packet, packet.resolve() == default_packet_path().resolve()\n",
+                "_select_packet_from_request:call:resolve",
+            ),
+            (
+                "samefile",
+                "def run_cli(argv=None):\n"
+                "    canonical_repository_packet = os.path.samefile(packet, default)\n",
+                "run_cli:call:samefile",
+            ),
+            (
+                "inode",
+                "def run_cli(argv=None):\n"
+                "    canonical_repository_packet = packet.stat().st_ino == default.stat().st_ino\n",
+                "run_cli:call:stat",
+            ),
+            (
+                "hash",
+                "def run_cli(argv=None):\n"
+                "    canonical_repository_packet = hash(packet) == hash(default)\n",
+                "run_cli:call:hash",
+            ),
+            (
+                "bytes",
+                "def run_cli(argv=None):\n"
+                "    canonical_repository_packet = packet.read_bytes() == default.read_bytes()\n",
+                "run_cli:call:read_bytes",
+            ),
+        )
+        for label, source, expected in mutations:
+            with self.subTest(label=label):
+                self.assertIn(expected, find_canonical_identity_violations(source))
 
     def test_guard_mutations(self):
         mutations = (

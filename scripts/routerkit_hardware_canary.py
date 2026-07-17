@@ -1675,6 +1675,12 @@ def _print_status(as_json: bool) -> None:
         print("live_contract_confirmed=false")
 
 
+def _select_packet_from_request(args: argparse.Namespace) -> Tuple[Path, bool]:
+    if args.packet is None:
+        return default_packet_path(), True
+    return Path(args.packet), False
+
+
 def run_cli(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     try:
@@ -1685,7 +1691,7 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
         root = repository_root()
-        packet_path = Path(args.packet) if args.packet else default_packet_path()
+        packet_path, canonical_repository_packet = _select_packet_from_request(args)
         packet = load_packet(packet_path)
         errors = validate_packet(packet, root)
         evidence_path = root / packet.get("evidence_contract", {}).get(
@@ -1693,7 +1699,6 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
         )
         errors.extend(validate_private_manifest_schema(evidence_path))
         errors = sorted(set(errors))
-        canonical_repository_packet = packet_path.resolve() == default_packet_path().resolve()
         repository_contract = _structural_repository_contract(
             packet,
             root,
