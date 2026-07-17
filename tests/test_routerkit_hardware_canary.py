@@ -826,6 +826,22 @@ class CliAndProbeTests(unittest.TestCase):
         self.assertIn("packet must be a regular file", result.stderr)
         self.assertNotIn(canary.READY, result.stdout + result.stderr)
 
+    def assert_socket_packet_rejected_promptly(self, packet_arg):
+        result = self.run_cli_with_timeout(
+            "validate",
+            "--json",
+            "--packet",
+            str(packet_arg),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertTrue(
+            "packet must be a regular file" in result.stderr
+            or "could not open packet" in result.stderr,
+            result.stderr,
+        )
+        self.assertNotIn(canary.READY, result.stdout + result.stderr)
+
     def assert_packet_error(self, packet_arg, text):
         result = self.run_cli("validate", "--json", "--packet", str(packet_arg))
         self.assertEqual(result.returncode, 2)
@@ -958,7 +974,7 @@ class CliAndProbeTests(unittest.TestCase):
                     server.bind(str(socket_path))
                     server.listen(1)
                     with self.subTest(label="unix socket"):
-                        self.assert_non_regular_packet_rejected_promptly(socket_path)
+                        self.assert_socket_packet_rejected_promptly(socket_path)
                 except OSError as exc:
                     with self.subTest(label="unix socket"):
                         self.skipTest("Unix-domain socket unavailable: {}".format(exc))
