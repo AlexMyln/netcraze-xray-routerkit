@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -131,6 +132,68 @@ def find_canonical_identity_violations(source):
                     violations.append("{}:call:{}".format(item.name, node.func.id))
             elif isinstance(node, ast.Attribute) and node.attr in path_identity_attrs:
                 violations.append("{}:attr:{}".format(item.name, node.attr))
+    return sorted(set(violations))
+
+
+def find_packet_loader_contract_violations(source):
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return ["syntax:{}".format(exc.lineno or 0)]
+    functions = [item for item in tree.body if isinstance(item, ast.FunctionDef)]
+    load_functions = [item for item in functions if item.name == "load_packet"]
+    if not load_functions:
+        return ["missing:load_packet"]
+    load_packet = load_functions[0]
+    violations = []
+    has_fstat = False
+    has_regular_check = False
+    has_bounded_read = False
+    for node in ast.walk(load_packet):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr == "read_bytes":
+                    violations.append("call:read_bytes")
+                elif node.func.attr == "stat":
+                    violations.append("call:stat")
+                elif node.func.attr == "open":
+                    if not (
+                        isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "os"
+                    ):
+                        violations.append("call:path-open")
+                elif (
+                    node.func.attr == "fstat"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "os"
+                ):
+                    has_fstat = True
+                elif node.func.attr == "read" and len(node.args) == 1:
+                    names = {
+                        item.id for item in ast.walk(node.args[0]) if isinstance(item, ast.Name)
+                    }
+                    constants = {
+                        item.value
+                        for item in ast.walk(node.args[0])
+                        if isinstance(item, ast.Constant)
+                    }
+                    if "MAX_PACKET_BYTES" in names and 1 in constants:
+                        has_bounded_read = True
+            elif isinstance(node.func, ast.Name) and node.func.id == "open":
+                violations.append("call:open")
+        elif (
+            isinstance(node, ast.Attribute)
+            and node.attr == "S_ISREG"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "stat"
+        ):
+            has_regular_check = True
+    if not has_fstat:
+        violations.append("missing:fstat")
+    if not has_regular_check:
+        violations.append("missing:S_ISREG")
+    if not has_bounded_read:
+        violations.append("missing:bounded-read")
     return sorted(set(violations))
 
 
@@ -720,6 +783,56 @@ class CliAndProbeTests(unittest.TestCase):
         self.assertIn("routerkit hardware-canary:", result.stderr)
         self.assertNotIn(canary.READY, result.stdout + result.stderr)
 
+    def run_cli_with_timeout(self, *args, timeout=2.0):
+        proc = subprocess.Popen(
+            [sys.executable, str(WRAPPER), *args],
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                stdout, stderr = proc.communicate(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate(timeout=1.0)
+            self.fail(
+                "CLI timed out for {} after cleanup; stdout={!r} stderr={!r}".format(
+                    args,
+                    stdout,
+                    stderr,
+                )
+            )
+        return subprocess.CompletedProcess(
+            [sys.executable, str(WRAPPER), *args],
+            proc.returncode,
+            stdout,
+            stderr,
+        )
+
+    def assert_non_regular_packet_rejected_promptly(self, packet_arg):
+        result = self.run_cli_with_timeout(
+            "validate",
+            "--json",
+            "--packet",
+            str(packet_arg),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("packet must be a regular file", result.stderr)
+        self.assertNotIn(canary.READY, result.stdout + result.stderr)
+
+    def assert_packet_error(self, packet_arg, text):
+        result = self.run_cli("validate", "--json", "--packet", str(packet_arg))
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertIn(text, result.stderr)
+        self.assertNotIn(canary.READY, result.stdout + result.stderr)
+
     def test_status_reads_no_packet(self):
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -821,6 +934,141 @@ class CliAndProbeTests(unittest.TestCase):
                     with self.subTest(label=label):
                         self.assert_valid_custom_packet_not_ready(packet_arg)
 
+    def test_special_packet_files_are_rejected_promptly(self):
+        with tempfile.TemporaryDirectory() as external_dir:
+            external_root = Path(external_dir)
+            fifo = external_root / "packet.fifo"
+            if hasattr(os, "mkfifo"):
+                os.mkfifo(fifo)
+                with self.subTest(label="fifo"):
+                    self.assert_non_regular_packet_rejected_promptly(fifo)
+            else:
+                with self.subTest(label="fifo"):
+                    self.skipTest("os.mkfifo unavailable")
+
+            directory = external_root / "packet-directory"
+            directory.mkdir()
+            with self.subTest(label="directory"):
+                self.assert_non_regular_packet_rejected_promptly(directory)
+
+            socket_path = external_root / "packet.sock"
+            if hasattr(socket, "AF_UNIX"):
+                server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    server.bind(str(socket_path))
+                    server.listen(1)
+                    with self.subTest(label="unix socket"):
+                        self.assert_non_regular_packet_rejected_promptly(socket_path)
+                except OSError as exc:
+                    with self.subTest(label="unix socket"):
+                        self.skipTest("Unix-domain socket unavailable: {}".format(exc))
+                finally:
+                    server.close()
+            else:
+                with self.subTest(label="unix socket"):
+                    self.skipTest("Unix-domain sockets unavailable")
+
+            for label, device in (
+                ("character device", Path("/dev/null")),
+                ("streaming character device", Path("/dev/zero")),
+            ):
+                with self.subTest(label=label):
+                    if not device.exists():
+                        self.skipTest("{} unavailable".format(device))
+                    self.assert_non_regular_packet_rejected_promptly(device)
+
+    def test_packet_size_and_parse_errors_are_deterministic(self):
+        with tempfile.TemporaryDirectory() as external_dir:
+            external_root = Path(external_dir)
+            oversized = external_root / "oversized.json"
+            oversized.write_bytes(b"{}" + (b" " * canary.MAX_PACKET_BYTES))
+            self.assert_packet_error(oversized, "packet exceeds the 1 MiB limit")
+
+            exact_limit = external_root / "exact-limit.json"
+            exact_limit.write_bytes(b" " * canary.MAX_PACKET_BYTES)
+            self.assert_packet_error(exact_limit, "packet is not valid JSON")
+
+            too_large_by_one = external_root / "too-large-by-one.json"
+            too_large_by_one.write_bytes(b" " * (canary.MAX_PACKET_BYTES + 1))
+            self.assert_packet_error(too_large_by_one, "packet exceeds the 1 MiB limit")
+
+            invalid_utf8 = external_root / "invalid-utf8.json"
+            invalid_utf8.write_bytes(b"\xff")
+            self.assert_packet_error(invalid_utf8, "packet is not valid UTF-8")
+
+            invalid_json = external_root / "invalid-json.json"
+            invalid_json.write_text("{", encoding="utf-8")
+            self.assert_packet_error(invalid_json, "packet is not valid JSON")
+
+            non_object = external_root / "non-object.json"
+            non_object.write_text("[]", encoding="utf-8")
+            self.assert_packet_error(non_object, "packet root must be an object")
+
+    def test_packet_loader_bounded_read_and_fd_cleanup(self):
+        regular_metadata = os.stat_result(
+            (canary.stat.S_IFREG | 0o600, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        )
+        char_metadata = os.stat_result(
+            (canary.stat.S_IFCHR | 0o600, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        )
+
+        class FakeStream:
+            def __init__(self):
+                self.read_sizes = []
+                self.closed = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.closed = True
+
+            def read(self, size):
+                self.read_sizes.append(size)
+                return b" " * size
+
+        stream = FakeStream()
+        with mock.patch.object(canary.os, "open", return_value=123), mock.patch.object(
+            canary.os,
+            "fstat",
+            return_value=regular_metadata,
+        ), mock.patch.object(canary.os, "fdopen", return_value=stream):
+            with self.assertRaisesRegex(canary.PacketError, "packet exceeds the 1 MiB limit"):
+                canary.load_packet(Path("synthetic.json"))
+        self.assertEqual(stream.read_sizes, [canary.MAX_PACKET_BYTES + 1])
+        self.assertTrue(stream.closed)
+
+        with mock.patch.object(canary.os, "open", return_value=321), mock.patch.object(
+            canary.os,
+            "fstat",
+            return_value=regular_metadata,
+        ), mock.patch.object(
+            canary.os,
+            "fdopen",
+            side_effect=OSError("synthetic read failure"),
+        ), mock.patch.object(canary.os, "close") as close:
+            with self.assertRaisesRegex(canary.PacketError, "could not read packet"):
+                canary.load_packet(Path("synthetic.json"))
+            close.assert_called_once_with(321)
+
+        with mock.patch.object(canary.os, "open", return_value=654), mock.patch.object(
+            canary.os,
+            "fstat",
+            return_value=char_metadata,
+        ), mock.patch.object(canary.os, "close") as close:
+            with self.assertRaisesRegex(canary.PacketError, "packet must be a regular file"):
+                canary.load_packet(Path("synthetic.json"))
+            close.assert_called_once_with(654)
+
+        with mock.patch.object(canary.os, "open", return_value=987), mock.patch.object(
+            canary.os,
+            "fstat",
+            side_effect=OSError("synthetic inspect failure"),
+        ), mock.patch.object(canary.os, "close") as close:
+            with self.assertRaisesRegex(canary.PacketError, "could not inspect packet"):
+                canary.load_packet(Path("synthetic.json"))
+            close.assert_called_once_with(987)
+
     def test_invalid_packet_paths_fail_safely(self):
         with tempfile.TemporaryDirectory() as external_dir:
             external_root = Path(external_dir)
@@ -894,6 +1142,44 @@ class StaticGuardTests(unittest.TestCase):
     def test_canonical_request_identity_uses_no_path_target_identity(self):
         source = (SCRIPTS / "routerkit_hardware_canary.py").read_text(encoding="utf-8")
         self.assertEqual(find_canonical_identity_violations(source), [])
+
+    def test_packet_loader_uses_fd_regular_file_contract(self):
+        source = (SCRIPTS / "routerkit_hardware_canary.py").read_text(encoding="utf-8")
+        self.assertEqual(find_packet_loader_contract_violations(source), [])
+
+    def test_packet_loader_guard_mutations(self):
+        mutations = (
+            (
+                "old-stat-read-bytes",
+                "def load_packet(path):\n"
+                "    size = path.stat().st_size\n"
+                "    return path.read_bytes()\n",
+                {"call:read_bytes", "call:stat", "missing:fstat", "missing:S_ISREG", "missing:bounded-read"},
+            ),
+            (
+                "no-regular-file-check",
+                "def load_packet(path):\n"
+                "    fd = os.open(path, os.O_RDONLY)\n"
+                "    metadata = os.fstat(fd)\n"
+                "    return os.fdopen(fd, 'rb').read(MAX_PACKET_BYTES + 1)\n",
+                {"missing:S_ISREG"},
+            ),
+            (
+                "unbounded-read",
+                "def load_packet(path):\n"
+                "    fd = os.open(path, os.O_RDONLY)\n"
+                "    metadata = os.fstat(fd)\n"
+                "    if not stat.S_ISREG(metadata.st_mode):\n"
+                "        raise ValueError('bad')\n"
+                "    return os.fdopen(fd, 'rb').read()\n",
+                {"missing:bounded-read"},
+            ),
+        )
+        for label, source, expected in mutations:
+            with self.subTest(label=label):
+                self.assertTrue(
+                    expected.issubset(set(find_packet_loader_contract_violations(source)))
+                )
 
     def test_canonical_identity_guard_mutations(self):
         mutations = (

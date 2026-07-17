@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
@@ -17,6 +19,7 @@ PACKET_VERSION = 1
 RELEASED_BASELINE = "v0.2.0-alpha.16"
 EXPECTED_MAIN = "c8f697635c93584e85e76a1d734f8fa797a76b51"
 STATUS = "HARDWARE_CANARY_PACKET_CONTRACT"
+MAX_PACKET_BYTES = 1024 * 1024
 
 READY = "READY_FOR_HARDWARE_CANARY"
 CHANGES_REQUIRED = "CHANGES_REQUIRED"
@@ -453,16 +456,40 @@ def _scan_prohibited_keys_and_values(value: Any, path: str, errors: List[str]) -
 
 def load_packet(path: Path) -> Dict[str, Any]:
     path = Path(path)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    fd: Optional[int] = None
     try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise PacketError("could not inspect packet") from exc
-    if size > 1024 * 1024:
+        try:
+            fd = os.open(path, flags)
+        except OSError as exc:
+            raise PacketError("could not open packet") from exc
+        try:
+            metadata = os.fstat(fd)
+        except OSError as exc:
+            raise PacketError("could not inspect packet") from exc
+        if not stat.S_ISREG(metadata.st_mode):
+            raise PacketError("packet must be a regular file")
+        if metadata.st_size > MAX_PACKET_BYTES:
+            raise PacketError("packet exceeds the 1 MiB limit")
+        try:
+            with os.fdopen(fd, "rb", closefd=True) as stream:
+                fd = None
+                raw = stream.read(MAX_PACKET_BYTES + 1)
+        except OSError as exc:
+            raise PacketError("could not read packet") from exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    if len(raw) > MAX_PACKET_BYTES:
         raise PacketError("packet exceeds the 1 MiB limit")
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise PacketError("could not read packet") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
