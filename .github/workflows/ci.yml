@@ -47,6 +47,12 @@ jobs:
           python3 -m py_compile scripts/routerkit-devices.py
           python3 -m py_compile scripts/routerkit_netcraze_plan.py
           python3 -m py_compile scripts/routerkit-netcraze-plan.py
+          python3 -m py_compile scripts/validate_routerkit_platform_compatibility.py
+
+      - name: Platform compatibility contract
+        run: |
+          python3 scripts/validate_routerkit_platform_compatibility.py
+          python3 -m unittest tests.test_routerkit_platform_compatibility -v
 
       - name: Focused device discovery tests
         run: |

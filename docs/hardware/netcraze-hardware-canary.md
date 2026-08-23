@@ -8,6 +8,7 @@ This document is the primary operator sequence for the limited Netcraze/Keenetic
 - [policy write-contract packet](netcraze-policy-contract.md);
 - [machine-readable canary packet](../../hardware/netcraze-canary-packet.v1.json);
 - [printable checklist](netcraze-canary-checklist.md).
+- [platform and firmware compatibility audit](platform-compatibility.md).
 
 ## 1. Purpose and non-claims
 
@@ -25,6 +26,10 @@ Release `v0.2.0-alpha.16` contains the fixture-first #21 discovery core and the 
 No normal `routerkit setup` mode is added by this packet. The validator and consolidated probe are offline development/operator tools only.
 
 ## 2. Planned target and mismatch rule
+
+The immutable v1 packet records the historical alpha.16 target below. The public-source audit retrieved on 2026-08-23 shows Netcraze NC-2312 Main `5.1.3` (released 2026-08-10) and Preview `5.1.4` (released 2026-08-18). These marketing releases do not prove an exact low-level build string and do not rewrite the packet. Before a hardware window, the operator must capture the device's exact track and build, compare it with the authorized session target, and stop on any mismatch.
+
+For 5.1.x, expect the relevant operator surfaces under **Client Lists**, **Segments**, and **Storages and Devices**. The release notes also document filesystem check/format commands in the CLI. Treat these only as navigation candidates: verify labels and behavior read-only on the actual firmware before any write, and never infer a live API contract from Web UI wording.
 
 The planned first target is:
 
