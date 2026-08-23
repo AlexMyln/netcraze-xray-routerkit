@@ -13,6 +13,8 @@ Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 Guided installer docs: [docs/guided-installer.md](docs/guided-installer.md)
 
+Platform and firmware compatibility: [docs/hardware/platform-compatibility.md](docs/hardware/platform-compatibility.md)
+
 Bootstrap design: [execution-model ADR](docs/architecture/bootstrap-execution-model.md) · [pinned Xray verification](docs/xray-artifact-pin.md)
 
 ## Repository Media
@@ -360,6 +362,8 @@ docs/guided-installer.md           Guided installer workflow
 docs/guided-installer.ru.md        Guided installer workflow in Russian
 docs/installer-scope.md            Guided installer scope and prerequisites
 docs/installer-scope.ru.md         Guided installer scope and prerequisites in Russian
+docs/hardware/platform-compatibility.md     Model, architecture, storage, and firmware audit
+docs/hardware/platform-compatibility.ru.md  Russian platform and firmware audit
 docs/netcraze-ui.md                Web UI proxy and policy guide
 docs/netcraze-ui.ru.md             Web UI proxy and policy guide in Russian
 docs/restore.md                    Restore notes
@@ -378,6 +382,8 @@ docs/announcement.ru.md            Russian announcement draft
 - [Guided installer — RU](docs/guided-installer.ru.md)
 - [Install from zero — RU](docs/install-from-zero.ru.md)
 - [Installer scope](docs/installer-scope.md)
+- [Platform and firmware compatibility](docs/hardware/platform-compatibility.md)
+- [Platform and firmware compatibility — RU](docs/hardware/platform-compatibility.ru.md)
 - [Netcraze/Keenetic Web UI guide](docs/netcraze-ui.md)
 - [Netcraze/Keenetic Web UI guide — RU](docs/netcraze-ui.ru.md)
 - [Troubleshooting](docs/troubleshooting.md)
