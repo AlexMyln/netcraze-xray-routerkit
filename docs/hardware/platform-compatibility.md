@@ -6,7 +6,7 @@ Reviewed: **2026-08-23**. Machine-readable source: [`hardware/routerkit-platform
 
 This is the public-source platform gate for RouterKit. It starts from the complete current Netcraze router catalog, the current Keenetic catalog filtered only after inventory for plausible USB/package-capable routers, and a bounded recent used-market set. A favorable class means only that documented static prerequisites line up. It never authorizes router access, installation, policy writes, or a hardware claim.
 
-The catalog pass found 33 current Netcraze product entries: 26 routers were inventoried and seven repeaters/access points/accessories were excluded at the catalog boundary. All 26 routers remain in the matrix. The Keenetic pass entered 13 current USB-capable or USB-ambiguous routers into detailed assessment. Eight recent legacy models were added because official package guidance documents storage/OPKG and architecture close enough to the current software generation to be realistic used-market options.
+The catalog pass found 33 current Netcraze product entries: 26 routers were inventoried and seven repeaters/access points/accessories were excluded at the catalog boundary. All 26 routers remain in the matrix. The Keenetic pass entered 13 current USB-capable or USB-ambiguous routers into detailed assessment. The bounded legacy set contains eight models selected by the dated, mechanical rule in section 8; it is not a claim that every historical model was enumerated.
 
 ## 2. Source-reviewed versus hardware-validated
 
@@ -18,6 +18,8 @@ live_contract_confirmed=false
 ```
 
 The vendor can support a model while RouterKit has not reviewed it. RouterKit can review source compatibility while the live read/write contract remains unknown. Hardware P0–P4 is the only path that can confirm the actual model, firmware, architecture, mount, Entware feed, authentication, schemas, default policy, save timing, and rollback.
+
+The manifest binds facts through stable source IDs. Each source record declares a strict kind, exact model scope and typed facts; each model's `evidence` map points back to those IDs. The validator traverses model binding → source ID → source record → exact model → fact type in both directions. A product page or sibling-model source cannot substitute for an architecture matrix, and an unbound authoritative source is rejected rather than treated as decorative bibliography.
 
 ## 3. Mandatory prerequisites
 
@@ -100,7 +102,7 @@ The Keenetic catalog was not limited to mobile models. These are all current USB
 
 ## 8. Recent legacy and used-market candidates
 
-The cutoff retains recent models named by official OPKG architecture guidance and having general storage. It excludes ancient hardware without a documented current-generation package path or realistic lifecycle evidence.
+Policy `routerkit-recent-legacy-v1` was evaluated on **2026-08-23** with a three-year evidence-retrieval cutoff of **2023-08-23**. A model enters this bounded evaluation set only when all machine-readable predicates hold: it is outside the current catalog; an exact-model first-party package matrix names it; general USB storage and OPKG relevance are recorded; its firmware family is the current-generation KeeneticOS family; and the qualifying evidence was retrieved within the cutoff window. The rule deliberately defines a reproducible used-market review set, not mathematical completeness across all historical hardware.
 
 | Model | Architecture | Result |
 | --- | --- | --- |
@@ -173,7 +175,7 @@ Impact on #16: the checklist must use current **Wi-Fi settings**, **Segments**, 
 
 ## 14. Promoting a new model
 
-A model can move to `strong_candidate` only when primary sources prove general storage, EXT4, OPKG/Entware, an exact supported userspace architecture, adequate resources, management/recovery, lifecycle and separate Main/Preview information. It becomes `primary_canary_target` only by an explicit reviewed decision. It becomes hardware validated only after the full canary and evidence schema pass. Unknown model, architecture or firmware always stops automatic promotion.
+A model can move to `strong_candidate` only with primary, exact-model evidence for identity, hardware/resources, general storage, EXT4, OPKG/Entware, supported userspace architecture, management/recovery and lifecycle. The centralized eligibility predicate also requires 512 or 1024 MB RAM with `comfortable` assessment, CLI/SSH, passing storage and management prerequisites, no unsupported lifecycle and no unresolved static blocking reason. Any recorded Main or Preview version must bind to a model- and channel-specific release source. It becomes `primary_canary_target` only by an explicit reviewed decision. It becomes hardware validated only after the full canary and evidence schema pass. Unknown model, architecture or firmware always stops automatic promotion.
 
 ## 15. Hardware validation status and purchase shortlist
 
@@ -187,6 +189,8 @@ All entries remain `not_hardware_tested`.
 ## 16. Official bibliography
 
 All retrieved 2026-08-23:
+
+The manifest source registry is authoritative for machine validation: source IDs and URLs are unique, fact types are enumerated, model scopes are exact, every non-catalog source is bound by at least one model fact, and only explicitly marked catalog-boundary records may remain outside a model evidence map.
 
 - [Netcraze current model catalog](https://netcraze.ru/ru/products) — complete current product inventory.
 - [Keenetic complete product catalog](https://keenetic.com/en/products), [routers](https://keenetic.com/en/products/routers), and [DSL routers](https://keenetic.com/en/products/dsl-routers) — current relevant universe.

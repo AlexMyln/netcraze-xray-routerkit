@@ -6,7 +6,7 @@
 
 Это public-source gate платформ RouterKit. Исследование начинается с полного текущего каталога роутеров Netcraze, каталога Keenetic с фильтрацией только после инвентаризации USB/package-кандидатов и объективно ограниченного набора недавних моделей для вторичного рынка. Положительный класс означает только совпадение статических предпосылок. Он не разрешает доступ к роутеру, установку или записи policy.
 
-В каталоге Netcraze найдено 33 product entries: 26 роутеров вошли в инвентаризацию, семь ретрансляторов/точек доступа/аксессуаров исключены на границе каталога. Все 26 роутеров есть в матрице. В подробную текущую выборку Keenetic вошли 13 USB-capable или USB-ambiguous роутеров. Добавлены восемь недавних legacy-моделей, для которых официальная package-инструкция документирует storage/OPKG и архитектуру, достаточно близкую к текущему поколению ПО.
+В каталоге Netcraze найдено 33 product entries: 26 роутеров вошли в инвентаризацию, семь ретрансляторов/точек доступа/аксессуаров исключены на границе каталога. Все 26 роутеров есть в матрице. В подробную текущую выборку Keenetic вошли 13 USB-capable или USB-ambiguous роутеров. Ограниченный legacy-набор содержит восемь моделей, выбранных по датированному механическому правилу из раздела 8; это не заявление о перечислении всех исторических моделей.
 
 ## 2. Source-reviewed и hardware-validated
 
@@ -18,6 +18,8 @@ live_contract_confirmed=false
 ```
 
 Поддержка vendor не равна проверке RouterKit. Source review не подтверждает live read/write contract. Только hardware P0–P4 может подтвердить фактическую модель, прошивку, архитектуру, mount, Entware feed, authentication, schemas, default policy, save timing и rollback.
+
+Manifest связывает факты через стабильные source ID. Каждая запись источника объявляет строгий kind, точный scope моделей и типизированные facts; `evidence` каждой модели ссылается на эти ID. Валидатор в обе стороны проходит цепочку binding модели → source ID → source record → точная модель → тип факта. Product page или источник sibling-модели не может заменить architecture matrix, а несвязанный authoritative source отклоняется и не считается декоративной библиографией.
 
 ## 3. Обязательные предпосылки
 
@@ -96,7 +98,7 @@ Buddy 4/5/6/6 SE, Stellar 6, Orbiter 6 и PoE adapter исключены как 
 
 ## 8. Recent legacy / вторичный рынок
 
-Cutoff сохраняет недавние модели из официальной OPKG architecture matrix с общим storage и исключает древние поколения без документированного текущего package path.
+Политика `routerkit-recent-legacy-v1` проверена **2026-08-23** с трёхлетней границей retrieval evidence **2023-08-23**. Модель входит в этот ограниченный evaluation set только при выполнении всех машиночитаемых условий: её нет в текущем каталоге; first-party package matrix называет точную модель; зафиксированы общий USB storage и OPKG relevance; firmware family относится к текущему поколению KeeneticOS; qualifying evidence получено в пределах cutoff window. Правило задаёт воспроизводимый used-market review set, а не математическую полноту всей исторической линейки.
 
 | Модель | Архитектура | Результат |
 | --- | --- | --- |
@@ -167,7 +169,7 @@ Bootstrap stream-записывает bounded 128 MiB archive на диск и �
 
 ## 14. Повышение статуса модели
 
-`strong_candidate` требует primary evidence для общего storage, EXT4, OPKG/Entware, точной userspace architecture, ресурсов, management/recovery, lifecycle и разделённых Main/Preview. `primary_canary_target` назначается только отдельным review. Hardware validation появляется только после полного canary. Unknown model/architecture/firmware всегда fail closed.
+`strong_candidate` требует primary evidence с точным model scope для identity, hardware/resources, общего storage, EXT4, OPKG/Entware, поддерживаемой userspace architecture, management/recovery и lifecycle. Централизованный eligibility predicate также требует 512 или 1024 MB RAM с оценкой `comfortable`, CLI/SSH, проходящих storage и management prerequisites, не-unsupported lifecycle и отсутствия нерешённого static blocking reason. Любая записанная версия Main или Preview должна быть связана с release source для точной модели и канала. `primary_canary_target` назначается только отдельным review. Hardware validation появляется только после полного canary. Unknown model/architecture/firmware всегда fail closed.
 
 ## 15. Hardware status и shortlist
 
@@ -181,6 +183,8 @@ Bootstrap stream-записывает bounded 128 MiB archive на диск и �
 ## 16. Официальная библиография
 
 Все источники получены 2026-08-23:
+
+Source registry в manifest является authoritative для machine validation: source ID и URL уникальны, fact types перечислены enum-ом, model scopes точны, каждый non-catalog source связан хотя бы с одним фактом модели, и только явно помеченные catalog-boundary records могут не входить в model evidence map.
 
 - [полный каталог Netcraze](https://netcraze.ru/ru/products);
 - [полный каталог Keenetic](https://keenetic.com/en/products), [routers](https://keenetic.com/en/products/routers), [DSL routers](https://keenetic.com/en/products/dsl-routers);
