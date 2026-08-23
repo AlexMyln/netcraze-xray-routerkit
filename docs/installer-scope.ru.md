@@ -6,6 +6,7 @@
 
 Перед запуском guided installer на роутере уже должны быть:
 
+- модель и прошивка, проходящие статические gates из [аудита совместимости платформ](hardware/platform-compatibility.ru.md); strong static candidate не является заявлением о hardware validation;
 - Entware/OPKG на USB-накопителе;
 - завершённая официальная activation Entware с доступным `/opt`;
 - рабочий SSH-доступ в Entware shell;
@@ -54,3 +55,5 @@
 Подготовка USB, установка Entware, компоненты прошивки и назначение Web UI policies зависят от модели, прошивки и конкретной домашней сети. Эти шаги могут быть разрушительными, если автоматизировать их вслепую.
 
 Установщик должен fail closed: если prerequisites не выполнены, он должен остановиться, а не угадывать. Package additions явного bootstrap могут остаться, а Xray replacement имеет отдельную проверенную границу backup/rollback. Autostart enable не является шагом firewall, Web UI, policy, default-policy, device-discovery или reboot validation. Fixture-first device discovery и offline план #15 не являются policy или assignment write. Hardware validation остаётся в #16.
+
+Текущий bootstrap принимает только Linux `aarch64`/`arm64` и pinned artifact `Xray-linux-arm64-v8a.zip`. Наличия USB-порта недостаточно: модель должна поддерживать USB-накопитель общего назначения, постоянный EXT4 volume и официальную активацию Entware/OPKG под `/opt`. Main и Preview — отдельные firmware tracks; нельзя выводить точную build string из marketing version или считать Preview базовой Main-версией.

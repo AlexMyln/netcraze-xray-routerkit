@@ -8,6 +8,7 @@
 - [write-contract packet #15](netcraze-policy-contract.ru.md);
 - [машиночитаемый packet](../../hardware/netcraze-canary-packet.v1.json);
 - [печатный checklist](netcraze-canary-checklist.ru.md).
+- [аудит совместимости платформ и прошивок](platform-compatibility.ru.md).
 
 ## 1. Назначение и что не заявляется
 
@@ -25,6 +26,10 @@
 Packet не добавляется в обычный `routerkit setup`. Validator и consolidated probe работают только offline.
 
 ## 2. Плановая цель и mismatch
+
+Неизменяемый packet v1 фиксирует историческую цель alpha.16 ниже. По официальным источникам, полученным 2026-08-23, для Netcraze NC-2312 актуальны Main `5.1.3` от 2026-08-10 и Preview `5.1.4` от 2026-08-18. Эти marketing releases не доказывают точную низкоуровневую build string и не изменяют packet. Перед hardware window оператор обязан записать точные track и build устройства, сравнить их с авторизованной целью сессии и остановиться при mismatch.
+
+В 5.1.x релевантные операторские разделы ожидаются в **Списке клиентов**, **Сегментах** и **Накопителях и устройствах**. Release notes также описывают CLI-команды проверки и форматирования файловой системы. Это только navigation candidates: labels и поведение нужно сначала проверить read-only на фактической прошивке; из текста Web UI нельзя выводить live API contract.
 
 Плановая первая цель:
 

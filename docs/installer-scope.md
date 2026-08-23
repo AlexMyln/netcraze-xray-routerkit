@@ -6,6 +6,7 @@ The planned guided installer is a one-command core setup helper, not a bare-rout
 
 Before running the guided installer, the router must already have:
 
+- a model and firmware that pass the static gates in the [platform compatibility audit](hardware/platform-compatibility.md); a strong static candidate is not a hardware-tested claim;
 - Entware/OPKG installed on USB storage;
 - official Entware activation completed with `/opt` available;
 - working SSH access to the Entware shell;
@@ -54,3 +55,5 @@ The first version will not:
 USB preparation, Entware installation, firmware components, and Web UI policy assignment are device-specific and can be destructive if automated blindly.
 
 The installer should fail closed: if prerequisites are missing, it must stop instead of guessing. Package additions made by explicit bootstrap may remain, while Xray replacement has a separate verified backup/rollback boundary. Autostart enable is not a firewall, Web UI, policy, default-policy, device-discovery, or reboot-validation step. Fixture-first device discovery and the #15 offline plan are not policy or assignment writes. Hardware validation remains tracked in #16.
+
+The current bootstrap accepts only Linux `aarch64`/`arm64` and the pinned `Xray-linux-arm64-v8a.zip` artifact. A USB port alone is not enough: the selected model must support general USB storage, a persistent EXT4 volume, and official Entware/OPKG activation at `/opt`. Firmware Main and Preview tracks are separate evidence; do not infer an exact build string from a marketing version or treat Preview as the Main baseline.
