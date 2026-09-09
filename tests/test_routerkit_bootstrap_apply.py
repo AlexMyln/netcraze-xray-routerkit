@@ -137,6 +137,14 @@ class OpkgPolicyTests(unittest.TestCase):
         self.assertFalse(any("upgrade" in command for command in commands))
 
     def test_all_present_runs_no_install(self):
+        self._assert_all_present_runs_no_install(b"Status: install ok installed\n")
+
+    def test_all_user_installed_runs_no_install(self):
+        self._assert_all_present_runs_no_install(
+            b"Package: synthetic\r\nStatus: install user installed\r\n"
+        )
+
+    def _assert_all_present_runs_no_install(self, status_output):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_opkg(root / "bin/opkg")
@@ -145,16 +153,40 @@ class OpkgPolicyTests(unittest.TestCase):
 
             def runner(command, **kwargs):
                 commands.append(list(command))
-                return apply.ProcessResult(0, b"Status: install ok installed\n", b"")
+                return apply.ProcessResult(0, status_output, b"")
 
-            _, added = apply.ensure_required_packages(
+            already, added = apply.ensure_required_packages(
                 root,
                 handle,
                 lifecycle=apply.BootstrapSignalLifecycle(),
                 runner=runner,
             )
         self.assertEqual(added, [])
+        self.assertEqual(already, list(apply.REQUIRED_PACKAGES))
         self.assertFalse(any(command[1] == "install" for command in commands))
+
+    def test_unconfirmed_package_status_is_rejected(self):
+        cases = [
+            (1, b"Status: install ok installed\n"),
+            (1, b"Status: install user installed\n"),
+            (0, b""),
+            (0, b"Status: install ok unpacked\n"),
+            (0, b"Status: deinstall ok installed\n"),
+            (0, b"Status: install unknown installed\n"),
+            (0, b"prefix Status: install ok installed\n"),
+            (0, b"Status: install user installed suffix\n"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_opkg(root / "bin/opkg")
+            handle = apply.resolve_opkg(root)
+            for returncode, output in cases:
+                with self.subTest(returncode=returncode, output=output):
+                    runner = mock.Mock(return_value=apply.ProcessResult(returncode, output, b""))
+                    self.assertFalse(apply._package_is_installed(
+                        handle, "curl", target_root=root,
+                        lifecycle=apply.BootstrapSignalLifecycle(), runner=runner,
+                    ))
 
 
 class ArchiveTests(unittest.TestCase):
@@ -232,9 +264,29 @@ class VersionAndReceiptTests(unittest.TestCase):
             ),
             "Xray 26.3.27",
         )
-        for value in (b"Xray 26.3.28\n", b"Xray 26.3.27 extra\n", b"not xray\n"):
+        for value in (
+            b"Xray 26.3.28\n",
+            b"Xray 26.3.27 extra\n",
+            b"not xray\n",
+            b"Xray 26.3.28 (Xray, Penetrates Everything.) d2758a0\n",
+            b"Xray 26.3.270 (Xray, Penetrates Everything.) d2758a0\n",
+            b"Xray 26.3.27 (Xray, Penetrates Everything.)suffix\n",
+            b"Xray 26.3.27 (Xray, Penetrates Everything.) \x00\n",
+        ):
             with self.subTest(value=value), self.assertRaises(apply.BootstrapApplyError):
                 apply.validate_version_output(value, "Xray 26.3.27")
+
+    def test_upstream_banner_returns_canonical_version(self):
+        for value in (
+            b"Xray 26.3.27 (Xray, Penetrates Everything.)\n",
+            b"Xray 26.3.27 (Xray, Penetrates Everything.) d2758a0 (go1.26.1 linux/arm64)\n",
+            b"Xray 26.3.27 (Xray, Penetrates Everything.) Custom (go1.26.3 linux/arm64)\n",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    apply.validate_version_output(value, "Xray 26.3.27"),
+                    "Xray 26.3.27",
+                )
 
     def test_receipt_is_deterministic_private_and_contains_no_url(self):
         with tempfile.TemporaryDirectory() as tmp:
