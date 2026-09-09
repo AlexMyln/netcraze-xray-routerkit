@@ -512,7 +512,13 @@ def _package_is_installed(
         env=sanitized_environment(target_root, target_root),
         lifecycle=lifecycle,
     )
-    return result.returncode == 0 and b"Status: install ok installed" in result.stdout
+    return result.returncode == 0 and any(
+        line.strip() in (
+            b"Status: install ok installed",
+            b"Status: install user installed",
+        )
+        for line in result.stdout.splitlines()
+    )
 
 
 def ensure_required_packages(
@@ -592,9 +598,14 @@ def validate_version_output(output: bytes, expected: str) -> str:
     except UnicodeDecodeError:
         raise BootstrapApplyError("Xray version output is invalid.") from None
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
-    if not first or any(not char.isprintable() for char in first) or first != expected:
+    if not first or any(not char.isprintable() for char in first):
         raise BootstrapApplyError("Xray version does not match the pinned release.")
-    return first
+    if first == expected:
+        return expected
+    upstream_banner = expected + " (Xray, Penetrates Everything.)"
+    if first == upstream_banner or first.startswith(upstream_banner + " "):
+        return expected
+    raise BootstrapApplyError("Xray version does not match the pinned release.")
 
 
 def probe_exact_version(
