@@ -1,0 +1,14 @@
+{
+  "schema": "routerkit.routing-service.v1",
+  "name": "kinopoisk",
+  "domains": [
+    "kinopoisk.ru",
+    "kinopoisk-ru.clstorage.net",
+    "ott.yandex.ru",
+    "ott.yandex.net",
+    "strm.yandex.ru",
+    "yastatic.net",
+    "yndx.net",
+    "yccdn.ru"
+  ]
+}
