@@ -1,10 +1,18 @@
 #!/bin/sh
 set -eu
 
+# RouterKit/Entware commands must remain available even when the invoking
+# management transport supplies a minimal PATH.
+PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+export PATH
+
 SRC_DIR="${1:-generated}"
 DEST_DIR="/opt/etc/xray/configs"
-INIT_SRC="$(dirname "$0")/../templates/S23xray-direct"
+SCRIPT_DIR="$(dirname "$0")"
+INIT_SRC="$SCRIPT_DIR/../templates/S23xray-direct"
 INIT_DEST="/opt/etc/init.d/S23xray-direct"
+ROUTING_STATE="/opt/etc/routerkit/routing-overrides.json"
+ROUTING_HELPER="$SCRIPT_DIR/routerkit-routing.py"
 
 if [ "$(uname -s)" != "Linux" ]; then
     echo "ERROR: this script must run on Entware/Linux router, not macOS/Windows." >&2
@@ -42,6 +50,22 @@ cp -a "$SRC_DIR/03_inbounds.json" "$DEST_DIR/03_inbounds.json"
 cp -a "$SRC_DIR/04_outbounds.json" "$DEST_DIR/04_outbounds.json"
 cp -a "$SRC_DIR/05_routing.json" "$DEST_DIR/05_routing.json"
 chmod 600 "$DEST_DIR/03_inbounds.json" "$DEST_DIR/04_outbounds.json" "$DEST_DIR/05_routing.json"
+
+# Local split-routing is persistent RouterKit state, not an ad-hoc edit of the
+# generated Xray fragment.  A normal setup/regeneration deliberately writes a
+# clean 05_routing.json first; when persistent overrides exist, restore their
+# code-owned first direct rule before validating the installed config.
+if [ -f "$ROUTING_STATE" ]; then
+    if [ ! -f "$ROUTING_HELPER" ]; then
+        echo "ERROR: persistent routing state exists but RouterKit routing helper is unavailable." >&2
+        exit 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: persistent routing state exists but python3 is unavailable." >&2
+        exit 1
+    fi
+    python3 "$ROUTING_HELPER" reconcile --yes
+fi
 
 if [ ! -f "$INIT_SRC" ]; then
     echo "ERROR: init template not found: $INIT_SRC" >&2
