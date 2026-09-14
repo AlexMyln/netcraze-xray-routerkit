@@ -1,0 +1,10 @@
+{
+  "schema": "routerkit.routing-service.v1",
+  "name": "rutube",
+  "domains": [
+    "rutube.ru",
+    "rutubelist.ru",
+    "rtbcdn.ru",
+    "rutube.sport"
+  ]
+}
