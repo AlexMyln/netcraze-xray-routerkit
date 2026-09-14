@@ -1,0 +1,11 @@
+{
+  "schema": "routerkit.routing-service.v1",
+  "name": "wink",
+  "domains": [
+    "restream-media.net",
+    "restream.ru",
+    "more.tv",
+    "wink.am",
+    "wink.ru"
+  ]
+}

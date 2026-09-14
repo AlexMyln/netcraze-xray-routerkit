@@ -1,0 +1,10 @@
+{
+  "schema": "routerkit.routing-service.v1",
+  "name": "okko",
+  "domains": [
+    "okkoapi.tv",
+    "playfamily.ru",
+    "okko.sport",
+    "okko.tv"
+  ]
+}
