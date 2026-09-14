@@ -31,6 +31,10 @@ yccdn.ru
 
 Набор считается **достаточным для подтверждённого сценария**, но это не утверждение, что каждый домен в нём минимально необходим.
 
+Дополнительно доступны opt-in candidate-паки `rutube`, `ivi`, `okko` и `wink`. Это **community-derived candidates**, а не заявление о hardware-proven совместимости RouterKit. Их стартовые domain suffix взяты из `v2fly/domain-list-community` на зафиксированном commit `5d939545c84e2a534f8e85ba6ffb2b51fa18fb76`. Точная provenance и статус доказательств описаны в `routing/services/README.md`.
+
+Candidate-паку могут потребоваться дополнительные service-specific API/CDN/DRM suffix после реальной проверки клиента. Неполный pack не следует «чинить» добавлением широкого `RU_ALL`, всего `yandex.ru` или несвязанных IP ranges.
+
 ## Использование после установки
 
 Статус:
@@ -53,7 +57,20 @@ python3 scripts/routerkit-routing.py apply --add-service kinopoisk --yes
 
 Повторное добавление уже выбранного service pack является no-op.
 
-Удаление:
+Несколько сервисов можно выбрать одной проверяемой транзакцией, потому что `--add-service` допускает повторение:
+
+```sh
+python3 scripts/routerkit-routing.py plan \
+  --add-service kinopoisk \
+  --add-service rutube \
+  --add-service ivi \
+  --add-service okko \
+  --add-service wink
+```
+
+После просмотра expanded domain set те же repeated flags можно передать в `apply --yes`.
+
+Удаление сервиса:
 
 ```sh
 python3 scripts/routerkit-routing.py apply --remove-service kinopoisk --yes
