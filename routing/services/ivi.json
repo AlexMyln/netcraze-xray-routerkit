@@ -1,0 +1,8 @@
+{
+  "schema": "routerkit.routing-service.v1",
+  "name": "ivi",
+  "domains": [
+    "ivi.ru",
+    "ivicdn.tv"
+  ]
+}
