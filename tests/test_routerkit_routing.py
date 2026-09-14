@@ -56,6 +56,42 @@ class ServicePackTests(unittest.TestCase):
             ),
         )
 
+    def test_candidate_ru_media_packs_match_pinned_community_sets(self):
+        expected = {
+            "rutube": (
+                "rutube.ru",
+                "rutubelist.ru",
+                "rtbcdn.ru",
+                "rutube.sport",
+            ),
+            "ivi": (
+                "ivi.ru",
+                "ivicdn.tv",
+            ),
+            "okko": (
+                "okkoapi.tv",
+                "playfamily.ru",
+                "okko.sport",
+                "okko.tv",
+            ),
+            "wink": (
+                "restream-media.net",
+                "restream.ru",
+                "more.tv",
+                "wink.am",
+                "wink.ru",
+            ),
+        }
+        for name, domains in expected.items():
+            with self.subTest(service=name):
+                self.assertEqual(routing.load_service_pack(ROOT, name), domains)
+
+    def test_available_service_names_are_deterministic(self):
+        self.assertEqual(
+            routing.available_service_names(ROOT),
+            ("ivi", "kinopoisk", "okko", "rutube", "wink"),
+        )
+
     def test_unknown_service_fails_closed(self):
         with self.assertRaises(routing.RoutingError):
             routing.load_service_pack(ROOT, "does-not-exist")
@@ -79,6 +115,24 @@ class OverrideStateTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first.direct_services, ("kinopoisk",))
         self.assertEqual(first.direct_domains, ("example.org",))
+
+    def test_multiple_service_packs_can_be_selected_together(self):
+        desired = routing.mutate_overrides(
+            routing.RoutingOverrides(),
+            ROOT,
+            add_services=["wink", "kinopoisk", "rutube", "okko", "ivi"],
+        )
+        self.assertEqual(
+            desired.direct_services,
+            ("ivi", "kinopoisk", "okko", "rutube", "wink"),
+        )
+        expanded = routing.expand_direct_domains(ROOT, desired)
+        self.assertIn("kinopoisk.ru", expanded)
+        self.assertIn("rutube.ru", expanded)
+        self.assertIn("ivi.ru", expanded)
+        self.assertIn("okko.tv", expanded)
+        self.assertIn("wink.ru", expanded)
+        self.assertEqual(len(expanded), len(set(expanded)))
 
     def test_expansion_keeps_service_domains_before_custom_domains(self):
         state = routing.RoutingOverrides(("kinopoisk",), ("example.org",))
