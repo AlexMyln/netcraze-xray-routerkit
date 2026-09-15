@@ -23,6 +23,11 @@ Within one epoch, reuse facts that already passed. Do not repeat the same prefli
 
 ## 2. Full happy path
 
+This section is the target-side `--runtime-mode local-router` flow. It is
+valid only when `live-install` itself runs on the target router and literal
+`/opt` belongs to that router. Runtime execution and native router transport
+are separate choices.
+
 For an installation whose goal includes per-device VPN routing, use this order:
 
 1. ordinary router network stable;
@@ -51,12 +56,18 @@ Use the unified coordinator for the complete bounded scope:
 ```sh
 python3 scripts/routerkit.py live-install plan \
   --transport external \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1
 
 python3 scripts/routerkit.py live-install apply \
   --transport external \
-  --source-file /private/profile-source.txt \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
+  --receipt-file /private/live-install-receipt.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1 \
   --evidence-file /private/live-install-evidence.json
@@ -72,18 +83,29 @@ Continue without repeating proved stages:
 ```sh
 python3 scripts/routerkit.py live-install resume \
   --transport external \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
+  --receipt-file /private/live-install-receipt.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1 \
   --evidence-file /private/live-install-evidence-next-epoch.json
 
 python3 scripts/routerkit.py live-install status \
-  --receipt-file /opt/var/lib/routerkit/live-install/receipt.json
+  --receipt-file /private/live-install-receipt.json
 ```
 
-The default receipt is an owner-only
+For `external-evidence`, the default receipt is an owner-only
+`.routerkit-live-install/receipt.json` below the current directory. Supply an
+explicit protected path for production operations. Paths below the
+workstation's `/opt` are rejected. `local-router` retains the owner-only
+`/opt/var/lib/routerkit/live-install/receipt.json` default.
+
+The receipt is a
 [`routerkit.live-install.v1`](../hardware/routerkit-live-install.v1.schema.json)
 file below an exact `0700` directory. It contains stage/epoch state, the
-hardware/artifact/transport/endpoint fingerprints, reboot epoch, native
+hardware/artifact/native-transport/runtime-mode/endpoint fingerprints, runtime
+disposition, reboot epoch, native
 transaction status, DNS status, and final classifications. It never contains
 the profile source, VLESS URI, UUID/Reality keys, raw configs, passwords,
 tokens, private keys, or the selected MAC itself. Resume recomputes the
@@ -91,12 +113,47 @@ intended-installation fingerprint and rejects an incompatible receipt.
 
 Typed vendor/operator observations use the separate owner-only
 [`routerkit.live-install.evidence.v1`](../hardware/routerkit-live-install-evidence.v1.schema.json)
-shape; a secret-free example is
+shape. Its strict `runtime` object records target locus, `/opt` and Entware
+readiness, exact semantic Xray release, running/listener/autostart/reboot-
+recovery results, and the verified endpoint-manifest fingerprint. It contains
+no profile source or configuration secrets. A secret-free example is
 [`live-install-evidence.example.json`](../examples/live-install-evidence.example.json).
 One evidence fingerprint is accepted per state epoch. A new discovery is
 allowed only after a declared component, reboot, `/opt`, RouterKit/Xray,
 contradictory-evidence, or native-policy state change; contradictory evidence
 in one epoch fails closed.
+
+`local-router` is the only mode that launches preflight, bootstrap, setup,
+backup, install, healthcheck, or autostart. Mutable apply must spell out
+`--runtime-mode local-router`, which is the bounded declaration that the
+command is executing on the target. Existing stage order and rollback
+boundaries are unchanged.
+
+On the target router, a fresh local flow remains:
+
+```sh
+python3 scripts/routerkit.py live-install apply \
+  --transport local-ndmc \
+  --runtime-mode local-router \
+  --source-file /private/profile-source.txt \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+```
+
+`external-evidence` never launches those subprocesses. `--transport external`
+infers this safe mode when no runtime mode is supplied. A fresh or mutating
+runtime request returns `ROUTERKIT_RUNTIME_EXECUTION_REQUIRED`; run the existing
+RouterKit commands through a shell-capable transport on the target, then resume
+with fresh evidence and the target-generated `--endpoint-manifest-file`.
+Neither `router_exec`, raw MCP commands, nor the browser/Web UI is a substitute.
+
+For the already installed NC-3812 brownfield runtime, use
+`--adopt-existing-runtime`. It requires exact contract evidence, prior reboot
+recovery, and an explicit RouterKit-valid manifest. It does not read a profile
+source, regenerate configuration, or change runtime state. The receipt records
+`ADOPTED`; bootstrap/source/generate/plan/backup/install are `SKIPPED`, while
+current health and autostart checks are evidence-backed `PASS`.
 
 `local-ndmc` calls the existing `routerkit-netcraze-live.py` plan/apply path.
 It never invents a component-install command. `external` creates the existing
@@ -106,7 +163,7 @@ running-state verification, and requires a distinct saved-state snapshot for
 a mutating transaction. External native operation requires no Entware SSH.
 Browser/Web UI is not a fallback.
 
-The install stage still delegates to `install-xray-direct.sh`; therefore an
+In `local-router`, the install stage still delegates to `install-xray-direct.sh`; therefore an
 existing `/opt/etc/routerkit/routing-overrides.json` is reconciled by the
 existing local-routing module. No RU service pack is automatically selected.
 
