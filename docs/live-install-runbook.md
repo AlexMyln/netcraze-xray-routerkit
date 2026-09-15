@@ -205,6 +205,45 @@ Unselected clients should keep direct PPPoE as their normal path unless the oper
 
 If the operator explicitly authorizes adding proxy paths as fallbacks to Default, report that actual state precisely; do not claim that Default remained unchanged.
 
+### 9.1 Official MCP/RMM transport without Entware shell
+
+The official Netcraze MCP/RMM is a supported native command transport even if
+it cannot execute an arbitrary Linux/Entware shell. The external agent must
+retrieve the exact running configuration into a private mode-`0600` temporary
+file and let RouterKit own the plan and verification:
+
+```sh
+python3 scripts/routerkit-netcraze-external.py plan \
+  --snapshot-file /private/run-before.txt \
+  --manifest-file /private/local-endpoints.json \
+  --transaction-file /private/netcraze-transaction.json \
+  --contract nc3812-netcrazeos-5.1.5
+
+python3 scripts/routerkit-netcraze-external.py verify \
+  --phase pre \
+  --snapshot-file /private/run-before.txt \
+  --manifest-file /private/local-endpoints.json \
+  --transaction-file /private/netcraze-transaction.json
+```
+
+For a mutating packet, execute only the exact `commands` array, in order, by
+official MCP/RMM. Retrieve a fresh running-config snapshot and run `verify
+--phase running`. Only `save_authorized=true` permits the exact packet
+`save_command`. If saved/startup configuration can be retrieved in the same
+syntax, verify that fresh snapshot with `--phase saved`.
+
+For the established three-profile NC-3812 brownfield state, semantic reuse of
+`XRAY-NL` / `VPN-NL` and the equivalent Smart-RU/US objects must produce
+`commands=[]`, `backup_required=false`, `write_required=false`, and
+`save_required=false`. Retrieve a
+fresh second running-config snapshot and run the normal `running` verifier;
+do not issue `system configuration save` for this NOOP proof.
+
+Never treat `router_exec success`, HTTP status, or MCP success as verification.
+Never add commands or reconstruct Proxy/Policy semantics in the external
+agent. Browser/Web UI remains a prohibited fallback. See
+[`netcraze-external-transport.md`](architecture/netcraze-external-transport.md).
+
 ## 10. Stop conditions
 
 Stop and involve the operator only when:

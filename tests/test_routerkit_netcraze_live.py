@@ -228,8 +228,16 @@ class LiveApplyTests(unittest.TestCase):
         self.assertEqual(len(result.created_proxies), 3)
         self.assertEqual(len(result.created_policies), 3)
         self.assertTrue(result.assignment_changed)
+        self.assertTrue(result.write_required)
+        self.assertFalse(result.noop)
         self.assertEqual(fake.assignments[DEVICE_MAC], "Policy1")
         self.assertEqual(fake.default_line, "ip hotspot default-policy permit")
+        save_index = fake.commands.index("system configuration save")
+        running_reads = [
+            index for index, command in enumerate(fake.commands) if command == "show running-config"
+        ]
+        self.assertLess(running_reads[1], save_index)
+        self.assertGreater(running_reads[2], save_index)
 
         rerun = build_live_plan(
             manifest,
@@ -240,6 +248,62 @@ class LiveApplyTests(unittest.TestCase):
         self.assertTrue(all(item.proxy_action == "reuse" for item in rerun.bindings))
         self.assertTrue(all(item.policy_action == "reuse" for item in rerun.bindings))
         self.assertEqual(rerun.assignment_action, "reuse")
+
+    def test_all_reuse_is_verified_noop_without_backup_write_or_save(self):
+        fake = FakeNdmc()
+        for index, port in enumerate((1082, 1083, 1084)):
+            fake.proxies["Proxy%d" % index] = {
+                "description": "RouterKit-SOCKS-%d" % port,
+                "protocol": "socks5",
+                "host": "127.0.0.1",
+                "port": port,
+                "up": True,
+            }
+            fake.policies["Policy%d" % index] = {
+                "description": "RouterKit-Policy-%d" % port,
+                "interfaces": ["Proxy%d" % index],
+            }
+        manifest = manifest_three()
+        plan = build_live_plan(manifest, parse_running_config(fake.render()))
+        fake.commands.clear()
+        with tempfile.TemporaryDirectory() as directory:
+            backup_root = Path(directory) / "backups"
+            result = apply_live_plan(
+                fake,
+                manifest,
+                plan,
+                backup_root=backup_root,
+            )
+            self.assertFalse(backup_root.exists())
+        self.assertEqual(fake.commands, ["show running-config"])
+        self.assertFalse(result.write_required)
+        self.assertFalse(result.saved)
+        self.assertTrue(result.verified)
+        self.assertTrue(result.noop)
+
+        fake.assignments[DEVICE_MAC] = "Policy1"
+        reuse_assignment = build_live_plan(
+            manifest,
+            parse_running_config(fake.render()),
+            device_mac=DEVICE_MAC,
+            profile_slot=2,
+        )
+        fake.commands.clear()
+        with tempfile.TemporaryDirectory() as directory:
+            backup_root = Path(directory) / "backups"
+            assigned_result = apply_live_plan(
+                fake,
+                manifest,
+                reuse_assignment,
+                device_mac=DEVICE_MAC,
+                backup_root=backup_root,
+            )
+            self.assertFalse(backup_root.exists())
+        self.assertEqual(fake.commands, ["show running-config"])
+        self.assertFalse(assigned_result.write_required)
+        self.assertFalse(assigned_result.saved)
+        self.assertTrue(assigned_result.verified)
+        self.assertTrue(assigned_result.noop)
 
 
 if __name__ == "__main__":

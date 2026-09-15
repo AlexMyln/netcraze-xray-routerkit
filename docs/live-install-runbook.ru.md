@@ -205,6 +205,45 @@ Proxy/profile C -> 127.0.0.1:1084
 
 Если оператор явно разрешил добавить Proxy как fallback в Default, так и укажите в отчёте. Нельзя после этого писать `DEFAULT_POLICY_UNCHANGED=TRUE`.
 
+### 9.1 Official MCP/RMM transport без Entware shell
+
+Официальный Netcraze MCP/RMM является поддерживаемым transport для native
+commands, даже если он не умеет исполнять arbitrary Linux/Entware shell.
+External agent должен получить exact running configuration в private temporary
+file с mode `0600`, а planning и verification оставить RouterKit:
+
+```sh
+python3 scripts/routerkit-netcraze-external.py plan \
+  --snapshot-file /private/run-before.txt \
+  --manifest-file /private/local-endpoints.json \
+  --transaction-file /private/netcraze-transaction.json \
+  --contract nc3812-netcrazeos-5.1.5
+
+python3 scripts/routerkit-netcraze-external.py verify \
+  --phase pre \
+  --snapshot-file /private/run-before.txt \
+  --manifest-file /private/local-endpoints.json \
+  --transaction-file /private/netcraze-transaction.json
+```
+
+Для mutating packet исполняйте через official MCP/RMM только exact array
+`commands`, строго по порядку. Получите fresh running-config snapshot и
+выполните `verify --phase running`. Только `save_authorized=true` разрешает
+exact `save_command` из packet. Если saved/startup configuration доступна в том
+же syntax, проверьте её fresh snapshot через `--phase saved`.
+
+Для установленного three-profile brownfield state NC-3812 semantic reuse
+`XRAY-NL` / `VPN-NL` и аналогичных Smart-RU/US objects должно дать
+`commands=[]`, `backup_required=false`, `write_required=false`,
+`save_required=false`. Получите fresh
+второй running-config snapshot и выполните обычный `running` verifier; для
+этого NOOP proof нельзя вызывать `system configuration save`.
+
+`router_exec success`, HTTP status или MCP success не считаются verification.
+External agent не имеет права добавлять команды или восстанавливать
+Proxy/Policy semantics из model memory. Browser/Web UI остаётся запрещённым
+fallback. См. [`netcraze-external-transport.ru.md`](architecture/netcraze-external-transport.ru.md).
+
 ## 10. Узкие условия остановки
 
 Остановиться и привлечь оператора нужно только если:
