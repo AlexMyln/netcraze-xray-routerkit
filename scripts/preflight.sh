@@ -2,6 +2,17 @@
 
 PORTS_RE="${PORTS_RE:-1082|1083|1084}"
 FIREWALL_RE="${FIREWALL_RE:-xkeen|TPROXY|61219|1082|1083|1084}"
+MODE="normal"
+
+if [ "${1:-}" = "--bootstrap-readiness" ]; then
+    MODE="bootstrap-readiness"
+    shift
+fi
+
+if [ "$#" -ne 0 ]; then
+    printf 'ERROR: unsupported preflight argument\n' >&2
+    exit 2
+fi
 
 WARNINGS=0
 CRITICAL=0
@@ -134,8 +145,25 @@ fi
 
 check_dir_or_creatable /opt/etc /opt "/opt/etc"
 
+if [ "$MODE" = "bootstrap-readiness" ]; then
+    OPT_MOUNT="$(awk '$2 == "/opt" { print $1 " " $3; exit }' /proc/mounts 2>/dev/null || true)"
+    case "$OPT_MOUNT" in
+        *" ext4")
+            ok "/opt is mounted from an EXT4 filesystem: $OPT_MOUNT"
+            ;;
+        "")
+            fail "literal /opt is not a distinct mounted filesystem"
+            ;;
+        *)
+            fail "literal /opt is not mounted from EXT4: $OPT_MOUNT"
+            ;;
+    esac
+fi
+
 if [ -x /opt/sbin/xray ]; then
     ok "/opt/sbin/xray exists and is executable"
+elif [ "$MODE" = "bootstrap-readiness" ]; then
+    info "/opt/sbin/xray is not installed yet; pinned bootstrap owns this stage"
 else
     fail "/opt/sbin/xray missing or not executable"
 fi
@@ -154,8 +182,13 @@ fi
 
 section "commands"
 check_command_required sh
-check_command_required curl
-check_command_required tar
+if [ "$MODE" = "bootstrap-readiness" ]; then
+    check_command_optional curl
+    check_command_optional tar
+else
+    check_command_required curl
+    check_command_required tar
+fi
 check_command_optional jq
 
 section "init scripts"
