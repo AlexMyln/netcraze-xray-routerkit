@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://routerkit.invalid/schema/routerkit-netcraze-external-transaction.v1.json",
+  "title": "RouterKit Netcraze external transaction v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "hardware_contract",
+    "snapshot_mode",
+    "manifest_fingerprint",
+    "pre_state_fingerprint",
+    "expected_post_state_fingerprint",
+    "default_guard_fingerprint",
+    "bindings",
+    "assignment",
+    "default_policy_targeted",
+    "backup_required",
+    "write_required",
+    "save_required",
+    "commands",
+    "rollback_commands",
+    "pre_save_verification_required",
+    "save_command",
+    "saved_state_verification_required",
+    "raw_running_config_included",
+    "verification_expectations",
+    "transaction_fingerprint"
+  ],
+  "properties": {
+    "schema": {
+      "const": "routerkit.netcraze.external-transaction.v1"
+    },
+    "hardware_contract": {
+      "const": "nc3812-netcrazeos-5.1.5"
+    },
+    "snapshot_mode": {
+      "const": "owner-only-running-config-file"
+    },
+    "manifest_fingerprint": {
+      "$ref": "#/$defs/fingerprint"
+    },
+    "pre_state_fingerprint": {
+      "$ref": "#/$defs/fingerprint"
+    },
+    "expected_post_state_fingerprint": {
+      "$ref": "#/$defs/fingerprint"
+    },
+    "default_guard_fingerprint": {
+      "$ref": "#/$defs/fingerprint"
+    },
+    "bindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/binding"
+      }
+    },
+    "assignment": {
+      "$ref": "#/$defs/assignment"
+    },
+    "default_policy_targeted": {
+      "const": false
+    },
+    "backup_required": {
+      "type": "boolean"
+    },
+    "write_required": {
+      "type": "boolean"
+    },
+    "save_required": {
+      "type": "boolean"
+    },
+    "commands": {
+      "$ref": "#/$defs/commands"
+    },
+    "rollback_commands": {
+      "$ref": "#/$defs/commands"
+    },
+    "pre_save_verification_required": {
+      "type": "boolean"
+    },
+    "save_command": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "saved_state_verification_required": {
+      "type": "boolean"
+    },
+    "raw_running_config_included": {
+      "const": false
+    },
+    "verification_expectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_post_state_fingerprint",
+        "default_guard_fingerprint",
+        "semantic_match_count_per_binding",
+        "default_guard_unchanged",
+        "fresh_snapshot_required",
+        "transport_result_trusted"
+      ],
+      "properties": {
+        "expected_post_state_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "default_guard_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "semantic_match_count_per_binding": {
+          "const": 1
+        },
+        "default_guard_unchanged": {
+          "const": true
+        },
+        "fresh_snapshot_required": {
+          "const": true
+        },
+        "transport_result_trusted": {
+          "const": false
+        }
+      }
+    },
+    "transaction_fingerprint": {
+      "$ref": "#/$defs/fingerprint"
+    }
+  },
+  "$defs": {
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nativeProxyId": {
+      "type": "string",
+      "pattern": "^Proxy(?:[0-9]|1[0-5])$"
+    },
+    "nativePolicyId": {
+      "type": "string",
+      "pattern": "^Policy(?:[0-9]|1[0-5])$"
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^\\r\\n]+$"
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "profile_label",
+        "endpoint",
+        "proxy_id",
+        "policy_id",
+        "proxy_action",
+        "policy_action"
+      ],
+      "properties": {
+        "slot": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "profile_label": {
+          "enum": [
+            "primary",
+            "fallback-1",
+            "fallback-2"
+          ]
+        },
+        "endpoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "protocol",
+            "host",
+            "port",
+            "enabled",
+            "auth_mode"
+          ],
+          "properties": {
+            "protocol": {
+              "const": "socks5"
+            },
+            "host": {
+              "enum": [
+                "127.0.0.1",
+                "::1"
+              ]
+            },
+            "port": {
+              "enum": [
+                1082,
+                1083,
+                1084
+              ]
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "auth_mode": {
+              "const": "none"
+            }
+          }
+        },
+        "proxy_id": {
+          "$ref": "#/$defs/nativeProxyId"
+        },
+        "policy_id": {
+          "$ref": "#/$defs/nativePolicyId"
+        },
+        "proxy_action": {
+          "enum": [
+            "create",
+            "reuse"
+          ]
+        },
+        "policy_action": {
+          "enum": [
+            "create",
+            "reuse"
+          ]
+        }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "device_mac",
+        "selected_slot",
+        "target_policy",
+        "previous_policy"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "none",
+            "reuse",
+            "assign",
+            "move"
+          ]
+        },
+        "device_mac": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected_slot": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 3
+        },
+        "target_policy": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nativePolicyId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previous_policy": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nativePolicyId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

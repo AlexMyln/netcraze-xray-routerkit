@@ -12,9 +12,15 @@ private local-endpoint manifest
 
 It has no transport, live adapter, apply command, router command strings, network client, process primitive, or persistent selection state.
 
+The hardware-confirmed #40 adapter and its replaceable local `ndmc` / official
+MCP/RMM transport boundary are documented separately in
+[`netcraze-external-transport.md`](netcraze-external-transport.md). The external
+transaction consumes the live parser and semantic compatibility layer; it does
+not move transport commands or hardware state into this fixture-first model.
+
 ## Trust boundaries
 
-Observed display state, semantic equivalence, and future write authorization are separate. Fixture input can describe objects but cannot assert ownership, update/delete authority, trusted revision, backup success, or live capability. The parser rejects those fields. The fixture-first planner has no caller-created authorization object: an exact equivalent object may be reused, an absent object may be proposed for creation, a same-name mismatch is a conflict, an existing assignment move is blocked, and nothing pre-existing is updated or deleted. Future hardware-confirmed adapter work must define ownership markers, revision binding, exact before-state, concurrency checks, and rollback semantics.
+Observed display state, semantic equivalence, and live write authorization are separate. Fixture input can describe objects but cannot assert ownership, update/delete authority, trusted revision, backup success, or live capability. The parser rejects those fields. The fixture-first planner has no caller-created authorization object: an exact equivalent object may be reused, an absent object may be proposed for creation, a same-name mismatch is a conflict, an existing assignment move is blocked, and nothing pre-existing is updated or deleted. The separate hardware-confirmed adapter defines exact pre-state binding, command ownership, verification, save gates, and rollback intent without granting those properties to fixtures.
 
 The observed default policy is immutable. A canonical snapshot validator proves that every policy, assignment, default reference, and observed default flag is internally consistent. The static plan field `default_policy_not_targeted` is derived from the validated default identity, action targets, generated names/IDs, and typed dependencies. Synthetic simulation separately compares a canonical before/after projection containing the default policy and its referenced connection semantics. Unknown or ambiguous default identity remains explicit diagnostic state and blocks planning readiness.
 

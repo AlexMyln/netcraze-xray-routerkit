@@ -130,8 +130,10 @@ class ApplyResult:
     created_proxies: List[str]
     created_policies: List[str]
     assignment_changed: bool
+    write_required: bool
     saved: bool
     verified: bool
+    noop: bool
     rollback_attempted: bool = False
     rollback_verified: bool = False
 
@@ -141,8 +143,10 @@ class ApplyResult:
             "created_proxy_count": len(self.created_proxies),
             "created_policy_count": len(self.created_policies),
             "assignment_changed": self.assignment_changed,
+            "write_required": self.write_required,
             "saved": self.saved,
             "verified": self.verified,
+            "noop": self.noop,
             "rollback_attempted": self.rollback_attempted,
             "rollback_verified": self.rollback_verified,
             "default_policy_targeted": False,
@@ -530,11 +534,29 @@ def apply_live_plan(
     backup_root: Path = BACKUP_ROOT,
 ) -> ApplyResult:
     raw_before, state_before = read_state(transport)
-    if state_before.default_guard != state_before.default_guard:
-        raise AssertionError("unreachable")
+    fresh_plan = build_live_plan(
+        manifest,
+        state_before,
+        device_mac=device_mac,
+        profile_slot=plan.selected_slot,
+        allow_move=plan.assignment_action == "move",
+    )
+    if fresh_plan != plan:
+        raise LiveAdapterError("Live plan is stale or does not match the fresh running state.")
+
+    write_required = any(
+        item.proxy_action == "create" or item.policy_action == "create"
+        for item in plan.bindings
+    ) or plan.assignment_action in ("assign", "move")
+    result = ApplyResult([], [], False, write_required, False, False, not write_required)
+
+    if not write_required:
+        _verify_plan_applied(manifest, plan, state_before, device_mac=device_mac)
+        result.verified = True
+        return result
+
     _backup_running_config(raw_before, backup_root=backup_root)
 
-    result = ApplyResult([], [], False, False, False)
     rollback: List[str] = []
     profiles = {item.slot: item for item in manifest.profiles}
     normalized_mac = None if device_mac is None else normalize_trusted_device_mac(device_mac)
@@ -570,11 +592,16 @@ def apply_live_plan(
                 rollback.append("ip hotspot host %s policy %s" % (normalized_mac, old_assignment))
             result.assignment_changed = True
 
+        _raw_running, state_running = read_state(transport)
+        if state_running.default_guard != state_before.default_guard:
+            raise LiveAdapterError("Default-policy guard changed during RouterKit live apply.")
+        _verify_plan_applied(manifest, plan, state_running, device_mac=normalized_mac)
+
         transport.command("system configuration save")
         result.saved = True
         _raw_after, state_after = read_state(transport)
         if state_after.default_guard != state_before.default_guard:
-            raise LiveAdapterError("Default-policy guard changed during RouterKit live apply.")
+            raise LiveAdapterError("Default-policy guard changed after RouterKit configuration save.")
         _verify_plan_applied(manifest, plan, state_after, device_mac=normalized_mac)
         result.verified = True
         return result

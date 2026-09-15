@@ -4,7 +4,13 @@
 
 В модуле нет транспорта, live adapter, apply-команды, сетевого клиента, процессов и сохранения выбора устройства.
 
-Fixture описывает только наблюдаемое состояние. Он не может объявить ownership, права update/delete, trusted revision, успешный backup или live capability — такие поля отвергаются. В production planner больше нет caller-created authorization object: разрешены exact reuse и план создания отсутствующего объекта; совпадение имени с другой семантикой и перемещение существующего assignment блокируются; pre-existing объекты не обновляются и не удаляются. Будущий hardware-confirmed adapter должен определить ownership markers, revision binding, exact before-state, concurrency checks и rollback semantics.
+Hardware-confirmed adapter #40 и его граница между replaceable local `ndmc` /
+official MCP/RMM transport описаны отдельно в
+[`netcraze-external-transport.ru.md`](netcraze-external-transport.ru.md).
+External transaction использует live parser и semantic compatibility layer, но
+не переносит transport commands или hardware state в эту fixture-first модель.
+
+Fixture описывает только наблюдаемое состояние. Он не может объявить ownership, права update/delete, trusted revision, успешный backup или live capability — такие поля отвергаются. В production planner больше нет caller-created authorization object: разрешены exact reuse и план создания отсутствующего объекта; совпадение имени с другой семантикой и перемещение существующего assignment блокируются; pre-existing объекты не обновляются и не удаляются. Отдельный hardware-confirmed adapter определяет exact pre-state binding, command ownership, verification, save gates и rollback intent, не позволяя fixtures объявлять эти свойства.
 
 Canonical validator проверяет все policy→connection, assignment→policy и default references, уникальность assignment, нормализованный trusted MAC, default flags/status и semantic completeness. Статическое поле плана `default_policy_not_targeted` вычисляется из validated default identity, targets, generated names/IDs и typed dependencies. Simulator отдельно сравнивает canonical before/after projection default policy вместе с семантикой её connection. Unknown/ambiguous default остаётся явной diagnostic state и блокирует readiness.
 
