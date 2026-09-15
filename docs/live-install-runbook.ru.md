@@ -23,6 +23,11 @@
 
 ## 2. Полный happy path
 
+Этот раздел описывает target-side flow `--runtime-mode local-router`. Он
+допустим только когда сам `live-install` выполняется на target router и literal
+`/opt` принадлежит этому router. Runtime execution и native router transport —
+отдельные параметры.
+
 Если задача включает VPN для конкретных устройств, используйте такой порядок:
 
 1. обычная сеть роутера стабильна;
@@ -51,12 +56,18 @@
 ```sh
 python3 scripts/routerkit.py live-install plan \
   --transport external \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1
 
 python3 scripts/routerkit.py live-install apply \
   --transport external \
-  --source-file /private/profile-source.txt \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
+  --receipt-file /private/live-install-receipt.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1 \
   --evidence-file /private/live-install-evidence.json
@@ -72,18 +83,29 @@ handoff и exit `4`. Продолжение не повторяет доказа
 ```sh
 python3 scripts/routerkit.py live-install resume \
   --transport external \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
+  --receipt-file /private/live-install-receipt.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1 \
   --evidence-file /private/live-install-evidence-next-epoch.json
 
 python3 scripts/routerkit.py live-install status \
-  --receipt-file /opt/var/lib/routerkit/live-install/receipt.json
+  --receipt-file /private/live-install-receipt.json
 ```
 
-Default receipt — owner-only файл
+Для `external-evidence` default receipt — owner-only
+`.routerkit-live-install/receipt.json` под current directory. Для production
+задайте explicit protected path. Paths внутри локального `/opt` workstation
+отвергаются. `local-router` сохраняет default
+`/opt/var/lib/routerkit/live-install/receipt.json`.
+
+Receipt — owner-only файл
 [`routerkit.live-install.v1`](../hardware/routerkit-live-install.v1.schema.json)
 в exact `0700` directory. Он содержит stage/epoch state, fingerprints
-hardware/artifact/transport/endpoint, reboot epoch, native transaction status,
+hardware/artifact/native-transport/runtime-mode/endpoint, runtime disposition,
+reboot epoch, native transaction status,
 DNS status и final classifications. В нём никогда нет profile source, VLESS
 URI, UUID/Reality keys, raw configs, passwords, tokens, private keys или самого
 selected MAC. Resume повторно вычисляет intended-installation fingerprint и
@@ -91,6 +113,10 @@ selected MAC. Resume повторно вычисляет intended-installation f
 
 Typed vendor/operator observations используют отдельный owner-only формат
 [`routerkit.live-install.evidence.v1`](../hardware/routerkit-live-install-evidence.v1.schema.json);
+его strict object `runtime` содержит target locus, readiness `/opt` и Entware,
+точную semantic release Xray, результаты running/listeners/autostart/reboot
+recovery и fingerprint проверенного endpoint manifest. Profile source и config
+secrets отсутствуют.
 secret-free пример —
 [`live-install-evidence.example.json`](../examples/live-install-evidence.example.json).
 В одной state epoch принимается один evidence fingerprint. Новый discovery
@@ -98,15 +124,46 @@ secret-free пример —
 contradictory-evidence или native-policy state change; противоречивые evidence
 в одной epoch отклоняются fail closed.
 
+Только `local-router` запускает preflight, bootstrap, setup, backup, install,
+healthcheck или autostart. Mutable apply обязан явно содержать
+`--runtime-mode local-router`: это bounded declaration, что команда выполняется
+на target. Existing stage order и rollback boundaries не меняются.
+
+Fresh local flow на target router сохраняется:
+
+```sh
+python3 scripts/routerkit.py live-install apply \
+  --transport local-ndmc \
+  --runtime-mode local-router \
+  --source-file /private/profile-source.txt \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+```
+
+`external-evidence` не запускает эти subprocesses. `--transport external`
+без runtime mode безопасно выводит этот mode. Fresh или mutating runtime
+возвращает `ROUTERKIT_RUNTIME_EXECUTION_REQUIRED`: существующие RouterKit
+commands должен выполнить shell-capable transport на target, затем resume
+принимает fresh evidence и target-generated `--endpoint-manifest-file`.
+`router_exec`, raw MCP commands и browser/Web UI не являются заменой.
+
+Для already-installed brownfield runtime NC-3812 используйте
+`--adopt-existing-runtime`. Нужны exact contract evidence, прежний reboot
+recovery и explicit RouterKit-valid manifest. Этот path не читает profile
+source, не регенерирует config и не меняет runtime. Receipt записывает
+`ADOPTED`; bootstrap/source/generate/plan/backup/install получают `SKIPPED`, а
+current health/autostart checks — evidence-backed `PASS`.
+
 `local-ndmc` вызывает существующий path plan/apply из
 `routerkit-netcraze-live.py` и не придумывает command установки component.
-`external` создаёт существующий external-transaction packet, проверяет
+`external` управляет только native router configuration: создаёт существующий external-transaction packet, проверяет
 pre-state, требует отдельный fresh running-state snapshot даже для NOOP,
 разрешает save только после RouterKit running-state verification и требует
 отдельный saved-state snapshot для mutating transaction. Для external native
 operation не нужен Entware SSH. Browser/Web UI не является fallback.
 
-Install stage по-прежнему делегирует `install-xray-direct.sh`, поэтому
+В `local-router` install stage по-прежнему делегирует `install-xray-direct.sh`, поэтому
 существующий `/opt/etc/routerkit/routing-overrides.json` reconcile-ится
 существующим local-routing module. Ни один RU service pack автоматически не
 выбирается.

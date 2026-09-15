@@ -415,8 +415,6 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
             str(repo_root),
             "--transport",
             args.transport,
-            "--receipt-file",
-            args.receipt_file,
             "--target-root",
             args.target_root,
             "--generated",
@@ -425,6 +423,8 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
             args.hardware_contract,
         ]
         optional_values = (
+            ("--runtime-mode", args.runtime_mode),
+            ("--receipt-file", args.receipt_file),
             ("--artifact-manifest", args.artifact_manifest),
             ("--source-env", args.source_env),
             ("--source-file", args.source_file),
@@ -433,6 +433,7 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
             ("--profile-slot", args.profile_slot),
             ("--ndmc-path", args.ndmc_path),
             ("--evidence-file", args.evidence_file),
+            ("--endpoint-manifest-file", args.endpoint_manifest_file),
             ("--external-pre-snapshot-file", args.external_pre_snapshot_file),
             ("--external-post-snapshot-file", args.external_post_snapshot_file),
             ("--external-saved-snapshot-file", args.external_saved_snapshot_file),
@@ -447,6 +448,8 @@ def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
             command.extend(("--fallback-index", str(index)))
         if args.move_device:
             command.append("--move-device")
+        if args.adopt_existing_runtime:
+            command.append("--adopt-existing-runtime")
         if args.authorize_reboot:
             command.append("--authorize-reboot")
         if args.yes:
@@ -1976,7 +1979,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--transport", choices=("local-ndmc", "external"), default="local-ndmc"
     )
     live_install.add_argument(
-        "--receipt-file", default="/opt/var/lib/routerkit/live-install/receipt.json"
+        "--runtime-mode", choices=("local-router", "external-evidence")
+    )
+    live_install.add_argument("--adopt-existing-runtime", action="store_true")
+    live_install.add_argument(
+        "--receipt-file"
     )
     live_install.add_argument("--target-root", default="/opt")
     live_install.add_argument("--generated", default="generated")
@@ -1995,6 +2002,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     live_install.add_argument("--move-device", action="store_true")
     live_install.add_argument("--ndmc-path")
     live_install.add_argument("--evidence-file")
+    live_install.add_argument("--endpoint-manifest-file")
     live_install.add_argument("--authorize-reboot", action="store_true")
     live_install.add_argument("--external-pre-snapshot-file")
     live_install.add_argument("--external-post-snapshot-file")

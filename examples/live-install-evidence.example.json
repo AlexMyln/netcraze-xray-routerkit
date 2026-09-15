@@ -14,6 +14,18 @@
     "loopback_listeners": "UNKNOWN",
     "proxy_component": "PASS"
   },
+  "runtime": {
+    "target": "router",
+    "opt_ready": true,
+    "entware_ready": true,
+    "xray_release": null,
+    "xray_running": false,
+    "loopback_listeners_verified": false,
+    "autostart_verified": false,
+    "reboot_recovery_proven": false,
+    "endpoint_manifest_verified": false,
+    "endpoint_manifest_fingerprint": null
+  },
   "component": {
     "present": true,
     "install_required": false,

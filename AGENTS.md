@@ -280,6 +280,8 @@ The transport may change **how** the exact operation reaches the router. It must
 
 The official Netcraze MCP/RMM transport is supported for native RouterKit Proxy/Policy operations even when it exposes no arbitrary Linux/Entware shell. Use the protected snapshot -> RouterKit external transaction -> exact native commands -> protected snapshot -> RouterKit verifier path. Lack of remote Entware shell access is not a reason to reconstruct RouterKit semantics in the agent or fall back to the browser.
 
+`live-install` keeps runtime execution and native router configuration as separate axes. `--transport external` selects only the native configuration transport; it never authorizes local RouterKit `/opt` execution on an operator workstation. Use `--runtime-mode local-router` only when the process itself is running on the target router. Workstation/RMM orchestration uses `--runtime-mode external-evidence` (the safe default for `--transport external`) and either adopts a proven existing runtime or stops with `ROUTERKIT_RUNTIME_EXECUTION_REQUIRED` until the existing runtime commands have run through a shell-capable transport on the target.
+
 A future refactor should separate shared plan/verification semantics from transport adapters. It MUST NOT remove the deterministic adapter and leave an AI agent to recreate Proxy/Policy state from prose or UI clicks.
 
 ### 15.3 Tool preference for an external agent
