@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
+- `live-install` now separates RouterKit runtime execution from native router transport: external native mode safely defaults to `external-evidence`, cannot launch local `/opt` runtime subprocesses or write receipt/transaction state below local `/opt`, and returns `ROUTERKIT_RUNTIME_EXECUTION_REQUIRED` for fresh/mutating target runtime work.
+- Brownfield runtime reuse now requires strict target/runtime evidence plus an explicit validated, fingerprint-bound `routerkit.local-endpoints.v1` manifest; adoption performs no profile acquisition, generation, bootstrap, backup, install, or autostart mutation and is recorded distinctly as `ADOPTED`.
 - Netcraze fixture simulation is now cryptographically bound to immutable desired endpoint semantics and the exact canonical source snapshot, validates complete plan/action/rollback integrity before mutation, verifies actual synthetic objects after every action, and proves reuse-only idempotent reruns without accepting an independent manifest.
 - Direct `SelectedDeviceRef` input now passes the same public trusted-unicast MAC normalizer as #21 device discovery before planning; malformed, zero, broadcast, multicast/group, non-text, control-character, and invalid display-name input fails before any action.
 - Local plan/snapshot integrity fingerprints are separated from public evidence; the public fingerprint covers every canonical default-policy projection field through a minimized digest and is never used as simulation or write authorization.
@@ -34,6 +36,7 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Explicit `local-router` and `external-evidence` runtime modes, target-side execution handoff/resume, runtime evidence fields, endpoint-manifest input, and regression coverage proving external workstation execution cannot mutate local `/opt`.
 - First-class `routerkit live-install plan|apply|resume|status` orchestration for issue #41, with the complete bounded stage order, one installation-scope confirmation, stop-on-failure behavior, and resume without rerunning proved stages.
 - Owner-only versioned `routerkit.live-install.v1` receipts and `routerkit.live-install.evidence.v1` observations with intent/endpoint fingerprints, explicit state epochs, component/reboot handoffs, secret/config exclusion, and checked-in schemas.
 - Replaceable `local-ndmc` and `external` native modes that compose the existing live adapter or `routerkit.netcraze.external-transaction.v1`; external NOOP stays commandless/unsaved and mutation requires fresh RouterKit running/saved verification rather than transport success.

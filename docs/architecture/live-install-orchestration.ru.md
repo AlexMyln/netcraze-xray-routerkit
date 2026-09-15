@@ -13,6 +13,16 @@ stage, одним подтверждением installation scope, state epochs,
 stop routing и receipt `routerkit.live-install.v1`. Каждая domain operation
 остаётся у существующего RouterKit owner.
 
+Public model имеет две независимые оси:
+
+- `--runtime-mode local-router|external-evidence` определяет locus RouterKit
+  runtime files/processes;
+- `--transport local-ndmc|external` определяет доставку native component,
+  reboot, Proxy/Policy, assignment и DNS.
+
+Для `--transport external` безопасно выводится `external-evidence`: этот флаг
+не означает наличие remote shell и не разрешает local `/opt` mutation.
+
 ## Переиспользованные semantic owners
 
 | Stage | Existing owner |
@@ -31,6 +41,37 @@ stop routing и receipt `routerkit.live-install.v1`. Каждая domain operati
 Orchestrator не формирует Xray configuration, не распределяет native object
 IDs, не собирает заново commands external transaction, не редактирует routing
 overrides и не создаёт новый rollback mechanism.
+
+## Граница runtime execution
+
+`local-router` означает, что coordinator process выполняется на RouterKit
+target, а literal `/opt` принадлежит external storage этого router. Для mutable
+apply этот mode должен быть выбран явно. Только он может запускать существующие
+subprocesses `preflight.sh`, bootstrap apply, setup/generation, backup, install,
+healthcheck и autostart. Их реализация, порядок и rollback boundaries не
+изменены.
+
+`external-evidence` — mode для workstation/RMM. Его default owner-only receipt
+находится в `.routerkit-live-install/receipt.json`; receipt/transaction paths в
+локальном `/opt` workstation отвергаются. Ни один runtime subprocess не
+запускается.
+
+Для доказанного brownfield runtime `--adopt-existing-runtime` требует явный
+owner-only `--endpoint-manifest-file` и fresh strict runtime evidence. RouterKit
+проверяет существующий `routerkit.local-endpoints.v1`, связывает его fingerprint
+с evidence/receipt и требует enabled selected slot. Fixed contract NC-3812
+должен доказать management/network, external EXT4 `/opt`, Entware, точную pinned
+semantic Xray release, работающий Xray, manifest-matched loopback listeners,
+autostart и прежний reboot recovery. Profile source не принимается и не
+читается. Runtime write stages получают `SKIPPED`, evidence-backed checks —
+`PASS`, receipt — `runtime_disposition=ADOPTED`.
+
+Без adoption первый external-evidence apply останавливается до runtime work с
+`ROUTERKIT_RUNTIME_EXECUTION_REQUIRED`. Существующий RouterKit runtime flow
+должен выполнить shell-capable transport на target; `router_exec`, raw MCP
+commands и browser/Web UI не являются заменой. Resume принимает fresh runtime
+evidence плюс target-generated endpoint manifest и записывает
+`EXTERNAL_EXECUTED`. Локальное выполнение записывается как `EXECUTED`.
 
 ## State epochs и discovery
 
@@ -55,6 +96,7 @@ bounded, структурно validated и atomically заменяется то�
 
 - hardware contract;
 - transport mode;
+- runtime mode и adoption intent;
 - bootstrap-validated pinned artifact identity;
 - one-way selected-device fingerprint;
 - selected profile slot;
@@ -64,14 +106,18 @@ bounded, структурно validated и atomically заменяется то�
 manifest. Raw selection identity и все profile/config secrets остаются за
 пределами receipt.
 
-## Граница transport
+Receipt отдельно хранит runtime disposition и strict evidence fingerprint,
+поэтому adopted stages нельзя выдать за локально выполненные.
+
+## Граница native transport
 
 `local-ndmc` делегирует plan и apply существующему reviewed live adapter.
 Установка native component намеренно не синтезируется через ndmc; отсутствие
 support возвращает handoff для typed operation.
 
-`external` использует protected snapshots и существующий external transaction
-protocol. RouterKit проверяет pre-state, затем external agent доставляет только
+`external` управляет только native router configuration. Он использует
+protected snapshots и существующий external transaction protocol. RouterKit
+проверяет pre-state, затем external agent доставляет только
 exact packet commands. Отдельный fresh running snapshot обязателен, в том числе
 для NOOP. Mutating packet может перейти к save только после разрешения
 RouterKit running verifier, после чего требуется отдельная saved-state
@@ -94,6 +140,7 @@ probe transport возвращается `CLIENT_FUNCTIONAL_VERIFICATION_REQUIRE
 
 ## Уровень завершённости
 
-Implementation software-complete после PASS focused и full CI. Это не закрывает
-hardware gate: после merge #41 требует один brownfield rerun полного
-command/resume flow на NC-3812. Clean spare-hardware matrix остаётся #16.
+Production brownfield rerun NC-3812 заблокирован до merge этого runtime-locus
+fix с зелёным CI. Post-merge run должен использовать external-evidence adoption
+и пройти неизменённые native/DNS/client gates. Clean spare-hardware matrix
+остаётся #16.

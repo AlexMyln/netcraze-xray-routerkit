@@ -25,12 +25,25 @@ ARTIFACT = {
     "release": "v26.3.27",
     "archive_sha256": "a" * 64,
 }
+ENDPOINT_MANIFEST = {
+    "schema": "routerkit.local-endpoints.v1",
+    "profiles": [
+        {"slot": 1, "label": "primary", "listen": "127.0.0.1", "port": 1082, "enabled": True, "protocol": "socks5"},
+        {"slot": 2, "label": "fallback-1", "listen": "127.0.0.1", "port": 1083, "enabled": True, "protocol": "socks5"},
+        {"slot": 3, "label": "fallback-2", "listen": "127.0.0.1", "port": 1084, "enabled": True, "protocol": "socks5"},
+    ],
+}
 
 
-def make_intent(transport="external"):
+def make_intent(transport="external", runtime_mode=None, adopt=False):
+    runtime_mode = runtime_mode or (
+        "external-evidence" if transport == "external" else "local-router"
+    )
     return live_install.build_intent(
         hardware_contract=live_install.DEFAULT_HARDWARE_CONTRACT,
         transport_mode=transport,
+        runtime_mode=runtime_mode,
+        adopt_existing_runtime=adopt,
         artifact=ARTIFACT,
         selected_device_mac=MAC,
         profile_slot=2,
@@ -39,8 +52,8 @@ def make_intent(transport="external"):
     )
 
 
-def make_receipt(transport="external"):
-    return live_install.initial_receipt(make_intent(transport))
+def make_receipt(transport="external", runtime_mode=None, adopt=False):
+    return live_install.initial_receipt(make_intent(transport, runtime_mode, adopt))
 
 
 def make_evidence(
@@ -55,6 +68,11 @@ def make_evidence(
     dns_bound=None,
     dns_policy=None,
     client=True,
+    runtime_target="router",
+    runtime_ready=True,
+    xray_release="26.3.27",
+    reboot_recovery_proven=True,
+    endpoint_manifest_fingerprint="f" * 64,
 ):
     return {
         "schema": live_install.EVIDENCE_SCHEMA,
@@ -62,6 +80,18 @@ def make_evidence(
         "epoch": epoch,
         "state_change": state_change,
         "checks": {name: "PASS" for name in live_install.EVIDENCE_CHECKS},
+        "runtime": {
+            "target": runtime_target,
+            "opt_ready": runtime_ready,
+            "entware_ready": runtime_ready,
+            "xray_release": xray_release,
+            "xray_running": runtime_ready,
+            "loopback_listeners_verified": runtime_ready,
+            "autostart_verified": runtime_ready,
+            "reboot_recovery_proven": reboot_recovery_proven,
+            "endpoint_manifest_verified": runtime_ready,
+            "endpoint_manifest_fingerprint": endpoint_manifest_fingerprint,
+        },
         "component": {
             "present": component_present,
             "install_required": component_install_required,
@@ -85,10 +115,13 @@ def make_evidence(
 
 
 def args(**overrides):
+    transport = overrides.get("transport", "external")
     values = {
         "mode": "apply",
         "repo_root": str(ROOT),
-        "transport": "external",
+        "transport": transport,
+        "runtime_mode": "external-evidence" if transport == "external" else "local-router",
+        "adopt_existing_runtime": False,
         "receipt_file": "/private/receipt.json",
         "target_root": "/opt",
         "generated": "generated",
@@ -104,6 +137,7 @@ def args(**overrides):
         "move_device": False,
         "ndmc_path": None,
         "evidence_file": None,
+        "endpoint_manifest_file": None,
         "authorize_reboot": False,
         "external_pre_snapshot_file": None,
         "external_post_snapshot_file": None,
@@ -117,6 +151,14 @@ def args(**overrides):
 
 def completed(returncode=0, stdout=""):
     return type("Completed", (), {"returncode": returncode, "stdout": stdout})()
+
+
+def write_endpoint_manifest(directory, value=None):
+    path = Path(directory) / "routerkit-local-endpoints.json"
+    path.write_text(json.dumps(value or ENDPOINT_MANIFEST), encoding="utf-8")
+    os.chmod(path, 0o600)
+    manifest = live_install.load_local_endpoint_manifest(path)
+    return path, live_install.external.manifest_fingerprint(manifest)
 
 
 class LiveInstallPlanTests(unittest.TestCase):
@@ -203,6 +245,7 @@ class LiveInstallPlanTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(live_install.stage_done(receipt, stage) for stage in live_install.STAGE_ORDER))
+        self.assertEqual(receipt["runtime_disposition"], "EXECUTED")
 
     def test_plan_only_has_no_writes_or_prompts(self):
         output = io.StringIO()
@@ -243,6 +286,8 @@ class LiveInstallPlanTests(unittest.TestCase):
                         "apply",
                         "--receipt-file",
                         str(receipt),
+                        "--runtime-mode",
+                        "local-router",
                         "--selected-device-mac",
                         MAC,
                         "--profile-slot",
@@ -252,6 +297,246 @@ class LiveInstallPlanTests(unittest.TestCase):
                 )
         self.assertEqual(code, 0)
         self.assertEqual(len(answers), 1)
+
+
+class RuntimeExecutionModeTests(unittest.TestCase):
+    def test_external_transport_safely_infers_external_evidence(self):
+        parsed = live_install.parse_args([
+            "plan", "--transport", "external", "--selected-device-mac", MAC,
+            "--profile-slot", "2",
+        ])
+        self.assertFalse(live_install._resolve_runtime_mode(parsed, None))
+        self.assertEqual(parsed.runtime_mode, "external-evidence")
+
+    def test_local_router_apply_requires_explicit_runtime_mode(self):
+        local_args = args(transport="local-ndmc", runtime_mode="local-router")
+        with self.assertRaises(live_install.LiveInstallError):
+            live_install._validate_args(local_args, runtime_mode_explicit=False)
+        live_install._validate_args(local_args, runtime_mode_explicit=True)
+
+    def test_external_fresh_runtime_stops_before_every_subprocess(self):
+        receipt = make_receipt("external")
+        with mock.patch.object(live_install, "_run") as run, mock.patch.object(
+            live_install, "_persist"
+        ), self.assertRaises(live_install.LiveInstallHandoff) as raised:
+            live_install._run_installation_stages(
+                args(mode="apply"), ROOT, Path("/private/receipt.json"), receipt, None
+            )
+        self.assertEqual(raised.exception.action, "ROUTERKIT_RUNTIME_EXECUTION_REQUIRED")
+        run.assert_not_called()
+        self.assertTrue(all(
+            receipt["stages"][stage]["status"] == "PENDING"
+            for stage in live_install.INSTALLATION_STAGES
+        ))
+
+    def test_external_workstation_apply_uses_safe_receipt_and_never_touches_opt(self):
+        output = io.StringIO()
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                os.chdir(directory)
+                with mock.patch.object(
+                    live_install, "artifact_identity", return_value=ARTIFACT
+                ), mock.patch.object(live_install, "_run") as run, contextlib.redirect_stdout(output):
+                    code = live_install.main([
+                        "apply", "--transport", "external", "--selected-device-mac", MAC,
+                        "--profile-slot", "2", "--yes",
+                    ])
+                receipt_path = Path(directory) / ".routerkit-live-install" / "receipt.json"
+                self.assertTrue(receipt_path.is_file())
+                self.assertEqual(live_install.load_receipt(receipt_path)["runtime_mode"], "external-evidence")
+                run.assert_not_called()
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, live_install.HANDOFF_REQUIRED)
+        self.assertIn("NEXT_ACTION=ROUTERKIT_RUNTIME_EXECUTION_REQUIRED", output.getvalue())
+
+    def test_external_evidence_rejects_local_opt_write_paths(self):
+        external_args = args(receipt_file="/opt/var/lib/routerkit/receipt.json")
+        with self.assertRaises(live_install.LiveInstallError):
+            live_install._validate_args(external_args)
+
+    def test_adoption_requires_explicit_endpoint_manifest(self):
+        adoption_args = args(adopt_existing_runtime=True)
+        with self.assertRaises(live_install.LiveInstallError):
+            live_install._validate_args(adoption_args)
+
+    def test_brownfield_adoption_passes_without_profile_source_or_runtime_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, fingerprint = write_endpoint_manifest(directory)
+            evidence = make_evidence(endpoint_manifest_fingerprint=fingerprint)
+            receipt = make_receipt("external", adopt=True)
+            adoption_args = args(
+                adopt_existing_runtime=True,
+                endpoint_manifest_file=str(manifest_path),
+            )
+            live_install._validate_args(adoption_args)
+            with mock.patch.object(live_install, "_run") as run, mock.patch.object(
+                live_install, "_persist"
+            ):
+                live_install._run_installation_stages(
+                    adoption_args, ROOT, Path("/private/receipt.json"), receipt, evidence
+                )
+            run.assert_not_called()
+        self.assertEqual(receipt["runtime_disposition"], "ADOPTED")
+        self.assertEqual(receipt["stages"]["pinned_xray_bootstrap"]["status"], "SKIPPED")
+        self.assertEqual(receipt["stages"]["install"]["status"], "SKIPPED")
+        self.assertEqual(receipt["stages"]["healthcheck"]["status"], "PASS")
+        self.assertEqual(receipt["final_verification"]["installation"], "PASS")
+
+    def test_adoption_rejects_invalid_manifest_before_accepting_evidence(self):
+        invalid = json.loads(json.dumps(ENDPOINT_MANIFEST))
+        invalid["profiles"][1]["port"] = 9999
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bad.json"
+            path.write_text(json.dumps(invalid), encoding="utf-8")
+            os.chmod(path, 0o600)
+            receipt = make_receipt("external", adopt=True)
+            with mock.patch.object(live_install, "_run") as run, self.assertRaises(
+                live_install.NetcrazePlanError
+            ):
+                live_install._run_installation_stages(
+                    args(adopt_existing_runtime=True, endpoint_manifest_file=str(path)),
+                    ROOT,
+                    Path("/private/receipt.json"),
+                    receipt,
+                    make_evidence(),
+                )
+            run.assert_not_called()
+        self.assertIsNone(receipt["discovery"]["epoch"])
+
+    def test_insufficient_adoption_evidence_requires_runtime_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, fingerprint = write_endpoint_manifest(directory)
+            receipt = make_receipt("external", adopt=True)
+            evidence = make_evidence(
+                xray_release="26.3.26", endpoint_manifest_fingerprint=fingerprint
+            )
+            with mock.patch.object(live_install, "_persist"), self.assertRaises(
+                live_install.LiveInstallHandoff
+            ) as raised:
+                live_install._run_installation_stages(
+                    args(adopt_existing_runtime=True, endpoint_manifest_file=str(manifest_path)),
+                    ROOT,
+                    Path("/private/receipt.json"),
+                    receipt,
+                    evidence,
+                )
+        self.assertEqual(raised.exception.action, "ROUTERKIT_RUNTIME_EXECUTION_REQUIRED")
+        self.assertIsNone(receipt["discovery"]["epoch"])
+
+    def test_stale_adoption_evidence_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, fingerprint = write_endpoint_manifest(directory)
+            receipt = make_receipt("external", adopt=True)
+            receipt["state_epoch"] = 1
+            with mock.patch.object(live_install, "_persist"), self.assertRaises(
+                live_install.LiveInstallError
+            ) as raised:
+                live_install._run_installation_stages(
+                    args(adopt_existing_runtime=True, endpoint_manifest_file=str(manifest_path)),
+                    ROOT,
+                    Path("/private/receipt.json"),
+                    receipt,
+                    make_evidence(epoch=0, endpoint_manifest_fingerprint=fingerprint),
+                )
+        self.assertIn("stale", str(raised.exception))
+
+    def test_external_runtime_can_resume_after_target_execution_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, fingerprint = write_endpoint_manifest(directory)
+            receipt = make_receipt("external")
+            evidence = make_evidence(
+                reboot_recovery_proven=False,
+                endpoint_manifest_fingerprint=fingerprint,
+            )
+            with mock.patch.object(live_install, "_run") as run, mock.patch.object(
+                live_install, "_persist"
+            ):
+                live_install._run_installation_stages(
+                    args(mode="resume", endpoint_manifest_file=str(manifest_path)),
+                    ROOT,
+                    Path("/private/receipt.json"),
+                    receipt,
+                    evidence,
+                )
+            run.assert_not_called()
+        self.assertEqual(receipt["runtime_disposition"], "EXTERNAL_EXECUTED")
+        self.assertTrue(all(
+            receipt["stages"][stage]["status"] == "PASS"
+            for stage in live_install.INSTALLATION_STAGES
+        ))
+
+    def test_resume_after_adoption_does_not_reaccept_or_execute_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, fingerprint = write_endpoint_manifest(directory)
+            receipt = make_receipt("external", adopt=True)
+            adoption_args = args(
+                mode="resume",
+                adopt_existing_runtime=True,
+                endpoint_manifest_file=str(manifest_path),
+            )
+            with mock.patch.object(live_install, "_persist"):
+                live_install._run_installation_stages(
+                    adoption_args,
+                    ROOT,
+                    Path("/private/receipt.json"),
+                    receipt,
+                    make_evidence(endpoint_manifest_fingerprint=fingerprint),
+                )
+            first = json.loads(json.dumps(receipt))
+            with mock.patch.object(live_install, "_run") as run, mock.patch.object(
+                live_install, "accept_discovery_evidence"
+            ) as accept:
+                live_install._run_installation_stages(
+                    adoption_args, ROOT, Path("/private/receipt.json"), receipt, None
+                )
+            run.assert_not_called()
+            accept.assert_not_called()
+            self.assertEqual(receipt, first)
+
+    def test_complete_brownfield_adoption_reaches_final_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, fingerprint = write_endpoint_manifest(directory)
+            receipt = make_receipt("external", adopt=True)
+            evidence = make_evidence(endpoint_manifest_fingerprint=fingerprint)
+            adoption_args = args(
+                adopt_existing_runtime=True,
+                endpoint_manifest_file=str(manifest_path),
+            )
+
+            def fake_native(_args, _path, active):
+                active["native_transaction"].update({
+                    "status": "PASS",
+                    "write_required": False,
+                    "save_required": False,
+                    "pre_epoch": 0,
+                    "dns_refresh_required": False,
+                })
+                live_install.mark_stage(active, "native_proxy_policy_transaction", "PASS")
+                active["final_verification"]["native_routing"] = "PASS"
+
+            with mock.patch.object(live_install, "_persist"), mock.patch.object(
+                live_install, "_run"
+            ) as run, mock.patch.object(
+                live_install, "_external_native_stage", side_effect=fake_native
+            ):
+                live_install._run_installation_stages(
+                    adoption_args, ROOT, Path("/private/receipt.json"), receipt, evidence
+                )
+                live_install._component_and_reboot(
+                    adoption_args, Path("/private/receipt.json"), receipt, evidence
+                )
+                live_install._native_dns_client_stages(
+                    adoption_args, ROOT, Path("/private/receipt.json"), receipt, evidence
+                )
+            run.assert_not_called()
+        self.assertEqual(receipt["runtime_disposition"], "ADOPTED")
+        self.assertFalse(receipt["native_transaction"]["write_required"])
+        self.assertFalse(receipt["native_transaction"]["save_required"])
+        self.assertEqual(receipt["stages"]["controlled_reboot"]["status"], "SKIPPED")
+        self.assertEqual(receipt["stages"]["final_result"]["status"], "PASS")
+        live_install.validate_receipt(receipt)
 
 
 class ReceiptAndEpochTests(unittest.TestCase):
@@ -282,6 +567,19 @@ class ReceiptAndEpochTests(unittest.TestCase):
         live_install.accept_discovery_evidence(receipt, rebooted)
         self.assertEqual(receipt["state_epoch"], 1)
 
+    def test_identical_state_change_evidence_is_reused_across_stages(self):
+        receipt = make_receipt()
+        live_install.accept_discovery_evidence(receipt, make_evidence())
+        rebooted = make_evidence(
+            epoch=1,
+            state_change="reboot",
+            reboot_required=True,
+            reboot_completed=True,
+        )
+        live_install.accept_discovery_evidence(receipt, rebooted)
+        live_install.accept_discovery_evidence(receipt, rebooted)
+        self.assertEqual(receipt["state_epoch"], 1)
+
     def test_resume_from_owner_only_receipt(self):
         receipt = make_receipt()
         with tempfile.TemporaryDirectory() as directory:
@@ -304,6 +602,8 @@ class ReceiptAndEpochTests(unittest.TestCase):
         upgraded = live_install.build_intent(
             hardware_contract=live_install.DEFAULT_HARDWARE_CONTRACT,
             transport_mode="external",
+            runtime_mode="external-evidence",
+            adopt_existing_runtime=False,
             artifact=ARTIFACT,
             selected_device_mac=MAC,
             profile_slot=2,
@@ -348,6 +648,9 @@ class ReceiptAndEpochTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), set(evidence))
         self.assertEqual(
             set(schema["properties"]["checks"]["required"]), set(evidence["checks"])
+        )
+        self.assertEqual(
+            set(schema["properties"]["runtime"]["required"]), set(evidence["runtime"])
         )
 
 

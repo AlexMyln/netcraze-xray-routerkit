@@ -37,6 +37,7 @@ from routerkit_profile_source import PayloadValidationError, validate_env_name
 RECEIPT_SCHEMA = "routerkit.live-install.v1"
 EVIDENCE_SCHEMA = "routerkit.live-install.evidence.v1"
 SUPPORTED_TRANSPORTS = ("local-ndmc", "external")
+SUPPORTED_RUNTIME_MODES = ("local-router", "external-evidence")
 DEFAULT_HARDWARE_CONTRACT = live.SUPPORTED_CONTRACT
 MAX_RECEIPT_BYTES = 128 * 1024
 MAX_EVIDENCE_BYTES = 128 * 1024
@@ -47,6 +48,9 @@ PENDING = "PENDING"
 PASS = "PASS"
 FAIL = "FAIL"
 SKIPPED = "SKIPPED"
+EXECUTED = "EXECUTED"
+ADOPTED = "ADOPTED"
+EXTERNAL_EXECUTED = "EXTERNAL_EXECUTED"
 
 STAGE_ORDER = (
     "network_preflight",
@@ -95,6 +99,7 @@ POST_REBOOT_CHECKS = (
 EVIDENCE_CHECKS = POST_REBOOT_CHECKS + ("proxy_component",)
 SAFE_INTERFACE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+RELEASE_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){2}$")
 PROHIBITED_TEXT_MARKERS = (
     "vless://",
     "private_key",
@@ -182,6 +187,8 @@ def build_intent(
     *,
     hardware_contract: str,
     transport_mode: str,
+    runtime_mode: str,
+    adopt_existing_runtime: bool,
     artifact: Mapping[str, str],
     selected_device_mac: str,
     profile_slot: int,
@@ -192,11 +199,15 @@ def build_intent(
         raise LiveInstallError("Unsupported live-install hardware contract.", 2)
     if transport_mode not in SUPPORTED_TRANSPORTS:
         raise LiveInstallError("Unsupported live-install transport mode.", 2)
+    if runtime_mode not in SUPPORTED_RUNTIME_MODES:
+        raise LiveInstallError("Unsupported live-install runtime mode.", 2)
     if type(profile_slot) is not int or profile_slot not in (1, 2, 3):
         raise LiveInstallError("Selected profile slot must be 1, 2, or 3.", 2)
     return {
         "hardware_contract": hardware_contract,
         "transport_mode": transport_mode,
+        "runtime_mode": runtime_mode,
+        "adopt_existing_runtime": bool(adopt_existing_runtime),
         "artifact": dict(artifact),
         "selected_device_fingerprint": selected_device_fingerprint(selected_device_mac),
         "selected_profile_slot": profile_slot,
@@ -211,6 +222,10 @@ def initial_receipt(intent: Mapping[str, Any]) -> Dict[str, Any]:
         "intent_fingerprint": _fingerprint(intent),
         "hardware_contract": intent["hardware_contract"],
         "transport_mode": intent["transport_mode"],
+        "runtime_mode": intent["runtime_mode"],
+        "adopt_existing_runtime": intent["adopt_existing_runtime"],
+        "runtime_disposition": PENDING,
+        "runtime_evidence_fingerprint": None,
         "artifact": dict(intent["artifact"]),
         "selected_device_fingerprint": intent["selected_device_fingerprint"],
         "selected_profile_slot": intent["selected_profile_slot"],
@@ -270,6 +285,10 @@ def validate_receipt(receipt: Any) -> Dict[str, Any]:
         "intent_fingerprint",
         "hardware_contract",
         "transport_mode",
+        "runtime_mode",
+        "adopt_existing_runtime",
+        "runtime_disposition",
+        "runtime_evidence_fingerprint",
         "artifact",
         "selected_device_fingerprint",
         "selected_profile_slot",
@@ -297,6 +316,37 @@ def validate_receipt(receipt: Any) -> Dict[str, Any]:
         raise LiveInstallError("Live-install receipt hardware contract is unsupported.", 2)
     if receipt["transport_mode"] not in SUPPORTED_TRANSPORTS:
         raise LiveInstallError("Live-install receipt transport mode is unsupported.", 2)
+    if receipt["runtime_mode"] not in SUPPORTED_RUNTIME_MODES:
+        raise LiveInstallError("Live-install receipt runtime mode is unsupported.", 2)
+    if type(receipt["adopt_existing_runtime"]) is not bool:
+        raise LiveInstallError("Live-install receipt runtime adoption intent is malformed.", 2)
+    if receipt["runtime_disposition"] not in (
+        PENDING,
+        EXECUTED,
+        ADOPTED,
+        EXTERNAL_EXECUTED,
+    ):
+        raise LiveInstallError("Live-install receipt runtime disposition is unsupported.", 2)
+    runtime_evidence = receipt["runtime_evidence_fingerprint"]
+    if runtime_evidence is not None:
+        _require_hash(runtime_evidence, "Runtime evidence fingerprint")
+    if receipt["runtime_disposition"] == EXECUTED:
+        if receipt["runtime_mode"] != "local-router" or runtime_evidence is not None:
+            raise LiveInstallError("Executed runtime receipt state is inconsistent.", 2)
+    if receipt["runtime_disposition"] == ADOPTED:
+        if (
+            receipt["runtime_mode"] != "external-evidence"
+            or not receipt["adopt_existing_runtime"]
+            or runtime_evidence is None
+        ):
+            raise LiveInstallError("Adopted runtime receipt state is inconsistent.", 2)
+    if receipt["runtime_disposition"] == EXTERNAL_EXECUTED:
+        if (
+            receipt["runtime_mode"] != "external-evidence"
+            or receipt["adopt_existing_runtime"]
+            or runtime_evidence is None
+        ):
+            raise LiveInstallError("External runtime receipt state is inconsistent.", 2)
     if receipt["selected_profile_slot"] not in (1, 2, 3):
         raise LiveInstallError("Live-install receipt profile slot is invalid.", 2)
     if type(receipt["move_device_authorized"]) is not bool or type(
@@ -387,6 +437,33 @@ def validate_receipt(receipt: Any) -> Dict[str, Any]:
             incomplete_seen = True
     if stage_done(receipt, "strict_plan") and receipt["endpoint_manifest_fingerprint"] is None:
         raise LiveInstallError("Live-install receipt is missing endpoint-manifest identity.", 2)
+    if receipt["runtime_disposition"] == PENDING and all(
+        stage_done(receipt, stage) for stage in INSTALLATION_STAGES
+    ):
+        raise LiveInstallError("Live-install receipt runtime disposition is incomplete.", 2)
+    if receipt["runtime_disposition"] == EXECUTED and not all(
+        receipt["stages"][stage]["status"] == PASS for stage in INSTALLATION_STAGES
+    ):
+        raise LiveInstallError("Executed runtime stage semantics are inconsistent.", 2)
+    if receipt["runtime_disposition"] == EXTERNAL_EXECUTED and not all(
+        receipt["stages"][stage]["status"] == PASS for stage in INSTALLATION_STAGES
+    ):
+        raise LiveInstallError("External runtime stage semantics are inconsistent.", 2)
+    if receipt["runtime_disposition"] == ADOPTED:
+        expected_adopted = {
+            "network_preflight": PASS,
+            "usb_ext4_entware_readiness": PASS,
+            "pinned_xray_bootstrap": SKIPPED,
+            "protected_profile_source": SKIPPED,
+            "generate": SKIPPED,
+            "strict_plan": SKIPPED,
+            "backup": SKIPPED,
+            "install": SKIPPED,
+            "healthcheck": PASS,
+            "autostart": PASS,
+        }
+        if any(receipt["stages"][stage]["status"] != status for stage, status in expected_adopted.items()):
+            raise LiveInstallError("Adopted runtime stage semantics are inconsistent.", 2)
     component_status = receipt["stages"]["native_proxy_component"]["status"]
     if component_status == PASS and receipt["reboot_required"] is None:
         raise LiveInstallError("Live-install receipt is missing the component reboot decision.", 2)
@@ -421,6 +498,8 @@ def validate_receipt(receipt: Any) -> Dict[str, Any]:
     receipt_intent = {
         "hardware_contract": receipt["hardware_contract"],
         "transport_mode": receipt["transport_mode"],
+        "runtime_mode": receipt["runtime_mode"],
+        "adopt_existing_runtime": receipt["adopt_existing_runtime"],
         "artifact": receipt["artifact"],
         "selected_device_fingerprint": receipt["selected_device_fingerprint"],
         "selected_profile_slot": receipt["selected_profile_slot"],
@@ -478,6 +557,8 @@ def validate_intent_compatible(receipt: Dict[str, Any], intent: Mapping[str, Any
     immutable = (
         "hardware_contract",
         "transport_mode",
+        "runtime_mode",
+        "adopt_existing_runtime",
         "artifact",
         "selected_device_fingerprint",
         "selected_profile_slot",
@@ -498,6 +579,8 @@ def validate_intent_compatible(receipt: Dict[str, Any], intent: Mapping[str, Any
     upgraded_intent = {
         "hardware_contract": receipt["hardware_contract"],
         "transport_mode": receipt["transport_mode"],
+        "runtime_mode": receipt["runtime_mode"],
+        "adopt_existing_runtime": receipt["adopt_existing_runtime"],
         "artifact": receipt["artifact"],
         "selected_device_fingerprint": receipt["selected_device_fingerprint"],
         "selected_profile_slot": receipt["selected_profile_slot"],
@@ -555,6 +638,9 @@ def _reset_from_stage(receipt: Dict[str, Any], first_stage: str) -> None:
         receipt["stages"][stage] = {"status": PENDING, "epoch": None}
     if start <= STAGE_ORDER.index("generate"):
         receipt["endpoint_manifest_fingerprint"] = None
+    if start <= STAGE_ORDER.index("autostart"):
+        receipt["runtime_disposition"] = PENDING
+        receipt["runtime_evidence_fingerprint"] = None
     if start <= STAGE_ORDER.index("native_proxy_component"):
         receipt["reboot_required"] = None
         receipt["completed_reboot_epoch"] = None
@@ -578,6 +664,7 @@ def validate_evidence(value: Any) -> Dict[str, Any]:
             "epoch",
             "state_change",
             "checks",
+            "runtime",
             "component",
             "reboot",
             "dns",
@@ -606,6 +693,48 @@ def validate_evidence(value: Any) -> Dict[str, Any]:
         raise LiveInstallError("Live-install evidence check set is incompatible.", 2)
     if any(checks[name] not in (PASS, FAIL, "UNKNOWN") for name in EVIDENCE_CHECKS):
         raise LiveInstallError("Live-install evidence check status is invalid.", 2)
+    runtime = value["runtime"]
+    if not isinstance(runtime, dict):
+        raise LiveInstallError("Live-install runtime evidence is malformed.", 2)
+    _strict_keys(
+        runtime,
+        (
+            "target",
+            "opt_ready",
+            "entware_ready",
+            "xray_release",
+            "xray_running",
+            "loopback_listeners_verified",
+            "autostart_verified",
+            "reboot_recovery_proven",
+            "endpoint_manifest_verified",
+            "endpoint_manifest_fingerprint",
+        ),
+        "Runtime evidence",
+    )
+    if runtime["target"] not in ("router", "unknown"):
+        raise LiveInstallError("Live-install runtime evidence target is unsupported.", 2)
+    runtime_bools = (
+        "opt_ready",
+        "entware_ready",
+        "xray_running",
+        "loopback_listeners_verified",
+        "autostart_verified",
+        "reboot_recovery_proven",
+        "endpoint_manifest_verified",
+    )
+    if any(type(runtime[name]) is not bool for name in runtime_bools):
+        raise LiveInstallError("Live-install runtime evidence is malformed.", 2)
+    if runtime["xray_release"] is not None and (
+        not isinstance(runtime["xray_release"], str)
+        or not RELEASE_RE.fullmatch(runtime["xray_release"])
+    ):
+        raise LiveInstallError("Live-install runtime Xray release evidence is invalid.", 2)
+    if runtime["endpoint_manifest_fingerprint"] is not None:
+        _require_hash(
+            runtime["endpoint_manifest_fingerprint"],
+            "Runtime endpoint-manifest fingerprint",
+        )
     component = value["component"]
     if not isinstance(component, dict):
         raise LiveInstallError("Live-install component evidence is malformed.", 2)
@@ -679,6 +808,12 @@ def accept_discovery_evidence(receipt: Dict[str, Any], evidence: Mapping[str, An
     current_epoch = receipt["state_epoch"]
     supplied_epoch = evidence["epoch"]
     state_change = evidence["state_change"]
+    fingerprint = _fingerprint(evidence)
+    discovery = receipt["discovery"]
+    if discovery["epoch"] == supplied_epoch:
+        if discovery["evidence_fingerprint"] != fingerprint:
+            raise LiveInstallError("Contradictory discovery evidence was supplied in one state epoch.", 2)
+        return
     if supplied_epoch == current_epoch:
         if state_change != "none":
             raise LiveInstallError("Same-epoch evidence cannot claim a state change.", 2)
@@ -719,12 +854,6 @@ def accept_discovery_evidence(receipt: Dict[str, Any], evidence: Mapping[str, An
     else:
         raise LiveInstallError("Live-install evidence epoch is stale or skips an epoch.", 2)
 
-    fingerprint = _fingerprint(evidence)
-    discovery = receipt["discovery"]
-    if discovery["epoch"] == supplied_epoch:
-        if discovery["evidence_fingerprint"] != fingerprint:
-            raise LiveInstallError("Contradictory discovery evidence was supplied in one state epoch.", 2)
-        return
     discovery["epoch"] = supplied_epoch
     discovery["evidence_fingerprint"] = fingerprint
 
@@ -761,11 +890,15 @@ def render_bounded_plan(args: argparse.Namespace, artifact: Mapping[str, str]) -
         "- receipt schema: %s" % RECEIPT_SCHEMA,
         "- hardware contract: %s" % args.hardware_contract,
         "- native transport: %s" % args.transport,
+        "- runtime mode: %s" % args.runtime_mode,
+        "- existing runtime adoption: %s" % str(bool(args.adopt_existing_runtime)).lower(),
         "- pinned Xray: %s (%s)" % (artifact["release"], artifact["artifact_key"]),
         "- selected device fingerprint: %s" % selected_device_fingerprint(args.selected_device_mac),
         "- selected profile slot: %d" % args.profile_slot,
         "- existing selected-device policy move authorized: %s" % str(bool(args.move_device)).lower(),
         "- controlled reboot authorized: %s" % str(bool(args.authorize_reboot)).lower(),
+        "- local /opt runtime subprocesses permitted: %s"
+        % str(args.runtime_mode == "local-router").lower(),
         "- one confirmation covers every listed mutable stage",
         "- browser/Web UI fallback: prohibited",
         "- automatic RU routing packs: disabled",
@@ -877,10 +1010,14 @@ def _source_setup_command(args: argparse.Namespace, repo_root: Path) -> List[str
     return command
 
 
+def _endpoint_manifest_path(args: argparse.Namespace) -> Path:
+    if args.endpoint_manifest_file:
+        return Path(args.endpoint_manifest_file)
+    return Path(args.generated) / "routerkit-local-endpoints.json"
+
+
 def _endpoint_manifest(args: argparse.Namespace):
-    return load_local_endpoint_manifest(
-        Path(args.generated) / "routerkit-local-endpoints.json"
-    )
+    return load_local_endpoint_manifest(_endpoint_manifest_path(args))
 
 
 def _persist(path: Path, receipt: Dict[str, Any]) -> None:
@@ -897,6 +1034,139 @@ def _handoff(
     raise LiveInstallHandoff(action, expectations)
 
 
+def _runtime_execution_handoff(
+    receipt_path: Path,
+    receipt: Dict[str, Any],
+    *extra_expectations: str,
+) -> None:
+    expectations = [
+        "Use a shell-capable transport on the target router itself.",
+        "Run the existing RouterKit runtime commands there; do not translate them into raw MCP or browser/Web UI steps.",
+        "Do not execute RouterKit runtime stages against the orchestrator host's /opt.",
+    ]
+    expectations.extend(extra_expectations)
+    _handoff(
+        receipt_path,
+        receipt,
+        "ROUTERKIT_RUNTIME_EXECUTION_REQUIRED",
+        expectations,
+    )
+
+
+def _semantic_release(artifact: Mapping[str, str]) -> str:
+    return artifact["release"][1:] if artifact["release"].startswith("v") else artifact["release"]
+
+
+def _runtime_evidence_is_sufficient(
+    evidence: Optional[Mapping[str, Any]],
+    artifact: Mapping[str, str],
+    manifest_fingerprint: str,
+    *,
+    require_reboot_recovery: bool,
+) -> bool:
+    if evidence is None:
+        return False
+    required_checks = (
+        "management",
+        "wan_pppoe",
+        "lan",
+        "wifi",
+        "usb_ext4_opt",
+        "entware",
+        "xray",
+        "loopback_listeners",
+    )
+    if any(evidence["checks"][name] != PASS for name in required_checks):
+        return False
+    runtime = evidence["runtime"]
+    return bool(
+        runtime["target"] == "router"
+        and runtime["opt_ready"]
+        and runtime["entware_ready"]
+        and runtime["xray_release"] == _semantic_release(artifact)
+        and runtime["xray_running"]
+        and runtime["loopback_listeners_verified"]
+        and runtime["autostart_verified"]
+        and (runtime["reboot_recovery_proven"] or not require_reboot_recovery)
+        and runtime["endpoint_manifest_verified"]
+        and runtime["endpoint_manifest_fingerprint"] == manifest_fingerprint
+    )
+
+
+def _accept_external_runtime(
+    args: argparse.Namespace,
+    receipt_path: Path,
+    receipt: Dict[str, Any],
+    evidence: Optional[Mapping[str, Any]],
+) -> None:
+    disposition = receipt["runtime_disposition"]
+    if disposition in (ADOPTED, EXTERNAL_EXECUTED):
+        manifest = _endpoint_manifest(args)
+        if external.manifest_fingerprint(manifest) != receipt["endpoint_manifest_fingerprint"]:
+            raise LiveInstallError("Endpoint manifest does not match the accepted runtime receipt.", 2)
+        if evidence is None:
+            return
+        accept_discovery_evidence(receipt, evidence)
+        if receipt["runtime_disposition"] == disposition:
+            return
+
+    if not args.adopt_existing_runtime and args.mode == "apply":
+        _runtime_execution_handoff(
+            receipt_path,
+            receipt,
+            "Resume only after the target-router runtime flow completes and fresh evidence plus its endpoint manifest are available.",
+        )
+    if not args.endpoint_manifest_file:
+        _runtime_execution_handoff(
+            receipt_path,
+            receipt,
+            "Supply the fresh target-generated --endpoint-manifest-file before resuming.",
+        )
+
+    manifest = _endpoint_manifest(args)
+    manifest_fingerprint = external.manifest_fingerprint(manifest)
+    if not any(
+        profile.slot == args.profile_slot and profile.enabled for profile in manifest.profiles
+    ):
+        raise LiveInstallError("Selected profile slot is not an enabled endpoint in the manifest.", 2)
+    if not _runtime_evidence_is_sufficient(
+        evidence,
+        receipt["artifact"],
+        manifest_fingerprint,
+        require_reboot_recovery=args.adopt_existing_runtime,
+    ):
+        _runtime_execution_handoff(
+            receipt_path,
+            receipt,
+            "Return fresh strict runtime evidence for the target hardware contract and exact endpoint manifest.",
+        )
+
+    accept_discovery_evidence(receipt, evidence)
+    receipt["endpoint_manifest_fingerprint"] = manifest_fingerprint
+    receipt["runtime_evidence_fingerprint"] = _fingerprint(evidence)
+    if args.adopt_existing_runtime:
+        stage_statuses = {
+            "network_preflight": PASS,
+            "usb_ext4_entware_readiness": PASS,
+            "pinned_xray_bootstrap": SKIPPED,
+            "protected_profile_source": SKIPPED,
+            "generate": SKIPPED,
+            "strict_plan": SKIPPED,
+            "backup": SKIPPED,
+            "install": SKIPPED,
+            "healthcheck": PASS,
+            "autostart": PASS,
+        }
+        receipt["runtime_disposition"] = ADOPTED
+    else:
+        stage_statuses = {stage: PASS for stage in INSTALLATION_STAGES}
+        receipt["runtime_disposition"] = EXTERNAL_EXECUTED
+    for stage, status in stage_statuses.items():
+        mark_stage(receipt, stage, status)
+    _sync_final_verification(receipt)
+    _persist(receipt_path, receipt)
+
+
 def _run_installation_stages(
     args: argparse.Namespace,
     repo_root: Path,
@@ -904,6 +1174,10 @@ def _run_installation_stages(
     receipt: Dict[str, Any],
     evidence: Optional[Mapping[str, Any]],
 ) -> None:
+    if args.runtime_mode == "external-evidence":
+        _accept_external_runtime(args, receipt_path, receipt, evidence)
+        return
+
     env = os.environ.copy()
     pre_source_env = env.copy()
     if args.source_env:
@@ -1053,6 +1327,7 @@ def _run_installation_stages(
             _persist(receipt_path, receipt)
             raise LiveInstallError("Autostart did not return verified state.")
         mark_stage(receipt, "autostart", PASS)
+        receipt["runtime_disposition"] = EXECUTED
         receipt["final_verification"]["installation"] = PASS
         receipt["final_verification"]["autostart"] = PASS
         _persist(receipt_path, receipt)
@@ -1375,6 +1650,8 @@ def _native_dns_client_stages(
 def _print_status(receipt: Mapping[str, Any]) -> None:
     print("STATE_SCHEMA=%s" % receipt["schema"])
     print("TRANSPORT_MODE=%s" % receipt["transport_mode"])
+    print("RUNTIME_MODE=%s" % receipt["runtime_mode"])
+    print("RUNTIME_DISPOSITION=%s" % receipt["runtime_disposition"])
     print("STATE_EPOCH=%d" % receipt["state_epoch"])
     for stage in STAGE_ORDER:
         print("STAGE_%s=%s" % (stage.upper(), receipt["stages"][stage]["status"]))
@@ -1401,7 +1678,35 @@ def confirm_scope(input_fn=input) -> bool:
     )
 
 
-def _validate_args(args: argparse.Namespace) -> None:
+def _path_is_under_local_opt(path: Path) -> bool:
+    try:
+        resolved = Path(path).resolve()
+    except (OSError, RuntimeError):
+        raise LiveInstallError("Live-install local path could not be resolved safely.", 2) from None
+    return resolved == Path("/opt") or Path("/opt") in resolved.parents
+
+
+def _resolve_runtime_mode(args: argparse.Namespace, receipt: Optional[Mapping[str, Any]]) -> bool:
+    explicit = args.runtime_mode is not None
+    if args.runtime_mode is None:
+        if receipt is not None:
+            args.runtime_mode = receipt["runtime_mode"]
+        elif args.transport == "external":
+            args.runtime_mode = "external-evidence"
+        else:
+            args.runtime_mode = "local-router"
+    return explicit
+
+
+def _resolve_receipt_path(args: argparse.Namespace) -> Path:
+    if args.receipt_file:
+        return Path(args.receipt_file)
+    if args.mode == "status" or args.runtime_mode == "local-router":
+        return Path("/opt/var/lib/routerkit/live-install/receipt.json")
+    return Path.cwd() / ".routerkit-live-install" / "receipt.json"
+
+
+def _validate_args(args: argparse.Namespace, *, runtime_mode_explicit: bool = False) -> None:
     if args.mode == "status":
         return
     if args.target_root != "/opt":
@@ -1410,6 +1715,34 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise LiveInstallError(
             "live-install requires an explicit --selected-device-mac and --profile-slot.", 2
         )
+    if args.transport == "local-ndmc" and args.runtime_mode != "local-router":
+        raise LiveInstallError("local-ndmc requires runtime execution on the local router.", 2)
+    if args.runtime_mode == "local-router" and args.mode == "apply" and not runtime_mode_explicit:
+        raise LiveInstallError(
+            "Mutable local-router execution requires explicit --runtime-mode local-router.", 2
+        )
+    if args.adopt_existing_runtime and args.runtime_mode != "external-evidence":
+        raise LiveInstallError("Existing runtime adoption requires external-evidence mode.", 2)
+    if args.runtime_mode == "local-router" and args.endpoint_manifest_file:
+        raise LiveInstallError(
+            "local-router runtime uses only the manifest generated by its existing setup stage.",
+            2,
+        )
+    if args.runtime_mode == "external-evidence":
+        local_write_paths = [Path(args.receipt_file)]
+        if args.transaction_file:
+            local_write_paths.append(Path(args.transaction_file))
+        if any(_path_is_under_local_opt(path) for path in local_write_paths):
+            raise LiveInstallError(
+                "external-evidence mode refuses local receipt/transaction writes under /opt.", 2
+            )
+        if args.endpoint_manifest_file and _path_is_under_local_opt(
+            Path(args.endpoint_manifest_file)
+        ):
+            raise LiveInstallError(
+                "external-evidence mode requires an exported endpoint manifest outside local /opt.",
+                2,
+            )
     if args.source_env:
         try:
             validate_env_name(args.source_env)
@@ -1424,6 +1757,10 @@ def _validate_args(args: argparse.Namespace) -> None:
     ))
     if source_count > 1:
         raise LiveInstallError("Profile source options are mutually exclusive.", 2)
+    if args.adopt_existing_runtime and source_count:
+        raise LiveInstallError("Runtime adoption does not accept or read a profile source.", 2)
+    if args.adopt_existing_runtime and not args.endpoint_manifest_file:
+        raise LiveInstallError("Runtime adoption requires --endpoint-manifest-file.", 2)
     if args.fallback_index and args.primary_index is None:
         raise LiveInstallError("--fallback-index requires --primary-index.", 2)
     indexes = ([] if args.primary_index is None else [args.primary_index]) + args.fallback_index
@@ -1438,7 +1775,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("mode", choices=("plan", "apply", "resume", "status"))
     parser.add_argument("--repo-root")
     parser.add_argument("--transport", choices=SUPPORTED_TRANSPORTS, default="local-ndmc")
-    parser.add_argument("--receipt-file", default="/opt/var/lib/routerkit/live-install/receipt.json")
+    parser.add_argument("--runtime-mode", choices=SUPPORTED_RUNTIME_MODES)
+    parser.add_argument("--adopt-existing-runtime", action="store_true")
+    parser.add_argument("--receipt-file")
     parser.add_argument("--target-root", default="/opt")
     parser.add_argument("--generated", default="generated")
     parser.add_argument("--hardware-contract", default=DEFAULT_HARDWARE_CONTRACT)
@@ -1454,6 +1793,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--move-device", action="store_true")
     parser.add_argument("--ndmc-path")
     parser.add_argument("--evidence-file")
+    parser.add_argument("--endpoint-manifest-file")
     parser.add_argument("--authorize-reboot", action="store_true")
     parser.add_argument("--external-pre-snapshot-file")
     parser.add_argument("--external-post-snapshot-file")
@@ -1466,22 +1806,33 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None, *, input_fn=input) -> int:
     args = parse_args(argv)
     try:
-        _validate_args(args)
         repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parents[1]
-        receipt_path = Path(args.receipt_file)
         if args.mode == "status":
+            _resolve_runtime_mode(args, None)
+            receipt_path = _resolve_receipt_path(args)
             _print_status(load_receipt(receipt_path))
             return 0
 
         receipt = None
+        runtime_mode_explicit = args.runtime_mode is not None
+        if args.mode == "resume" and args.receipt_file:
+            receipt = load_receipt(Path(args.receipt_file))
+        _resolve_runtime_mode(args, receipt)
+        receipt_path = _resolve_receipt_path(args)
+        args.receipt_file = str(receipt_path)
         if args.mode == "resume":
-            receipt = load_receipt(receipt_path)
+            if receipt is None:
+                receipt = load_receipt(receipt_path)
             # Resume retains already granted authority. Supplying either flag
             # explicitly is a monotonic, machine-recorded scope upgrade.
             args.move_device = bool(args.move_device or receipt["move_device_authorized"])
             args.authorize_reboot = bool(
                 args.authorize_reboot or receipt["controlled_reboot_authorized"]
             )
+            args.adopt_existing_runtime = bool(
+                args.adopt_existing_runtime or receipt["adopt_existing_runtime"]
+            )
+        _validate_args(args, runtime_mode_explicit=runtime_mode_explicit)
 
         artifact = artifact_identity(
             repo_root, None if not args.artifact_manifest else Path(args.artifact_manifest)
@@ -1489,6 +1840,8 @@ def main(argv: Optional[Sequence[str]] = None, *, input_fn=input) -> int:
         intent = build_intent(
             hardware_contract=args.hardware_contract,
             transport_mode=args.transport,
+            runtime_mode=args.runtime_mode,
+            adopt_existing_runtime=args.adopt_existing_runtime,
             artifact=artifact,
             selected_device_mac=args.selected_device_mac,
             profile_slot=args.profile_slot,

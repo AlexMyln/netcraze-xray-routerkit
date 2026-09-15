@@ -9,6 +9,10 @@
     "intent_fingerprint",
     "hardware_contract",
     "transport_mode",
+    "runtime_mode",
+    "adopt_existing_runtime",
+    "runtime_disposition",
+    "runtime_evidence_fingerprint",
     "artifact",
     "selected_device_fingerprint",
     "selected_profile_slot",
@@ -29,6 +33,14 @@
     "intent_fingerprint": {"$ref": "#/$defs/hash"},
     "hardware_contract": {"const": "nc3812-netcrazeos-5.1.5"},
     "transport_mode": {"enum": ["local-ndmc", "external"]},
+    "runtime_mode": {"enum": ["local-router", "external-evidence"]},
+    "adopt_existing_runtime": {"type": "boolean"},
+    "runtime_disposition": {
+      "enum": ["PENDING", "EXECUTED", "ADOPTED", "EXTERNAL_EXECUTED"]
+    },
+    "runtime_evidence_fingerprint": {
+      "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+    },
     "artifact": {
       "type": "object",
       "additionalProperties": false,
