@@ -1,0 +1,40 @@
+{
+  "schema": "routerkit.live-install.evidence.v1",
+  "hardware_contract": "nc3812-netcrazeos-5.1.5",
+  "epoch": 0,
+  "state_change": "none",
+  "checks": {
+    "management": "PASS",
+    "wan_pppoe": "PASS",
+    "lan": "PASS",
+    "wifi": "PASS",
+    "usb_ext4_opt": "PASS",
+    "entware": "PASS",
+    "xray": "UNKNOWN",
+    "loopback_listeners": "UNKNOWN",
+    "proxy_component": "PASS"
+  },
+  "component": {
+    "present": true,
+    "install_required": false,
+    "reboot_required": false
+  },
+  "reboot": {
+    "completed": false
+  },
+  "dns": {
+    "protected": true,
+    "availability": "any",
+    "bound_interfaces": [],
+    "policy_interfaces": [
+      "Proxy0"
+    ],
+    "verified": true
+  },
+  "client": {
+    "selected_assignment": false,
+    "domain_dns": false,
+    "domain_https": false,
+    "probe_transport": "none"
+  }
+}

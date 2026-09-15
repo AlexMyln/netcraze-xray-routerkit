@@ -89,6 +89,51 @@ python3 scripts/routerkit.py setup --apply --bootstrap-apply
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
+First-class production coordinator — `live-install`. До любой записи он
+показывает полный bounded scope, запрашивает одно подтверждение, сохраняет
+owner-only receipt `routerkit.live-install.v1` и продолжает с последней
+доказанной стадии:
+
+```sh
+python3 scripts/routerkit.py live-install plan \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1
+
+python3 scripts/routerkit.py live-install apply \
+  --transport external \
+  --source-file /private/profile-source.txt \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+
+python3 scripts/routerkit.py live-install resume \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+
+python3 scripts/routerkit.py live-install status \
+  --receipt-file /opt/var/lib/routerkit/live-install/receipt.json
+```
+
+`local-ndmc` делегирует native Proxy/Policy stage существующему reviewed local
+adapter. `external` строит и проверяет
+`routerkit.netcraze.external-transaction.v1`; official MCP/RMM или другой
+agent доставляет только exact packet commands и выполняет typed operations для
+component/reboot. Для этого native external stage не требуются Entware SSH или
+browser fallback. NOOP packet остаётся без commands и save. DNS acceptance
+требует verified protected path, доступного selected policy: привязка только к
+`PPPoE0` недостаточна для Proxy-only policy, а hardware-proven `Any`/unbound
+принимается без hardcode публичных DNS providers. Final PASS дополнительно
+требует explicit selected assignment, real domain DNS и real domain HTTPS
+evidence. См. [архитектуру live-install](docs/architecture/live-install-orchestration.ru.md)
+и [production runbook](docs/live-install-runbook.ru.md).
+
+Эта версия делает orchestration software-complete, но ещё не доказывает полный
+one-command flow на текущем hardware. После merge для #41 нужен один brownfield
+rerun на NC-3812; clean spare-hardware matrix остаётся в #16.
+
 Standalone bootstrap по умолчанию остаётся read-only и теперь имеет отдельно gated transactional apply:
 
 ```sh

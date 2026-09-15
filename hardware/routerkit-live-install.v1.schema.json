@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AlexMyln/netcraze-xray-routerkit/hardware/routerkit-live-install.v1.schema.json",
+  "title": "RouterKit live-install receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "intent_fingerprint",
+    "hardware_contract",
+    "transport_mode",
+    "artifact",
+    "selected_device_fingerprint",
+    "selected_profile_slot",
+    "move_device_authorized",
+    "controlled_reboot_authorized",
+    "endpoint_manifest_fingerprint",
+    "state_epoch",
+    "discovery",
+    "reboot_required",
+    "completed_reboot_epoch",
+    "native_transaction",
+    "dns_gate_status",
+    "final_verification",
+    "stages"
+  ],
+  "properties": {
+    "schema": {"const": "routerkit.live-install.v1"},
+    "intent_fingerprint": {"$ref": "#/$defs/hash"},
+    "hardware_contract": {"const": "nc3812-netcrazeos-5.1.5"},
+    "transport_mode": {"enum": ["local-ndmc", "external"]},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_key", "release", "archive_sha256"],
+      "properties": {
+        "artifact_key": {"type": "string", "minLength": 1},
+        "release": {"type": "string", "minLength": 1},
+        "archive_sha256": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "selected_device_fingerprint": {"$ref": "#/$defs/hash"},
+    "selected_profile_slot": {"enum": [1, 2, 3]},
+    "move_device_authorized": {"type": "boolean"},
+    "controlled_reboot_authorized": {"type": "boolean"},
+    "endpoint_manifest_fingerprint": {
+      "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+    },
+    "state_epoch": {"type": "integer", "minimum": 0},
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["epoch", "evidence_fingerprint"],
+      "properties": {
+        "epoch": {"type": ["integer", "null"], "minimum": 0},
+        "evidence_fingerprint": {
+          "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+        }
+      }
+    },
+    "reboot_required": {"type": ["boolean", "null"]},
+    "completed_reboot_epoch": {"type": ["integer", "null"], "minimum": 1},
+    "native_transaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint",
+        "status",
+        "write_required",
+        "save_required",
+        "pre_epoch",
+        "dns_refresh_required",
+        "pre_snapshot_path_fingerprint",
+        "running_snapshot_path_fingerprint"
+      ],
+      "properties": {
+        "fingerprint": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "status": {"enum": ["PENDING", "PLANNED", "RUNNING_VERIFIED", "PASS"]},
+        "write_required": {"type": ["boolean", "null"]},
+        "save_required": {"type": ["boolean", "null"]},
+        "pre_epoch": {"type": ["integer", "null"], "minimum": 0},
+        "dns_refresh_required": {"type": "boolean"},
+        "pre_snapshot_path_fingerprint": {
+          "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+        },
+        "running_snapshot_path_fingerprint": {
+          "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+        }
+      }
+    },
+    "dns_gate_status": {"enum": ["PENDING", "PASS"]},
+    "final_verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installation",
+        "xray",
+        "autostart",
+        "native_routing",
+        "dns",
+        "client_domain_https"
+      ],
+      "properties": {
+        "installation": {"$ref": "#/$defs/finalStatus"},
+        "xray": {"$ref": "#/$defs/finalStatus"},
+        "autostart": {"$ref": "#/$defs/finalStatus"},
+        "native_routing": {"$ref": "#/$defs/finalStatus"},
+        "dns": {"$ref": "#/$defs/finalStatus"},
+        "client_domain_https": {"$ref": "#/$defs/finalStatus"}
+      }
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network_preflight",
+        "usb_ext4_entware_readiness",
+        "pinned_xray_bootstrap",
+        "protected_profile_source",
+        "generate",
+        "strict_plan",
+        "backup",
+        "install",
+        "healthcheck",
+        "autostart",
+        "native_proxy_component",
+        "controlled_reboot",
+        "post_reboot_proof",
+        "native_proxy_policy_transaction",
+        "protected_dns_gate",
+        "selected_client_acceptance",
+        "final_result"
+      ],
+      "properties": {
+        "network_preflight": {"$ref": "#/$defs/stage"},
+        "usb_ext4_entware_readiness": {"$ref": "#/$defs/stage"},
+        "pinned_xray_bootstrap": {"$ref": "#/$defs/stage"},
+        "protected_profile_source": {"$ref": "#/$defs/stage"},
+        "generate": {"$ref": "#/$defs/stage"},
+        "strict_plan": {"$ref": "#/$defs/stage"},
+        "backup": {"$ref": "#/$defs/stage"},
+        "install": {"$ref": "#/$defs/stage"},
+        "healthcheck": {"$ref": "#/$defs/stage"},
+        "autostart": {"$ref": "#/$defs/stage"},
+        "native_proxy_component": {"$ref": "#/$defs/stage"},
+        "controlled_reboot": {"$ref": "#/$defs/stage"},
+        "post_reboot_proof": {"$ref": "#/$defs/stage"},
+        "native_proxy_policy_transaction": {"$ref": "#/$defs/stage"},
+        "protected_dns_gate": {"$ref": "#/$defs/stage"},
+        "selected_client_acceptance": {"$ref": "#/$defs/stage"},
+        "final_result": {"$ref": "#/$defs/stage"}
+      }
+    }
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "finalStatus": {"enum": ["PENDING", "PASS"]},
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "epoch"],
+      "properties": {
+        "status": {"enum": ["PENDING", "PASS", "FAIL", "SKIPPED"]},
+        "epoch": {"type": ["integer", "null"], "minimum": 0}
+      }
+    }
+  }
+}

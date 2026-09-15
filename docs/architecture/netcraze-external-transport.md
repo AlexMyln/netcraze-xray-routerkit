@@ -107,7 +107,10 @@ not issued. The existing human-readable production descriptions such as
 local `ndmc` or external MCP/RMM command delivery. The remaining hardware proof
 can run without SSH and must end in RouterKit verification.
 
-#41 orchestration must compose this packet protocol rather than assume that
-RouterKit itself can launch on-router Entware processes through every
-management transport. A one-command orchestrator may drive the phases, but it
-must preserve the exact packet commands and both verification gates.
+#41 orchestration now composes this packet protocol through
+`routerkit live-install`. It does not assume that RouterKit can launch
+on-router Entware processes through every management transport. The state
+machine preserves the exact packet commands, requires fresh running readback
+even for NOOP, and gates save/saved-state verification for mutation. The
+software implementation still requires the documented post-merge brownfield
+NC-3812 rerun before #41 can close.

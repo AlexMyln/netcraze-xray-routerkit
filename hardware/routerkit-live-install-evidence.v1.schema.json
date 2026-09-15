@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AlexMyln/netcraze-xray-routerkit/hardware/routerkit-live-install-evidence.v1.schema.json",
+  "title": "RouterKit live-install evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "hardware_contract",
+    "epoch",
+    "state_change",
+    "checks",
+    "component",
+    "reboot",
+    "dns",
+    "client"
+  ],
+  "properties": {
+    "schema": {"const": "routerkit.live-install.evidence.v1"},
+    "hardware_contract": {"const": "nc3812-netcrazeos-5.1.5"},
+    "epoch": {"type": "integer", "minimum": 0},
+    "state_change": {
+      "enum": ["none", "component", "reboot", "native", "opt", "routerkit-xray", "contradictory"]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "management",
+        "wan_pppoe",
+        "lan",
+        "wifi",
+        "usb_ext4_opt",
+        "entware",
+        "xray",
+        "loopback_listeners",
+        "proxy_component"
+      ],
+      "properties": {
+        "management": {"$ref": "#/$defs/check"},
+        "wan_pppoe": {"$ref": "#/$defs/check"},
+        "lan": {"$ref": "#/$defs/check"},
+        "wifi": {"$ref": "#/$defs/check"},
+        "usb_ext4_opt": {"$ref": "#/$defs/check"},
+        "entware": {"$ref": "#/$defs/check"},
+        "xray": {"$ref": "#/$defs/check"},
+        "loopback_listeners": {"$ref": "#/$defs/check"},
+        "proxy_component": {"$ref": "#/$defs/check"}
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "install_required", "reboot_required"],
+      "properties": {
+        "present": {"type": "boolean"},
+        "install_required": {"type": "boolean"},
+        "reboot_required": {"type": "boolean"}
+      }
+    },
+    "reboot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed"],
+      "properties": {"completed": {"type": "boolean"}}
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protected", "availability", "bound_interfaces", "policy_interfaces", "verified"],
+      "properties": {
+        "protected": {"type": "boolean"},
+        "availability": {"enum": ["any", "unbound", "interfaces", "unknown"]},
+        "bound_interfaces": {"$ref": "#/$defs/interfaces"},
+        "policy_interfaces": {"$ref": "#/$defs/interfaces"},
+        "verified": {"type": "boolean"}
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected_assignment", "domain_dns", "domain_https", "probe_transport"],
+      "properties": {
+        "selected_assignment": {"type": "boolean"},
+        "domain_dns": {"type": "boolean"},
+        "domain_https": {"type": "boolean"},
+        "probe_transport": {"enum": ["none", "local", "external-agent"]}
+      }
+    }
+  },
+  "$defs": {
+    "check": {"enum": ["PASS", "FAIL", "UNKNOWN"]},
+    "interfaces": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,63}$"}
+    }
+  }
+}

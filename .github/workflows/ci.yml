@@ -52,6 +52,8 @@ jobs:
           python3 -m py_compile scripts/routerkit-netcraze-live.py
           python3 -m py_compile scripts/routerkit_netcraze_external.py
           python3 -m py_compile scripts/routerkit-netcraze-external.py
+          python3 -m py_compile scripts/routerkit_live_install.py
+          python3 -m py_compile scripts/routerkit-live-install.py
           python3 -m py_compile scripts/validate_routerkit_platform_compatibility.py
 
       - name: Platform compatibility contract
@@ -85,6 +87,10 @@ jobs:
           python3 -m unittest tests.test_routerkit_autostart_signals -v
           python3 -m unittest tests.test_routerkit_s23xray_direct -v
           python3 -m unittest tests.test_routerkit_setup_autostart -v
+
+      - name: Focused live-install orchestration tests
+        run: |
+          python3 -m unittest tests.test_routerkit_live_install -v
 
       - name: Python tests
         run: |

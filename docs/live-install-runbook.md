@@ -44,6 +44,72 @@ For an installation whose goal includes per-device VPN routing, use this order:
 
 Do not postpone checking the native **Proxy client** component until after RouterKit is otherwise declared complete when per-device routing is part of the requested goal.
 
+### 2.1 First-class `live-install` command
+
+Use the unified coordinator for the complete bounded scope:
+
+```sh
+python3 scripts/routerkit.py live-install plan \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1
+
+python3 scripts/routerkit.py live-install apply \
+  --transport external \
+  --source-file /private/profile-source.txt \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+```
+
+`plan` reads no protected profile source, performs no discovery, creates no
+receipt, prompts for nothing, and writes nothing. `apply` prints the same full
+scope and asks once; `--yes` acknowledges only that complete displayed scope.
+Successful stages do not add new prompts. A real component/reboot/transport,
+DNS, or client-probe boundary returns a named bounded handoff and exit `4`.
+Continue without repeating proved stages:
+
+```sh
+python3 scripts/routerkit.py live-install resume \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence-next-epoch.json
+
+python3 scripts/routerkit.py live-install status \
+  --receipt-file /opt/var/lib/routerkit/live-install/receipt.json
+```
+
+The default receipt is an owner-only
+[`routerkit.live-install.v1`](../hardware/routerkit-live-install.v1.schema.json)
+file below an exact `0700` directory. It contains stage/epoch state, the
+hardware/artifact/transport/endpoint fingerprints, reboot epoch, native
+transaction status, DNS status, and final classifications. It never contains
+the profile source, VLESS URI, UUID/Reality keys, raw configs, passwords,
+tokens, private keys, or the selected MAC itself. Resume recomputes the
+intended-installation fingerprint and rejects an incompatible receipt.
+
+Typed vendor/operator observations use the separate owner-only
+[`routerkit.live-install.evidence.v1`](../hardware/routerkit-live-install-evidence.v1.schema.json)
+shape; a secret-free example is
+[`live-install-evidence.example.json`](../examples/live-install-evidence.example.json).
+One evidence fingerprint is accepted per state epoch. A new discovery is
+allowed only after a declared component, reboot, `/opt`, RouterKit/Xray,
+contradictory-evidence, or native-policy state change; contradictory evidence
+in one epoch fails closed.
+
+`local-ndmc` calls the existing `routerkit-netcraze-live.py` plan/apply path.
+It never invents a component-install command. `external` creates the existing
+external-transaction packet, verifies pre-state, requires a distinct fresh
+running-state snapshot even for NOOP, authorizes save only after RouterKit
+running-state verification, and requires a distinct saved-state snapshot for
+a mutating transaction. External native operation requires no Entware SSH.
+Browser/Web UI is not a fallback.
+
+The install stage still delegates to `install-xray-direct.sh`; therefore an
+existing `/opt/etc/routerkit/routing-overrides.json` is reconciled by the
+existing local-routing module. No RU service pack is automatically selected.
+
 ## 3. One bounded preflight
 
 Before destructive or mutable work, establish only what is needed to execute safely:
@@ -270,13 +336,20 @@ Separate service outcome from tooling defects.
 Example:
 
 ```text
-INSTALLATION_RESULT=PASS
-VPN_SERVICE=PASS
-CLIENT_ROUTING=PASS
-AFTER_REBOOT=PASS
+INSTALLATION=PASS
+XRAY=PASS
+AUTOSTART=PASS
+NATIVE_ROUTING=PASS
+DNS=PASS
+CLIENT_DOMAIN_HTTPS=PASS
+RESULT=PASS
 TOOLING_ISSUES=#...
 SSH_HARDENING=FOLLOW_UP
 ```
+
+If the selected-client probe transport is absent, report
+`CLIENT_FUNCTIONAL_VERIFICATION_REQUIRED` and keep `RESULT=PENDING`. Xray,
+listener, or IP-only curl success cannot promote that gate to PASS.
 
 Do not label a functioning production VPN installation `PARTIAL` solely because an auxiliary verifier has a known false-negative.
 
