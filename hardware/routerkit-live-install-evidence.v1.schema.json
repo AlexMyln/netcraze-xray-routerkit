@@ -10,6 +10,7 @@
     "epoch",
     "state_change",
     "checks",
+    "runtime",
     "component",
     "reboot",
     "dns",
@@ -46,6 +47,39 @@
         "xray": {"$ref": "#/$defs/check"},
         "loopback_listeners": {"$ref": "#/$defs/check"},
         "proxy_component": {"$ref": "#/$defs/check"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "opt_ready",
+        "entware_ready",
+        "xray_release",
+        "xray_running",
+        "loopback_listeners_verified",
+        "autostart_verified",
+        "reboot_recovery_proven",
+        "endpoint_manifest_verified",
+        "endpoint_manifest_fingerprint"
+      ],
+      "properties": {
+        "target": {"enum": ["router", "unknown"]},
+        "opt_ready": {"type": "boolean"},
+        "entware_ready": {"type": "boolean"},
+        "xray_release": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]+(?:\\.[0-9]+){2}$"
+        },
+        "xray_running": {"type": "boolean"},
+        "loopback_listeners_verified": {"type": "boolean"},
+        "autostart_verified": {"type": "boolean"},
+        "reboot_recovery_proven": {"type": "boolean"},
+        "endpoint_manifest_verified": {"type": "boolean"},
+        "endpoint_manifest_fingerprint": {
+          "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+        }
       }
     },
     "component": {

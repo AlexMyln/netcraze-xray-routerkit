@@ -52,6 +52,31 @@ def apply_commands():
 
 
 class RouterkitCliCommandTests(unittest.TestCase):
+    def test_live_install_forwards_independent_runtime_and_native_modes(self):
+        args = cli.parse_args([
+            "live-install", "apply", "--transport", "external",
+            "--runtime-mode", "external-evidence", "--adopt-existing-runtime",
+            "--endpoint-manifest-file", "/private/endpoints.json",
+            "--receipt-file", "/private/receipt.json",
+            "--selected-device-mac", "02:22:33:44:55:66", "--profile-slot", "2",
+        ])
+        command = cli.build_command(args, ROOT)
+        self.assertIn("--transport", command)
+        self.assertIn("external", command)
+        self.assertIn("--runtime-mode", command)
+        self.assertIn("external-evidence", command)
+        self.assertIn("--adopt-existing-runtime", command)
+        self.assertIn("--endpoint-manifest-file", command)
+
+    def test_external_live_install_wrapper_does_not_inject_opt_receipt(self):
+        args = cli.parse_args([
+            "live-install", "apply", "--transport", "external",
+            "--selected-device-mac", "02:22:33:44:55:66", "--profile-slot", "2",
+        ])
+        command = cli.build_command(args, ROOT)
+        self.assertNotIn("--receipt-file", command)
+        self.assertNotIn("/opt/var/lib/routerkit/live-install/receipt.json", command)
+
     def test_profile_source_builds_expected_delegated_command(self):
         args = cli.parse_args([
             "profile-source", "--source-file", "payload.txt", "--output", "private.json",

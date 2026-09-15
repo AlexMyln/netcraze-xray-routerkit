@@ -97,29 +97,50 @@ owner-only receipt `routerkit.live-install.v1` и продолжает с пос
 ```sh
 python3 scripts/routerkit.py live-install plan \
   --transport external \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1
 
 python3 scripts/routerkit.py live-install apply \
   --transport external \
-  --source-file /private/profile-source.txt \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
+  --receipt-file /private/live-install-receipt.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1 \
   --evidence-file /private/live-install-evidence.json
 
 python3 scripts/routerkit.py live-install resume \
   --transport external \
+  --runtime-mode external-evidence \
+  --adopt-existing-runtime \
+  --endpoint-manifest-file /private/routerkit-local-endpoints.json \
+  --receipt-file /private/live-install-receipt.json \
   --selected-device-mac 02:00:00:00:00:01 \
   --profile-slot 1 \
   --evidence-file /private/live-install-evidence.json
 
 python3 scripts/routerkit.py live-install status \
-  --receipt-file /opt/var/lib/routerkit/live-install/receipt.json
+  --receipt-file /private/live-install-receipt.json
 ```
 
+Runtime execution и native configuration — независимые оси. `local-router`
+разрешает существующие subprocess stages preflight/bootstrap/setup/backup/
+install/healthcheck/autostart и должен быть выбран явно для mutable запуска на
+самом target router. `external-evidence` никогда не выполняет эти stages и не
+пишет в `/opt` orchestrator host. Он либо принимает existing runtime через
+`--adopt-existing-runtime` со strict fresh runtime evidence и явно переданным
+RouterKit-valid endpoint manifest, либо возвращает
+`ROUTERKIT_RUNTIME_EXECUTION_REQUIRED` для shell-capable handoff на target.
+Adoption не читает profile source и не регенерирует config; receipt различает
+runtime outcomes `ADOPTED`, local `EXECUTED` и `EXTERNAL_EXECUTED`.
+
 `local-ndmc` делегирует native Proxy/Policy stage существующему reviewed local
-adapter. `external` строит и проверяет
-`routerkit.netcraze.external-transaction.v1`; official MCP/RMM или другой
+adapter. `external` управляет только native router configuration и
+строит/проверяет `routerkit.netcraze.external-transaction.v1`; official MCP/RMM или другой
 agent доставляет только exact packet commands и выполняет typed operations для
 component/reboot. Для этого native external stage не требуются Entware SSH или
 browser fallback. NOOP packet остаётся без commands и save. DNS acceptance
@@ -130,9 +151,9 @@ browser fallback. NOOP packet остаётся без commands и save. DNS acce
 evidence. См. [архитектуру live-install](docs/architecture/live-install-orchestration.ru.md)
 и [production runbook](docs/live-install-runbook.ru.md).
 
-Эта версия делает orchestration software-complete, но ещё не доказывает полный
-one-command flow на текущем hardware. После merge для #41 нужен один brownfield
-rerun на NC-3812; clean spare-hardware matrix остаётся в #16.
+Production brownfield rerun NC-3812 запрещён до merge этого runtime-locus fix с
+зелёным CI. После merge для #41 всё ещё нужен один external-evidence adoption
+rerun; clean spare-hardware matrix остаётся в #16.
 
 Standalone bootstrap по умолчанию остаётся read-only и теперь имеет отдельно gated transactional apply:
 

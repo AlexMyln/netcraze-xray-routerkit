@@ -26,6 +26,7 @@ startup-config*
 *.startup-config
 opt/etc/xray/
 **/opt/etc/xray/
+.routerkit-live-install/
 
 # Local editor/system files
 .DS_Store
