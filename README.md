@@ -85,6 +85,52 @@ python3 scripts/routerkit.py setup --apply --bootstrap-apply
 python3 scripts/routerkit.py setup --apply --yes
 ```
 
+The first-class production coordinator is `live-install`. It renders the full
+bounded scope before any write, asks one confirmation, persists an owner-only
+`routerkit.live-install.v1` receipt, and resumes from the last proven stage:
+
+```sh
+python3 scripts/routerkit.py live-install plan \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1
+
+python3 scripts/routerkit.py live-install apply \
+  --transport external \
+  --source-file /private/profile-source.txt \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+
+python3 scripts/routerkit.py live-install resume \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+
+python3 scripts/routerkit.py live-install status \
+  --receipt-file /opt/var/lib/routerkit/live-install/receipt.json
+```
+
+`local-ndmc` delegates the native Proxy/Policy stage to the existing reviewed
+local adapter. `external` builds and verifies
+`routerkit.netcraze.external-transaction.v1`; the official MCP/RMM or another
+agent delivers only the exact packet commands and typed component/reboot
+operations. No Entware SSH or browser fallback is required for that native
+external stage. A NOOP packet remains commandless and unsaved. DNS acceptance
+requires a verified protected path reachable by the selected policy; a path
+bound only to `PPPoE0` is insufficient for a Proxy-only policy, while the
+hardware-proven `Any`/unbound form is accepted without hard-coding public DNS
+providers. Final PASS additionally requires the explicit selected assignment,
+real domain DNS, and real domain HTTPS evidence. See the
+[live-install architecture](docs/architecture/live-install-orchestration.md)
+and [production runbook](docs/live-install-runbook.md).
+
+This release makes orchestration software-complete. It is not yet proof of the
+full one-command flow on current hardware: after merge, issue #41 still
+requires one brownfield NC-3812 rerun. The clean spare-hardware matrix remains
+issue #16.
+
 Standalone bootstrap is read-only by default and now has a separately gated transactional apply mode:
 
 ```sh

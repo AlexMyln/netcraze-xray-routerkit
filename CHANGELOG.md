@@ -34,6 +34,10 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- First-class `routerkit live-install plan|apply|resume|status` orchestration for issue #41, with the complete bounded stage order, one installation-scope confirmation, stop-on-failure behavior, and resume without rerunning proved stages.
+- Owner-only versioned `routerkit.live-install.v1` receipts and `routerkit.live-install.evidence.v1` observations with intent/endpoint fingerprints, explicit state epochs, component/reboot handoffs, secret/config exclusion, and checked-in schemas.
+- Replaceable `local-ndmc` and `external` native modes that compose the existing live adapter or `routerkit.netcraze.external-transaction.v1`; external NOOP stays commandless/unsaved and mutation requires fresh RouterKit running/saved verification rather than transport success.
+- Policy-aware protected DNS reuse/rejection semantics and an explicit final selected-client assignment/domain-DNS/domain-HTTPS acceptance gate. Software completion still requires a post-merge brownfield NC-3812 rerun for #41; the clean spare-hardware matrix remains #16.
 - Versioned `routerkit.netcraze.external-transaction.v1` packets and a protected snapshot CLI for transport-neutral native Netcraze planning, pre-state checks, running-state verification, gated save, and saved-state verification through official MCP/RMM without an arbitrary Entware shell.
 - Integrity-bound exact native command/rollback lists, manifest/pre/post/Default fingerprints, semantic duplicate rejection, brownfield description compatibility, and focused external-transport coverage.
 - An exhaustive public-source platform and firmware compatibility audit covering the complete current Netcraze router catalog, the current detailed Keenetic catalog, and bounded recent legacy candidates, with a strict machine-readable manifest, bilingual human guides, and regression tests.

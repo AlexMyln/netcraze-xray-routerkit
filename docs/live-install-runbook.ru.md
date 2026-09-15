@@ -44,6 +44,73 @@
 
 Если конечная цель включает маршрутизацию отдельных клиентов, наличие компонента **Proxy client** нужно проверять заранее, а не после заявления «RouterKit установлен».
 
+### 2.1 First-class команда `live-install`
+
+Для полного bounded scope используйте unified coordinator:
+
+```sh
+python3 scripts/routerkit.py live-install plan \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1
+
+python3 scripts/routerkit.py live-install apply \
+  --transport external \
+  --source-file /private/profile-source.txt \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence.json
+```
+
+`plan` не читает protected profile source, не запускает discovery, не создаёт
+receipt, не задаёт prompt и ничего не записывает. `apply` показывает тот же
+полный scope и спрашивает один раз; `--yes` подтверждает только весь показанный
+scope. После PASS отдельных стадий новых prompts нет. Реальная граница
+component/reboot/transport, DNS или client probe возвращает именованный bounded
+handoff и exit `4`. Продолжение не повторяет доказанные стадии:
+
+```sh
+python3 scripts/routerkit.py live-install resume \
+  --transport external \
+  --selected-device-mac 02:00:00:00:00:01 \
+  --profile-slot 1 \
+  --evidence-file /private/live-install-evidence-next-epoch.json
+
+python3 scripts/routerkit.py live-install status \
+  --receipt-file /opt/var/lib/routerkit/live-install/receipt.json
+```
+
+Default receipt — owner-only файл
+[`routerkit.live-install.v1`](../hardware/routerkit-live-install.v1.schema.json)
+в exact `0700` directory. Он содержит stage/epoch state, fingerprints
+hardware/artifact/transport/endpoint, reboot epoch, native transaction status,
+DNS status и final classifications. В нём никогда нет profile source, VLESS
+URI, UUID/Reality keys, raw configs, passwords, tokens, private keys или самого
+selected MAC. Resume повторно вычисляет intended-installation fingerprint и
+отклоняет несовместимый receipt.
+
+Typed vendor/operator observations используют отдельный owner-only формат
+[`routerkit.live-install.evidence.v1`](../hardware/routerkit-live-install-evidence.v1.schema.json);
+secret-free пример —
+[`live-install-evidence.example.json`](../examples/live-install-evidence.example.json).
+В одной state epoch принимается один evidence fingerprint. Новый discovery
+разрешён только после объявленного component, reboot, `/opt`, RouterKit/Xray,
+contradictory-evidence или native-policy state change; противоречивые evidence
+в одной epoch отклоняются fail closed.
+
+`local-ndmc` вызывает существующий path plan/apply из
+`routerkit-netcraze-live.py` и не придумывает command установки component.
+`external` создаёт существующий external-transaction packet, проверяет
+pre-state, требует отдельный fresh running-state snapshot даже для NOOP,
+разрешает save только после RouterKit running-state verification и требует
+отдельный saved-state snapshot для mutating transaction. Для external native
+operation не нужен Entware SSH. Browser/Web UI не является fallback.
+
+Install stage по-прежнему делегирует `install-xray-direct.sh`, поэтому
+существующий `/opt/etc/routerkit/routing-overrides.json` reconcile-ится
+существующим local-routing module. Ни один RU service pack автоматически не
+выбирается.
+
 ## 3. Один ограниченный preflight
 
 До destructive/mutable действий нужно установить только факты, необходимые для безопасного выполнения:
@@ -270,13 +337,20 @@ fallback. См. [`netcraze-external-transport.ru.md`](architecture/netcraze-exte
 Пример:
 
 ```text
-INSTALLATION_RESULT=PASS
-VPN_SERVICE=PASS
-CLIENT_ROUTING=PASS
-AFTER_REBOOT=PASS
+INSTALLATION=PASS
+XRAY=PASS
+AUTOSTART=PASS
+NATIVE_ROUTING=PASS
+DNS=PASS
+CLIENT_DOMAIN_HTTPS=PASS
+RESULT=PASS
 TOOLING_ISSUES=#...
 SSH_HARDENING=FOLLOW_UP
 ```
+
+Если transport selected-client probe отсутствует, укажите
+`CLIENT_FUNCTIONAL_VERIFICATION_REQUIRED` и оставьте `RESULT=PENDING`. Успех
+Xray, listener или IP-only curl не может повысить этот gate до PASS.
 
 Нельзя маркировать исправный production VPN как `PARTIAL` только потому, что один вспомогательный verifier имеет известный false-negative.
 
