@@ -34,6 +34,8 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Versioned `routerkit.netcraze.external-transaction.v1` packets and a protected snapshot CLI for transport-neutral native Netcraze planning, pre-state checks, running-state verification, gated save, and saved-state verification through official MCP/RMM without an arbitrary Entware shell.
+- Integrity-bound exact native command/rollback lists, manifest/pre/post/Default fingerprints, semantic duplicate rejection, brownfield description compatibility, and focused external-transport coverage.
 - An exhaustive public-source platform and firmware compatibility audit covering the complete current Netcraze router catalog, the current detailed Keenetic catalog, and bounded recent legacy candidates, with a strict machine-readable manifest, bilingual human guides, and regression tests.
 - Explicit static gates for CPU/userspace architecture, general USB storage, EXT4 persistence, Entware/OPKG, `/opt`, Python, and the pinned Xray arm64 artifact; every model remains marked not hardware-tested.
 - Versioned `routerkit.netcraze.hardware-canary.v1` packet with the exact alpha.16 baseline, P0–P13 dependency graph, bounded timeouts, 120-minute session ceiling, protected 15-minute cleanup reserve, stop routes, authorization gates, evidence mapping, rollback, device return, and the complete #16 matrix.
@@ -87,8 +89,9 @@ All notable changes to this project will be documented in this file.
 - Guided installer documentation in English and Russian.
 
 ### Changed
+- Local `ndmc` apply now treats all-reuse Proxy/Policy plus none/reuse assignment as a verified NOOP with no backup, native write, or configuration save; mutating apply verifies running state before save and verifies again after save.
 - Installer and hardware-canary documentation now fail closed on model/firmware mismatches, distinguish Main from Preview firmware, preserve the immutable v1 canary packet, and point operators to the audited 5.1.x UI locations without claiming a live contract.
-- The repository can now report `READY_FOR_HARDWARE_CANARY` only as an offline preparation gate; every validator result also states `hardware_validated=false` and `live_contract_confirmed=false`, and normal `routerkit setup` remains unchanged with no live Netcraze adapter.
+- The repository can now report `READY_FOR_HARDWARE_CANARY` only as an offline preparation gate; every validator result also states `hardware_validated=false` and `live_contract_confirmed=false`, and normal `routerkit setup` remains unchanged with no integrated live Netcraze stage.
 - The generator publishes an owner-only `routerkit.local-endpoints.v1` manifest with fixed code-owned labels, validated no-clobber replacement, file and parent-directory synchronization, and stale-current-manifest retirement.
 - Fixture-first Netcraze planning no longer exposes caller-created update authorization; non-equivalent existing objects and assignment moves remain blocked until the hardware ownership/revision/rollback contract is defined.
 - Combined `setup --plan-netcraze --apply` confirmation, `--yes`, cancellation, dry-run, and final summaries explicitly state that Netcraze actions are offline preview only and excluded from RouterKit apply.
@@ -107,7 +110,7 @@ All notable changes to this project will be documented in this file.
 - Protected private-file reads now reject hard-linked files in addition to symlinks, public POSIX permissions, identity changes, excessive size, and invalid UTF-8.
 - Netcraze snapshots now reject orphan policy/assignment/default references, duplicate or multi-policy assignments, inconsistent default evidence, and incomplete proven-default semantics; simulation revalidates every mutation and rollback.
 - Local-endpoint manifest publication preserves unrelated files byte-for-byte, rejects unsafe parents and targets, and reports parent-sync failures without falsely claiming rollback.
-- Netcraze fixture input cannot grant ownership, update/delete permission, trusted revision, backup success, or live capability; no live Netcraze adapter or apply command exists.
+- Netcraze fixture input cannot grant ownership, update/delete permission, trusted revision, backup success, or live capability; hardware-confirmed local/external live adapters consume separate protected live state.
 - HTTPS resolution now uses fixed reviewed special-purpose CIDR tables plus standard-library defense-in-depth checks, rejects IPv4-mapped/NAT64/Teredo/6to4/ORCHID forms conservatively, and preserves ordinary cancellation while attempting bounded best-effort resource cleanup.
 - Unified setup now suppresses generator stdout and stderr so subscription-derived or credential-derived details do not appear in its transcript.
 

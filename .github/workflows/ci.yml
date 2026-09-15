@@ -47,6 +47,11 @@ jobs:
           python3 -m py_compile scripts/routerkit-devices.py
           python3 -m py_compile scripts/routerkit_netcraze_plan.py
           python3 -m py_compile scripts/routerkit-netcraze-plan.py
+          python3 -m py_compile scripts/routerkit_netcraze_live.py
+          python3 -m py_compile scripts/routerkit_netcraze_live_compat.py
+          python3 -m py_compile scripts/routerkit-netcraze-live.py
+          python3 -m py_compile scripts/routerkit_netcraze_external.py
+          python3 -m py_compile scripts/routerkit-netcraze-external.py
           python3 -m py_compile scripts/validate_routerkit_platform_compatibility.py
 
       - name: Platform compatibility contract
@@ -69,6 +74,10 @@ jobs:
           python3 -m unittest tests.test_routerkit_netcraze_simulator -v
           python3 -m unittest tests.test_routerkit_setup_netcraze_plan -v
           python3 -m unittest tests.test_routerkit_netcraze_probe -v
+          python3 -m unittest tests.test_routerkit_netcraze_live -v
+          python3 -m unittest tests.test_routerkit_netcraze_live_compat -v
+          python3 -m unittest tests.test_routerkit_netcraze_live_entrypoint -v
+          python3 -m unittest tests.test_routerkit_netcraze_external -v
 
       - name: Focused autostart tests
         run: |
