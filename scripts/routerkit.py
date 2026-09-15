@@ -406,6 +406,53 @@ def setup_reuse_path(args: argparse.Namespace) -> Optional[str]:
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
     repo_root = Path(repo_root)
 
+    if args.command == "live-install":
+        command = [
+            sys.executable,
+            _repo_script(repo_root, "routerkit-live-install.py"),
+            args.mode,
+            "--repo-root",
+            str(repo_root),
+            "--transport",
+            args.transport,
+            "--receipt-file",
+            args.receipt_file,
+            "--target-root",
+            args.target_root,
+            "--generated",
+            args.generated,
+            "--hardware-contract",
+            args.hardware_contract,
+        ]
+        optional_values = (
+            ("--artifact-manifest", args.artifact_manifest),
+            ("--source-env", args.source_env),
+            ("--source-file", args.source_file),
+            ("--reuse-profiles", args.reuse_profiles),
+            ("--selected-device-mac", args.selected_device_mac),
+            ("--profile-slot", args.profile_slot),
+            ("--ndmc-path", args.ndmc_path),
+            ("--evidence-file", args.evidence_file),
+            ("--external-pre-snapshot-file", args.external_pre_snapshot_file),
+            ("--external-post-snapshot-file", args.external_post_snapshot_file),
+            ("--external-saved-snapshot-file", args.external_saved_snapshot_file),
+            ("--transaction-file", args.transaction_file),
+        )
+        for flag, value in optional_values:
+            if value is not None:
+                command.extend((flag, str(value)))
+        if args.primary_index is not None:
+            command.extend(("--primary-index", str(args.primary_index)))
+        for index in args.fallback_index:
+            command.extend(("--fallback-index", str(index)))
+        if args.move_device:
+            command.append("--move-device")
+        if args.authorize_reboot:
+            command.append("--authorize-reboot")
+        if args.yes:
+            command.append("--yes")
+        return command
+
     if args.command == "profile-source":
         command = [sys.executable, _repo_script(repo_root, "routerkit-profile-source.py")]
         if args.source_env:
@@ -1914,6 +1961,50 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    live_install = subparsers.add_parser(
+        "live-install",
+        help="Plan, apply, resume, or inspect the bounded production orchestration.",
+        description=(
+            "Coordinate the existing RouterKit installation and native-routing stages with "
+            "one scope confirmation, epoch-bound receipts, and explicit external handoffs."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    live_install.add_argument("mode", choices=("plan", "apply", "resume", "status"))
+    live_install.add_argument(
+        "--transport", choices=("local-ndmc", "external"), default="local-ndmc"
+    )
+    live_install.add_argument(
+        "--receipt-file", default="/opt/var/lib/routerkit/live-install/receipt.json"
+    )
+    live_install.add_argument("--target-root", default="/opt")
+    live_install.add_argument("--generated", default="generated")
+    live_install.add_argument(
+        "--hardware-contract", default="nc3812-netcrazeos-5.1.5"
+    )
+    live_install.add_argument("--artifact-manifest")
+    live_source = live_install.add_mutually_exclusive_group()
+    live_source.add_argument("--source-env")
+    live_source.add_argument("--source-file")
+    live_source.add_argument("--reuse-profiles")
+    live_install.add_argument("--primary-index", type=int)
+    live_install.add_argument("--fallback-index", type=int, action="append", default=[])
+    live_install.add_argument("--selected-device-mac")
+    live_install.add_argument("--profile-slot", type=int)
+    live_install.add_argument("--move-device", action="store_true")
+    live_install.add_argument("--ndmc-path")
+    live_install.add_argument("--evidence-file")
+    live_install.add_argument("--authorize-reboot", action="store_true")
+    live_install.add_argument("--external-pre-snapshot-file")
+    live_install.add_argument("--external-post-snapshot-file")
+    live_install.add_argument("--external-saved-snapshot-file")
+    live_install.add_argument("--transaction-file")
+    live_install.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the one complete live-install scope confirmation.",
+    )
 
     wizard = subparsers.add_parser(
         "wizard",

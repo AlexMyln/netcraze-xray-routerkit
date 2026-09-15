@@ -38,8 +38,11 @@ cli = load_cli()
 def _wait_for(path, timeout=6.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if path.exists():
-            return
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return
+        except OSError:
+            pass
         time.sleep(0.02)
     raise AssertionError("timed out waiting for synthetic process marker")
 

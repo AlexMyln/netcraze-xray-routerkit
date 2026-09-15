@@ -106,7 +106,9 @@ Live adapter из #40 теперь разделён на RouterKit-owned semanti
 доставку через local `ndmc` или external MCP/RMM. Remaining hardware proof может
 выполняться без SSH и обязан завершаться RouterKit verification.
 
-Orchestration из #41 должна компоновать этот packet protocol, а не предполагать,
-что RouterKit можно запустить в Entware через любой management transport.
-One-command orchestrator может вести все фазы, но обязан сохранить exact packet
-commands и оба verification gates.
+Orchestration из #41 теперь компонует этот packet protocol через
+`routerkit live-install`. Она не предполагает, что RouterKit можно запустить в
+Entware через любой management transport. State machine сохраняет exact packet
+commands, требует fresh running readback даже для NOOP и gates save/saved-state
+verification для mutation. Software implementation всё ещё требует
+документированный post-merge brownfield rerun на NC-3812 до закрытия #41.
