@@ -2,6 +2,8 @@
 
 Дата проверки: **2026-08-23**. Машиночитаемый источник: [`hardware/routerkit-platform-compatibility.v1.json`](../../hardware/routerkit-platform-compatibility.v1.json).
 
+Разделы 1–16 сохраняют этот датированный public-source audit; утверждения о каталоге и состоянии реализации в них не являются текущим реестром live validation. Более поздние наблюдения устройства вынесены в раздел 17. Последнее — **read-only наблюдение NC-3812 / NetcrazeOS 5.1.6 от 2026-09-30**, которое не расширяет hardware write contract.
+
 ## 1. Область и смысл совместимости
 
 Это public-source gate платформ RouterKit. Исследование начинается с полного текущего каталога роутеров Netcraze, каталога Keenetic с фильтрацией только после инвентаризации USB/package-кандидатов и объективно ограниченного набора недавних моделей для вторичного рынка. Положительный класс означает только совпадение статических предпосылок. Он не разрешает доступ к роутеру, установку или записи policy.
@@ -10,7 +12,7 @@
 
 ## 2. Source-reviewed и hardware-validated
 
-`primary_canary_target` и `strong_candidate` означают только source review. Все модели имеют статус `not_hardware_tested`.
+`primary_canary_target` и `strong_candidate` означают только source review. Все модели в датированном source-audit manifest имеют статус `not_hardware_tested`; эти поля описывают данный audit, а не все последующие наблюдения устройства.
 
 ```text
 hardware_validated=false
@@ -173,7 +175,7 @@ Bootstrap stream-записывает bounded 128 MiB archive на диск и �
 
 ## 15. Hardware status и shortlist
 
-Все модели: `not_hardware_tested`.
+Все модели в датированном source-audit manifest: `not_hardware_tested`. Более поздние наблюдения из раздела 17 не переписывают этот исторический набор данных.
 
 - **BEST TARGET:** Netcraze Hopper 4G+ NC-2312.
 - **GOOD ALTERNATIVES:** Netcraze Ultra NC-1812, Hero 5G NC-4110, Giga NC-1012, Hopper DSL NC-3611, Hopper SE NC-3812, Hopper NC-3811; Keenetic Titan KN-1812, Hero 5G KN-4110, Hero KN-1012, Hopper 4G+ KN-2312, Hopper KN-3811, Hopper SE KN-3812.
@@ -195,3 +197,9 @@ Source registry в manifest является authoritative для machine valida
 - [KeeneticOS 4.0 CLI guide](https://docs.help.keenetic.com/cli/4.0/en/cli_manual_kn-1011.pdf) — CLI/read/policy/save/fail-safe/`rci`, но не proof exact 5.1 live schemas.
 
 Reseller, marketplace, scraped-spec, случайные forum posts и AI summaries не используются для классификации.
+
+## 17. Более поздние наблюдения устройства
+
+- **NC-3812 / NetcrazeOS 5.1.6 stable, build `5.01.C.6.0-1`, 2026-09-30:** [предварительное read-only наблюдение](nc3812-netcrazeos-5.1.6-readonly-observation.ru.md). Переданный оператором отчёт подтверждает status управления/сети, существующие Proxy/Policy и конфигурацию HTTPS DNS через ограниченные MCP reads. Он не проверяет штатный running-config parser RouterKit, runtime, клиентский трафик, запись, save, rollback или reboot на этой прошивке.
+- Checkout отчёта `6e416de00a201e65b05ef7358b8f4d369f092665` на пять коммитов старше отдельно проверенного `084a42fbce13997948b9586ac8c2a9b684a03742`. Его 14 успешных focused tests относятся только к старому checkout.
+- Поддерживаемый live hardware contract остаётся `nc3812-netcrazeos-5.1.5`. Это наблюдение не разрешает apply на 5.1.6 и не повышает её статус до hardware/write-validated. Доказательства состоявшейся установки на 5.1.5 отдельно зафиксированы в [agent operating contract](../../AGENTS.md).
