@@ -46,6 +46,14 @@ client MAC. It is not a raw configuration export or runtime evidence file.
 Regression tests cover LF/CRLF parsing, semantic reuse, NOOP verification,
 both supported contracts, and rejection of unknown/cross-contract inputs.
 
+## Operator-confirmed reboot
+
+After the read-only audit, the operator confirmed that reboot had been checked.
+This records the operator's confirmation for the existing 5.1.8 installation.
+The repository work performed no reboot or other router action and collected no
+new target-side post-reboot evidence. The remaining individual runtime, traffic
+and rollback checks below retain their stated evidence requirements.
+
 ## Selecting the contract
 
 An offline orchestration plan can select 5.1.8 without contacting a router:
