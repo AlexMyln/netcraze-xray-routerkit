@@ -1,5 +1,8 @@
 # netcraze-xray-routerkit
 
+Проверки перед публикацией и настройка Git noreply:
+[защита конфиденциальных данных](docs/public-data-hygiene.ru.md).
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/AlexMyln/netcraze-xray-routerkit/actions/workflows/ci.yml/badge.svg)](https://github.com/AlexMyln/netcraze-xray-routerkit/actions/workflows/ci.yml)
 [![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-4EAA25.svg)](scripts)

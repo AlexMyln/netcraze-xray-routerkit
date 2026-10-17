@@ -72,6 +72,8 @@ Router-side proxy setups often drift into hard-to-audit firewall modes, broad de
 - Generated configs, local profile files, router backups, and archives are ignored.
 - CI includes syntax checks and a repository secret guard.
 
+Publication checks and Git noreply setup: [public data hygiene](docs/public-data-hygiene.md).
+
 ## Quick Start
 
 The v0.2-alpha guided setup now integrates profile-source acquisition, private generation, strict planning, and explicitly confirmed apply stages. See the [guided installer documentation](docs/guided-installer.md).
