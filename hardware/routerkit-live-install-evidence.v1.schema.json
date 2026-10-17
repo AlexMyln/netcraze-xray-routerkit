@@ -18,7 +18,7 @@
   ],
   "properties": {
     "schema": {"const": "routerkit.live-install.evidence.v1"},
-    "hardware_contract": {"const": "nc3812-netcrazeos-5.1.5"},
+    "hardware_contract": {"enum": ["nc3812-netcrazeos-5.1.5", "nc3812-netcrazeos-5.1.8"]},
     "epoch": {"type": "integer", "minimum": 0},
     "state_change": {
       "enum": ["none", "component", "reboot", "native", "opt", "routerkit-xray", "contradictory"]

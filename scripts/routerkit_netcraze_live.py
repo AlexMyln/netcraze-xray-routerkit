@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Narrow live NDM CLI adapter for RouterKit per-device proxy policies.
 
-The first supported contract is the hardware-observed Netcraze Hopper SE
-NC-3812 / NetcrazeOS 5.1.5 path from 2026-09-09.  Planning remains owned by
+Supported contracts cover Netcraze Hopper SE NC-3812 on NetcrazeOS 5.1.5
+and 5.1.8. The 5.1.8 addition is based on read-only compatibility evidence,
+not full hardware write acceptance. Planning remains owned by
 RouterKit's existing manifest/planner semantics; this module only bridges the
 validated local SOCKS endpoints to native Proxy/Policy objects and an optional
 explicit MAC assignment.
@@ -38,6 +39,9 @@ from routerkit_netcraze_plan import (
 
 LIVE_SCHEMA = "routerkit.netcraze.ndm-live.v1"
 SUPPORTED_CONTRACT = "nc3812-netcrazeos-5.1.5"
+# Keep the legacy default stable; newer firmware must be selected explicitly.
+# These are exact software contracts, not a firmware range or a hardware PASS.
+SUPPORTED_CONTRACTS = (SUPPORTED_CONTRACT, "nc3812-netcrazeos-5.1.8")
 MAX_NDM_OUTPUT_BYTES = 1024 * 1024
 NDM_TIMEOUT_SECONDS = 15.0
 MAX_PROXY_INDEX = 15
@@ -662,8 +666,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--device-mac and --profile-slot must be supplied together")
     if args.mode != "apply" and args.yes:
         parser.error("--yes is valid only with apply")
-    if args.mode == "apply" and args.contract != SUPPORTED_CONTRACT:
-        parser.error("live apply currently supports only the NC-3812 / NetcrazeOS 5.1.5 contract")
+    if args.contract not in SUPPORTED_CONTRACTS:
+        parser.error(
+            "unsupported live hardware contract; choose %s" % ", ".join(SUPPORTED_CONTRACTS)
+        )
     return args
 
 

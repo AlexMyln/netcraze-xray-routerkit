@@ -49,18 +49,35 @@ class LiveEntrypointTests(unittest.TestCase):
 
     def test_apply_forwards_explicit_supported_contract(self):
         entry = load_entrypoint()
-        argv = [
-            "apply",
-            "--manifest-file",
-            "/private/manifest.json",
-            "--yes",
-            "--contract",
-            entry.SUPPORTED_CONTRACT,
-        ]
-        with mock.patch.object(entry, "core_main", return_value=0) as core:
-            code = entry.main(argv)
-        self.assertEqual(code, 0)
-        core.assert_called_once_with(argv)
+        for contract in entry.SUPPORTED_CONTRACTS:
+            with self.subTest(contract=contract):
+                argv = ["apply", "--manifest-file", "/private/manifest.json", "--yes", "--contract", contract]
+                with mock.patch.object(entry, "core_main", return_value=0) as core:
+                    code = entry.main(argv)
+                self.assertEqual(code, 0)
+                core.assert_called_once_with(argv)
+
+    def test_core_and_public_cli_reject_unlisted_firmware_and_other_models(self):
+        entry = load_entrypoint()
+        for contract in (
+            "nc3812-netcrazeos-5.1.6", "nc3812-netcrazeos-5.1.7",
+            "nc3812-netcrazeos-5.1.80", "nc3810-netcrazeos-5.1.8",
+        ):
+            with self.subTest(contract=contract), mock.patch.object(entry, "core_main") as main:
+                argv = ["apply", "--manifest-file", "/private/manifest.json", "--contract", contract]
+                self.assertEqual(entry.main(argv), 2)
+                main.assert_not_called()
+                with self.assertRaises(SystemExit) as raised:
+                    entry.core.parse_args(argv)
+                self.assertEqual(raised.exception.code, 2)
+
+    def test_core_accepts_both_exact_contracts_and_keeps_legacy_default(self):
+        entry = load_entrypoint()
+        self.assertEqual(entry.core.parse_args(["status"]).contract, "nc3812-netcrazeos-5.1.5")
+        for contract in entry.SUPPORTED_CONTRACTS:
+            with self.subTest(contract=contract):
+                parsed = entry.core.parse_args(["apply", "--manifest-file", "/private/manifest.json", "--contract", contract])
+                self.assertEqual(parsed.contract, contract)
 
 
 if __name__ == "__main__":

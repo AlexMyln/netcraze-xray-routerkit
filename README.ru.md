@@ -20,6 +20,8 @@ Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 Bootstrap design: [ADR модели выполнения](docs/architecture/bootstrap-execution-model.ru.md) · [проверка Xray pin](docs/xray-artifact-pin.ru.md)
 
+Hopper SE NC-3812 на 5.1.8: [поддержка в коде и результаты проверки чтением](docs/hardware/nc3812-netcrazeos-5.1.8.ru.md). Выбирайте `nc3812-netcrazeos-5.1.8` явно; полная runtime/write acceptance ещё не выполнена. Контракт 5.1.5 и default сохранены.
+
 ## Медиа репозитория
 
 - Asset для GitHub Social preview: [assets/social-preview.png](assets/social-preview.png)

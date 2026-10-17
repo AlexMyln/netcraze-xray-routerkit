@@ -41,7 +41,8 @@ Schema packet: `routerkit.netcraze.external-transaction.v1`; checked-in shape �
 [`routerkit-netcraze-external-transaction.v1.schema.json`](../../hardware/routerkit-netcraze-external-transaction.v1.schema.json).
 Packet содержит:
 
-- поддерживаемый hardware contract `nc3812-netcrazeos-5.1.5`;
+- точный поддерживаемый contract: `nc3812-netcrazeos-5.1.5` (legacy default) или
+  `nc3812-netcrazeos-5.1.8` (явный выбор; [evidence чтения](../hardware/nc3812-netcrazeos-5.1.8.ru.md));
 - fingerprints manifest, pre-state, expected post-state и Default guard;
 - deterministic bindings slot -> native Proxy -> native Policy;
 - action `create`/`reuse` для каждого Proxy и Policy;

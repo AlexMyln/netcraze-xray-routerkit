@@ -15,6 +15,8 @@ Guided installer docs: [docs/guided-installer.md](docs/guided-installer.md)
 
 Platform and firmware compatibility: [docs/hardware/platform-compatibility.md](docs/hardware/platform-compatibility.md)
 
+Hopper SE NC-3812 on 5.1.8: [software support and read-only evidence](docs/hardware/nc3812-netcrazeos-5.1.8.md). Select `nc3812-netcrazeos-5.1.8` explicitly; full runtime/write acceptance remains pending. The 5.1.5 contract and default are preserved.
+
 Bootstrap design: [execution-model ADR](docs/architecture/bootstrap-execution-model.md) · [pinned Xray verification](docs/xray-artifact-pin.md)
 
 ## Repository Media

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +100,46 @@ def render_state(state):
 
 
 class ExternalTransactionTests(unittest.TestCase):
+    def test_5_1_8_native_fixture_parses_saved_form_and_reuses_all_objects(self):
+        text = (ROOT / "tests/fixtures/netcraze/nc3812-5.1.8-native.txt").read_text(encoding="utf-8")
+        state = core.parse_running_config(text)
+        saved = core.parse_running_config(text.replace("\n", "\r\n"))
+        self.assertEqual(state, saved)
+        self.assertEqual(state.assignments, ((DEVICE_MAC, "Policy0"),))
+        self.assertEqual([item.global_interfaces for item in state.policies], [("Proxy0",), ("Proxy1",), ("Proxy2",)])
+        for contract in core.SUPPORTED_CONTRACTS:
+            with self.subTest(contract=contract):
+                packet = external.build_external_transaction(manifest_three(), state, hardware_contract=contract)
+                self.assertEqual(packet["hardware_contract"], contract)
+                self.assertEqual(packet["commands"], [])
+                self.assertFalse(packet["write_required"])
+                self.assertFalse(packet["save_required"])
+                self.assertTrue(all(item["proxy_action"] == item["policy_action"] == "reuse" for item in packet["bindings"]))
+                for phase, observed in (("pre", state), ("running", state), ("saved", saved)):
+                    result = external.verify_external_transaction(packet, manifest_three(), observed, phase=phase)
+                    self.assertTrue(result["verified"])
+                    self.assertTrue(result["noop"])
+                    self.assertFalse(result["commands_authorized"])
+                    self.assertFalse(result["save_authorized"])
+
+    def test_unlisted_contracts_are_rejected_for_planning_and_packet_validation(self):
+        for contract in ("nc3812-netcrazeos-5.1.7", "nc3812-netcrazeos-5.1.80", "nc3810-netcrazeos-5.1.8"):
+            with self.subTest(contract=contract):
+                with self.assertRaises(core.LiveAdapterError):
+                    external.build_external_transaction(manifest_three(), brownfield_state(), hardware_contract=contract)
+                packet = external.build_external_transaction(manifest_three(), brownfield_state())
+                packet["hardware_contract"] = contract
+                unsigned = {key: value for key, value in packet.items() if key != "transaction_fingerprint"}
+                packet["transaction_fingerprint"] = external._fingerprint(unsigned)
+                with self.assertRaises(core.LiveAdapterError):
+                    external.validate_external_transaction(packet, manifest_three())
+
+    def test_contract_is_bound_to_transaction_fingerprint(self):
+        packet = external.build_external_transaction(manifest_three(), brownfield_state())
+        packet["hardware_contract"] = "nc3812-netcrazeos-5.1.8"
+        with self.assertRaises(core.LiveAdapterError):
+            external.validate_external_transaction(packet, manifest_three())
+
     def test_external_snapshot_three_profile_reuse_is_noop(self):
         state = brownfield_state()
         packet = external.build_external_transaction(manifest_three(), state)
@@ -301,6 +342,7 @@ class ExternalTransactionTests(unittest.TestCase):
             .read_text(encoding="utf-8")
         )
         self.assertEqual(schema["properties"]["schema"]["const"], packet["schema"])
+        self.assertEqual(schema["properties"]["hardware_contract"]["enum"], list(core.SUPPORTED_CONTRACTS))
         self.assertEqual(set(schema["required"]), set(packet))
         binding_required = set(schema["$defs"]["binding"]["required"])
         self.assertEqual(binding_required, set(packet["bindings"][0]))
@@ -308,20 +350,24 @@ class ExternalTransactionTests(unittest.TestCase):
     def test_external_verify_passes_after_expected_state(self):
         state = brownfield_state(profile_count=2, policy_count=2)
         manifest = manifest_three()
-        packet = external.build_external_transaction(manifest, state)
-        plan = external.validate_external_transaction(packet, manifest)
-        post = external._expected_post_state(manifest, plan, state, device_mac=None)
-        running = external.verify_external_transaction(packet, manifest, post, phase="running")
-        self.assertTrue(running["verified"])
-        self.assertTrue(running["save_authorized"])
-        saved = external.verify_external_transaction(packet, manifest, post, phase="saved")
-        self.assertTrue(saved["saved_state_verified"])
+        for contract in core.SUPPORTED_CONTRACTS:
+            with self.subTest(contract=contract):
+                packet = external.build_external_transaction(manifest, state, hardware_contract=contract)
+                plan = external.validate_external_transaction(packet, manifest)
+                post = external._expected_post_state(manifest, plan, state, device_mac=None)
+                running = external.verify_external_transaction(packet, manifest, post, phase="running")
+                self.assertTrue(running["verified"])
+                self.assertTrue(running["save_authorized"])
+                saved = external.verify_external_transaction(packet, manifest, post, phase="saved")
+                self.assertTrue(saved["saved_state_verified"])
 
     def test_external_verify_fails_after_silent_noop(self):
         state = brownfield_state(profile_count=2, policy_count=2)
-        packet = external.build_external_transaction(manifest_three(), state)
-        with self.assertRaises(core.LiveAdapterError):
-            external.verify_external_transaction(packet, manifest_three(), state, phase="running")
+        for contract in core.SUPPORTED_CONTRACTS:
+            with self.subTest(contract=contract):
+                packet = external.build_external_transaction(manifest_three(), state, hardware_contract=contract)
+                with self.assertRaises(core.LiveAdapterError):
+                    external.verify_external_transaction(packet, manifest_three(), state, phase="running")
 
 
 class ExternalPrivateFileTests(unittest.TestCase):
@@ -384,6 +430,18 @@ class ExternalPrivateFileTests(unittest.TestCase):
 
 
 class ExternalCliTests(unittest.TestCase):
+    def test_5_1_8_cli_binds_planning_and_explicit_verification_to_contract(self):
+        contract = "nc3812-netcrazeos-5.1.8"
+        with tempfile.TemporaryDirectory() as directory:
+            transaction = Path(directory) / "packet.json"
+            common = ["--snapshot-file", "unused.txt", "--manifest-file", "unused.json", "--transaction-file", str(transaction)]
+            with mock.patch.object(external, "load_running_config_snapshot", return_value=brownfield_state()), mock.patch.object(external, "load_local_endpoint_manifest", return_value=manifest_three()), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(external.main(["plan"] + common + ["--contract", contract]), 0)
+                self.assertEqual(external.load_external_transaction(transaction)["hardware_contract"], contract)
+                self.assertEqual(external.main(["verify"] + common), 0)
+                self.assertEqual(external.main(["verify"] + common + ["--contract", contract]), 0)
+                self.assertEqual(external.main(["verify"] + common + ["--contract", core.SUPPORTED_CONTRACT]), 1)
+
     def test_plan_and_verify_use_only_private_snapshot_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -431,6 +489,7 @@ class ExternalCliTests(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             receipt = json.loads(stdout.getvalue())
+            self.assertEqual(external.load_external_transaction(transaction)["hardware_contract"], "nc3812-netcrazeos-5.1.5")
             self.assertFalse(receipt["write_required"])
             self.assertEqual(receipt["command_count"], 0)
 

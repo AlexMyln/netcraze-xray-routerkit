@@ -437,3 +437,16 @@ After the service goal is complete:
 2. turn repeatable friction into code + regression tests, agent rules, concise docs, or a tracked issue;
 3. keep production secrets, MAC inventories, startup configs, and subscription material out of the repository;
 4. shorten the next run instead of adding another layer of approval or audit ceremony.
+
+## Hopper SE on NetcrazeOS 5.1.8
+
+Software support also accepts the exact `nc3812-netcrazeos-5.1.8` contract.
+For that firmware, pass `--hardware-contract nc3812-netcrazeos-5.1.8` to
+`live-install`, or `--contract nc3812-netcrazeos-5.1.8` to the standalone
+native/external tools. The 5.1.5 examples/default remain valid for 5.1.5 only;
+do not carry a receipt or evidence across firmware contracts. External verify
+can use `--contract` to require an exact packet match.
+See [the 2026-10-17 audit and remaining acceptance](hardware/nc3812-netcrazeos-5.1.8.md).
+Native readback/parser compatibility is confirmed; pinned Xray identity, actual
+listener ownership, runtime adoption, client DNS/HTTPS, native writes, reboot
+and rollback still require their normal fresh evidence and authorization.

@@ -35,12 +35,12 @@ ENDPOINT_MANIFEST = {
 }
 
 
-def make_intent(transport="external", runtime_mode=None, adopt=False):
+def make_intent(transport="external", runtime_mode=None, adopt=False, *, hardware_contract=live_install.DEFAULT_HARDWARE_CONTRACT):
     runtime_mode = runtime_mode or (
         "external-evidence" if transport == "external" else "local-router"
     )
     return live_install.build_intent(
-        hardware_contract=live_install.DEFAULT_HARDWARE_CONTRACT,
+        hardware_contract=hardware_contract,
         transport_mode=transport,
         runtime_mode=runtime_mode,
         adopt_existing_runtime=adopt,
@@ -52,12 +52,13 @@ def make_intent(transport="external", runtime_mode=None, adopt=False):
     )
 
 
-def make_receipt(transport="external", runtime_mode=None, adopt=False):
-    return live_install.initial_receipt(make_intent(transport, runtime_mode, adopt))
+def make_receipt(transport="external", runtime_mode=None, adopt=False, *, hardware_contract=live_install.DEFAULT_HARDWARE_CONTRACT):
+    return live_install.initial_receipt(make_intent(transport, runtime_mode, adopt, hardware_contract=hardware_contract))
 
 
 def make_evidence(
     *,
+    hardware_contract=live_install.DEFAULT_HARDWARE_CONTRACT,
     epoch=0,
     state_change="none",
     component_present=True,
@@ -76,7 +77,7 @@ def make_evidence(
 ):
     return {
         "schema": live_install.EVIDENCE_SCHEMA,
-        "hardware_contract": live_install.DEFAULT_HARDWARE_CONTRACT,
+        "hardware_contract": hardware_contract,
         "epoch": epoch,
         "state_change": state_change,
         "checks": {name: "PASS" for name in live_install.EVIDENCE_CHECKS},
@@ -539,6 +540,96 @@ class RuntimeExecutionModeTests(unittest.TestCase):
         live_install.validate_receipt(receipt)
 
 
+class HardwareContractTests(unittest.TestCase):
+    def test_unified_cli_plans_5_1_8_in_external_mode_without_creating_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = [sys.executable, str(SCRIPTS / "routerkit.py"), "live-install", "plan",
+                       "--transport", "external", "--hardware-contract", "nc3812-netcrazeos-5.1.8",
+                       "--selected-device-mac", MAC, "--profile-slot", "2"]
+            result = __import__("subprocess").run(command, cwd=directory, check=False, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("hardware contract: nc3812-netcrazeos-5.1.8", result.stdout)
+            self.assertIn("runtime mode: external-evidence", result.stdout)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_both_exact_contracts_roundtrip_receipts_and_accept_matching_evidence(self):
+        for contract in live_install.live.SUPPORTED_CONTRACTS:
+            with self.subTest(contract=contract), tempfile.TemporaryDirectory() as directory:
+                receipt = make_receipt(hardware_contract=contract)
+                path = Path(directory) / "private" / "receipt.json"
+                live_install.write_receipt(path, receipt)
+                loaded = live_install.load_receipt(path)
+                self.assertEqual(loaded["hardware_contract"], contract)
+                evidence = live_install.validate_evidence(make_evidence(hardware_contract=contract))
+                live_install.accept_discovery_evidence(loaded, evidence)
+                self.assertEqual(loaded["discovery"]["epoch"], 0)
+
+    def test_unknown_contracts_fail_intent_receipt_and_evidence_validation(self):
+        for contract in ("nc3812-netcrazeos-5.1.7", "nc3812-netcrazeos-5.1.80", "nc3810-netcrazeos-5.1.8"):
+            with self.subTest(contract=contract):
+                with self.assertRaises(live_install.LiveInstallError):
+                    make_intent(hardware_contract=contract)
+                receipt = make_receipt()
+                receipt["hardware_contract"] = contract
+                with self.assertRaises(live_install.LiveInstallError):
+                    live_install.validate_receipt(receipt)
+                with self.assertRaises(live_install.LiveInstallError):
+                    live_install.validate_evidence(make_evidence(hardware_contract=contract))
+
+    def test_resume_cannot_switch_between_supported_firmware_contracts(self):
+        for current, requested in (live_install.live.SUPPORTED_CONTRACTS, tuple(reversed(live_install.live.SUPPORTED_CONTRACTS))):
+            with self.subTest(current=current):
+                receipt = make_receipt(hardware_contract=current)
+                before = json.dumps(receipt, sort_keys=True)
+                with self.assertRaises(live_install.LiveInstallError):
+                    live_install.validate_intent_compatible(receipt, make_intent(hardware_contract=requested))
+                self.assertEqual(json.dumps(receipt, sort_keys=True), before)
+
+    def test_cross_contract_evidence_is_rejected_before_epoch_or_stage_changes(self):
+        for current, supplied in (live_install.live.SUPPORTED_CONTRACTS, tuple(reversed(live_install.live.SUPPORTED_CONTRACTS))):
+            for epoch, change in ((0, "none"), (1, "reboot")):
+                with self.subTest(current=current, epoch=epoch):
+                    receipt = make_receipt(hardware_contract=current)
+                    before = json.dumps(receipt, sort_keys=True)
+                    evidence = make_evidence(hardware_contract=supplied, epoch=epoch, state_change=change)
+                    with self.assertRaises(live_install.LiveInstallError):
+                        live_install.accept_discovery_evidence(receipt, evidence)
+                    self.assertEqual(json.dumps(receipt, sort_keys=True), before)
+
+    def test_5_1_8_read_only_observations_do_not_satisfy_runtime_adoption(self):
+        contract = "nc3812-netcrazeos-5.1.8"
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, fingerprint = write_endpoint_manifest(directory)
+            receipt = make_receipt(adopt=True, hardware_contract=contract)
+            evidence = make_evidence(hardware_contract=contract, runtime_ready=False, xray_release=None,
+                                     reboot_recovery_proven=False, endpoint_manifest_fingerprint=fingerprint)
+            evidence["runtime"]["xray_running"] = True
+            evidence["checks"]["loopback_listeners"] = "UNKNOWN"
+            with mock.patch.object(live_install, "_run") as run, mock.patch.object(live_install, "_persist"), self.assertRaises(live_install.LiveInstallHandoff) as raised:
+                live_install._run_installation_stages(
+                    args(adopt_existing_runtime=True, hardware_contract=contract, endpoint_manifest_file=str(manifest_path)),
+                    ROOT, Path("/private/receipt.json"), receipt, evidence,
+                )
+            run.assert_not_called()
+        self.assertEqual(raised.exception.action, "ROUTERKIT_RUNTIME_EXECUTION_REQUIRED")
+        self.assertEqual(receipt["runtime_disposition"], "PENDING")
+
+    def test_resume_rejects_cross_contract_evidence_before_local_runtime_commands(self):
+        contract = "nc3812-netcrazeos-5.1.8"
+        receipt = make_receipt("local-ndmc", hardware_contract=contract)
+        for stage in ("network_preflight", "usb_ext4_entware_readiness"):
+            live_install.mark_stage(receipt, stage, "PASS")
+        before = json.dumps(receipt, sort_keys=True)
+        with mock.patch.object(live_install, "_run") as run, mock.patch.object(live_install, "_persist") as persist, self.assertRaises(live_install.LiveInstallError):
+            live_install._run_installation_stages(
+                args(transport="local-ndmc", hardware_contract=contract), ROOT,
+                Path("/private/receipt.json"), receipt, make_evidence(),
+            )
+        run.assert_not_called()
+        persist.assert_not_called()
+        self.assertEqual(json.dumps(receipt, sort_keys=True), before)
+
+
 class ReceiptAndEpochTests(unittest.TestCase):
     def test_no_repeated_discovery_in_same_epoch(self):
         receipt = make_receipt()
@@ -632,6 +723,7 @@ class ReceiptAndEpochTests(unittest.TestCase):
         )
         receipt = make_receipt()
         self.assertEqual(schema["properties"]["schema"]["const"], receipt["schema"])
+        self.assertEqual(schema["properties"]["hardware_contract"]["enum"], list(live_install.live.SUPPORTED_CONTRACTS))
         self.assertEqual(set(schema["required"]), set(receipt))
         self.assertEqual(
             set(schema["properties"]["stages"]["required"]), set(receipt["stages"])
@@ -645,6 +737,7 @@ class ReceiptAndEpochTests(unittest.TestCase):
         )
         evidence = make_evidence()
         self.assertEqual(schema["properties"]["schema"]["const"], evidence["schema"])
+        self.assertEqual(schema["properties"]["hardware_contract"]["enum"], list(live_install.live.SUPPORTED_CONTRACTS))
         self.assertEqual(set(schema["required"]), set(evidence))
         self.assertEqual(
             set(schema["properties"]["checks"]["required"]), set(evidence["checks"])
@@ -700,6 +793,31 @@ class ComponentAndRebootTests(unittest.TestCase):
 
 
 class NativeCompositionTests(unittest.TestCase):
+    def test_5_1_8_local_native_stage_forwards_the_selected_contract(self):
+        contract = "nc3812-netcrazeos-5.1.8"
+        with mock.patch.object(live_install, "_run", return_value=completed(0, '{"verified": true, "write_required": false}')) as run, mock.patch.object(live_install, "_persist"):
+            live_install._local_native_stage(
+                args(transport="local-ndmc", hardware_contract=contract), ROOT, Path("/private/receipt.json"),
+                make_receipt("local-ndmc", hardware_contract=contract),
+            )
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertEqual(command[command.index("--contract") + 1], contract)
+
+    def test_external_packet_cannot_cross_receipt_contract_even_with_matching_fingerprint(self):
+        contract = "nc3812-netcrazeos-5.1.8"
+        receipt = make_receipt(hardware_contract=contract)
+        receipt["native_transaction"].update({"status": "PLANNED", "fingerprint": "b" * 64})
+        packet = {"transaction_fingerprint": "b" * 64, "hardware_contract": live_install.DEFAULT_HARDWARE_CONTRACT}
+        with mock.patch.object(live_install, "_endpoint_manifest"), mock.patch.object(
+            live_install.external, "load_external_transaction", return_value=packet
+        ), mock.patch.object(live_install.external, "validate_external_transaction"), mock.patch.object(
+            live_install.external, "verify_external_transaction"
+        ) as verify, mock.patch.object(live_install, "_persist") as persist, self.assertRaises(live_install.LiveInstallError):
+            live_install._external_native_stage(args(hardware_contract=contract), Path("/private/receipt.json"), receipt)
+        verify.assert_not_called()
+        persist.assert_not_called()
+
     def test_local_ndmc_native_stage_composes_existing_adapter(self):
         receipt = make_receipt("local-ndmc")
         calls = []
@@ -734,7 +852,7 @@ class NativeCompositionTests(unittest.TestCase):
                 "dns_refresh_required": False,
             }
         )
-        packet = {"transaction_fingerprint": "b" * 64}
+        packet = {"transaction_fingerprint": "b" * 64, "hardware_contract": live_install.DEFAULT_HARDWARE_CONTRACT}
         with mock.patch.object(live_install, "_endpoint_manifest"), mock.patch.object(
             live_install.external, "load_external_transaction", return_value=packet
         ), mock.patch.object(live_install.external, "validate_external_transaction"), mock.patch.object(
@@ -758,7 +876,7 @@ class NativeCompositionTests(unittest.TestCase):
                 "dns_refresh_required": True,
             }
         )
-        packet = {"transaction_fingerprint": "c" * 64}
+        packet = {"transaction_fingerprint": "c" * 64, "hardware_contract": live_install.DEFAULT_HARDWARE_CONTRACT}
         with mock.patch.object(live_install, "_endpoint_manifest"), mock.patch.object(
             live_install.external, "load_external_transaction", return_value=packet
         ), mock.patch.object(live_install.external, "validate_external_transaction"), mock.patch.object(
@@ -775,7 +893,7 @@ class NativeCompositionTests(unittest.TestCase):
         receipt["native_transaction"]["write_required"] = True
         receipt["native_transaction"]["save_required"] = True
         receipt["native_transaction"]["pre_epoch"] = 0
-        packet = {"transaction_fingerprint": "d" * 64}
+        packet = {"transaction_fingerprint": "d" * 64, "hardware_contract": live_install.DEFAULT_HARDWARE_CONTRACT}
         with mock.patch.object(live_install, "_endpoint_manifest"), mock.patch.object(
             live_install.external, "load_external_transaction", return_value=packet
         ), mock.patch.object(live_install.external, "validate_external_transaction"), mock.patch.object(

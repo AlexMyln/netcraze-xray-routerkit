@@ -23,6 +23,7 @@ from routerkit_netcraze_live_compat import build_live_plan, verify_plan_applied
 core.build_live_plan = build_live_plan
 core._verify_plan_applied = verify_plan_applied
 SUPPORTED_CONTRACT = core.SUPPORTED_CONTRACT
+SUPPORTED_CONTRACTS = core.SUPPORTED_CONTRACTS
 core_main = core.main
 
 
@@ -35,11 +36,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except (ValueError, IndexError):
             print(
                 "routerkit-netcraze-live: apply requires explicit --contract %s"
-                % SUPPORTED_CONTRACT,
+                % " or ".join(SUPPORTED_CONTRACTS),
                 file=sys.stderr,
             )
             return 2
-        if contract != SUPPORTED_CONTRACT:
+        if contract not in SUPPORTED_CONTRACTS:
             print(
                 "routerkit-netcraze-live: unsupported live hardware contract",
                 file=sys.stderr,

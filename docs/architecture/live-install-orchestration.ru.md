@@ -144,3 +144,12 @@ Production brownfield rerun NC-3812 заблокирован до merge этог
 fix с зелёным CI. Post-merge run должен использовать external-evidence adoption
 и пройти неизменённые native/DNS/client gates. Clean spare-hardware matrix
 остаётся #16.
+
+## Точные firmware contracts
+
+Принимаются `nc3812-netcrazeos-5.1.5` и `nc3812-netcrazeos-5.1.8`.
+Default остаётся 5.1.5. Для 5.1.8 явно задайте `--hardware-contract` после
+проверки firmware цели. Resume не может менять contract receipt; discovery
+evidence и native packet должны совпадать с ним до продвижения состояния.
+[Проверка чтением на 5.1.8](../hardware/nc3812-netcrazeos-5.1.8.ru.md) не
+заменяет runtime adoption evidence или итоговую client acceptance.

@@ -116,6 +116,13 @@ Known valid compatibility evidence from the NC-3812 hardware run on 2026-09-09:
 
 Treat these as established evidence, not fresh research questions on every future installation of the same contract.
 
+The separate `nc3812-netcrazeos-5.1.8` software contract is supported after the
+2026-10-17 read-only audit. See [its evidence and limits](docs/hardware/nc3812-netcrazeos-5.1.8.md).
+Do not promote native read/parser compatibility to full runtime, write, reboot,
+or rollback acceptance. Keep the exact selected firmware contract consistent
+across intent, receipt, evidence, and transactions; do not reuse a 5.1.5 receipt
+on 5.1.8. The legacy default remains 5.1.5.
+
 ## 7. Profile sources and shortlinks
 
 Secrets must never be printed into chat, logs, argv, reports, Git commits, or public evidence.
