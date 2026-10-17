@@ -3,7 +3,7 @@
 Email-history rewrite on 2026-10-17 changed commit IDs without changing release
 file trees. Historical baseline IDs below remain evidence identifiers. For a fresh
 checkout, use the [release tag mapping](../history-email-rewrite-tags.json) and
-[cleanup notes](../public-data-hygiene.md#history-email-cleanup-2026-10-17).
+[cleanup notes](../public-data-hygiene.md).
 
 Publish only after comparing this document with the private evidence manifest and removing every forbidden field. Redaction is not anonymity.
 
