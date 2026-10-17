@@ -1,0 +1,51 @@
+# Sanitized native syntax observed on NC-3812, 5.1.8 / 5.01.C.8.0-2.
+# Only Proxy/Policy syntax is retained; the client MAC is synthetic.
+# This is not runtime, write, reboot, or rollback acceptance evidence.
+interface Proxy0
+    description XRAY-NL
+    security-level public
+    ip global 3
+    proxy protocol socks5
+    proxy upstream 127.0.0.1 1082
+    up
+!
+interface Proxy1
+    description XRAY-SMART-RU
+    security-level public
+    ip global 2
+    proxy protocol socks5
+    proxy upstream 127.0.0.1 1083
+    up
+!
+interface Proxy2
+    description XRAY-US
+    security-level public
+    ip global 1
+    proxy protocol socks5
+    proxy upstream 127.0.0.1 1084
+    up
+!
+ip policy Policy0
+    description VPN-NL
+    permit global Proxy0
+    no permit global PPPoE0
+    no permit global Proxy1
+    no permit global Proxy2
+!
+ip policy Policy1
+    description VPN-SMART-RU
+    permit global Proxy1
+    no permit global PPPoE0
+    no permit global Proxy0
+    no permit global Proxy2
+!
+ip policy Policy2
+    description VPN-US
+    permit global Proxy2
+    no permit global PPPoE0
+    no permit global Proxy0
+    no permit global Proxy1
+!
+ip hotspot
+    host 02:22:33:44:55:66 policy Policy0
+!

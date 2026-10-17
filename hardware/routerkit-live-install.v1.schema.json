@@ -31,7 +31,7 @@
   "properties": {
     "schema": {"const": "routerkit.live-install.v1"},
     "intent_fingerprint": {"$ref": "#/$defs/hash"},
-    "hardware_contract": {"const": "nc3812-netcrazeos-5.1.5"},
+    "hardware_contract": {"enum": ["nc3812-netcrazeos-5.1.5", "nc3812-netcrazeos-5.1.8"]},
     "transport_mode": {"enum": ["local-ndmc", "external"]},
     "runtime_mode": {"enum": ["local-router", "external-evidence"]},
     "adopt_existing_runtime": {"type": "boolean"},

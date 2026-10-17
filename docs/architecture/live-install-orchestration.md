@@ -59,7 +59,7 @@ For a proven brownfield runtime, `--adopt-existing-runtime` requires an
 explicit owner-only `--endpoint-manifest-file` and fresh strict runtime
 evidence. RouterKit validates the existing `routerkit.local-endpoints.v1`
 manifest, binds its fingerprint to the evidence/receipt, and requires the
-selected slot to be enabled. The fixed NC-3812 contract must prove management,
+selected slot to be enabled. The selected exact NC-3812 firmware contract must prove management,
 network, external EXT4 `/opt`, Entware, exact pinned semantic Xray release,
 running Xray, manifest-matched loopback listeners, autostart, and prior reboot
 recovery. No profile source is accepted or read. Runtime write stages are
@@ -145,3 +145,13 @@ The production brownfield NC-3812 rerun is blocked until this runtime-locus
 fix is merged with green CI. That post-merge run must use external-evidence
 adoption and complete the unchanged native/DNS/client gates. The clean
 spare-hardware matrix remains #16.
+
+## Exact firmware contracts
+
+The accepted contracts are `nc3812-netcrazeos-5.1.5` and
+`nc3812-netcrazeos-5.1.8`. The former remains the default. Select the latter
+explicitly with `--hardware-contract` after checking the target firmware.
+Receipt resume cannot change contract; discovery evidence and native packets
+must match the receipt contract before advancing any state.
+The [5.1.8 read-only audit](../hardware/nc3812-netcrazeos-5.1.8.md) does not
+satisfy runtime adoption or final client acceptance.

@@ -195,7 +195,7 @@ def build_intent(
     move_device_authorized: bool = False,
     controlled_reboot_authorized: bool = False,
 ) -> Dict[str, Any]:
-    if hardware_contract != DEFAULT_HARDWARE_CONTRACT:
+    if hardware_contract not in live.SUPPORTED_CONTRACTS:
         raise LiveInstallError("Unsupported live-install hardware contract.", 2)
     if transport_mode not in SUPPORTED_TRANSPORTS:
         raise LiveInstallError("Unsupported live-install transport mode.", 2)
@@ -312,7 +312,7 @@ def validate_receipt(receipt: Any) -> Dict[str, Any]:
     endpoint = receipt["endpoint_manifest_fingerprint"]
     if endpoint is not None:
         _require_hash(endpoint, "Endpoint-manifest fingerprint")
-    if receipt["hardware_contract"] != DEFAULT_HARDWARE_CONTRACT:
+    if receipt["hardware_contract"] not in live.SUPPORTED_CONTRACTS:
         raise LiveInstallError("Live-install receipt hardware contract is unsupported.", 2)
     if receipt["transport_mode"] not in SUPPORTED_TRANSPORTS:
         raise LiveInstallError("Live-install receipt transport mode is unsupported.", 2)
@@ -674,7 +674,7 @@ def validate_evidence(value: Any) -> Dict[str, Any]:
     )
     if value["schema"] != EVIDENCE_SCHEMA:
         raise LiveInstallError("Live-install evidence schema is unsupported.", 2)
-    if value["hardware_contract"] != DEFAULT_HARDWARE_CONTRACT:
+    if value["hardware_contract"] not in live.SUPPORTED_CONTRACTS:
         raise LiveInstallError("Live-install evidence hardware contract is unsupported.", 2)
     if type(value["epoch"]) is not int or value["epoch"] < 0:
         raise LiveInstallError("Live-install evidence epoch is invalid.", 2)
@@ -805,6 +805,8 @@ def load_evidence(path: Optional[Path]) -> Optional[Dict[str, Any]]:
 
 
 def accept_discovery_evidence(receipt: Dict[str, Any], evidence: Mapping[str, Any]) -> None:
+    if evidence["hardware_contract"] != receipt["hardware_contract"]:
+        raise LiveInstallError("Discovery evidence does not match the receipt hardware contract.", 2)
     current_epoch = receipt["state_epoch"]
     supplied_epoch = evidence["epoch"]
     state_change = evidence["state_change"]
@@ -1174,6 +1176,9 @@ def _run_installation_stages(
     receipt: Dict[str, Any],
     evidence: Optional[Mapping[str, Any]],
 ) -> None:
+    # Resume may skip discovery and go straight to a pending runtime write.
+    if evidence is not None and evidence["hardware_contract"] != receipt["hardware_contract"]:
+        raise LiveInstallError("Runtime evidence does not match the receipt hardware contract.", 2)
     if args.runtime_mode == "external-evidence":
         _accept_external_runtime(args, receipt_path, receipt, evidence)
         return
@@ -1414,6 +1419,8 @@ def _local_native_stage(
 ) -> None:
     manifest_path = str(Path(args.generated) / "routerkit-local-endpoints.json")
     common = [
+        "--contract",
+        args.hardware_contract,
         "--manifest-file",
         manifest_path,
         "--device-mac",
@@ -1434,8 +1441,6 @@ def _local_native_stage(
         "apply",
         "--json",
         "--yes",
-        "--contract",
-        args.hardware_contract,
     ] + common
     applied = _run(apply_command, capture=True)
     _require_success(applied, "local ndmc native apply")
@@ -1511,6 +1516,8 @@ def _external_native_stage(
 
     packet = external.load_external_transaction(transaction_path)
     external.validate_external_transaction(packet, manifest)
+    if packet["hardware_contract"] != receipt["hardware_contract"]:
+        raise LiveInstallError("External transaction does not match the receipt hardware contract.", 2)
     if packet["transaction_fingerprint"] != native["fingerprint"]:
         raise LiveInstallError("External transaction does not match the live-install receipt.", 2)
 
@@ -1780,7 +1787,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--receipt-file")
     parser.add_argument("--target-root", default="/opt")
     parser.add_argument("--generated", default="generated")
-    parser.add_argument("--hardware-contract", default=DEFAULT_HARDWARE_CONTRACT)
+    parser.add_argument(
+        "--hardware-contract", choices=live.SUPPORTED_CONTRACTS, default=DEFAULT_HARDWARE_CONTRACT
+    )
     parser.add_argument("--artifact-manifest")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--source-env")

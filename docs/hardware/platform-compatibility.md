@@ -2,6 +2,8 @@
 
 Reviewed: **2026-08-23**. Machine-readable source: [`hardware/routerkit-platform-compatibility.v1.json`](../../hardware/routerkit-platform-compatibility.v1.json).
 
+Later scoped evidence: [NC-3812 on NetcrazeOS 5.1.8, 2026-10-17](nc3812-netcrazeos-5.1.8.md). Its software support and native read-only checks do not change this dated static matrix or certify the full hardware canary.
+
 ## 1. Scope and meaning of compatibility
 
 This is the public-source platform gate for RouterKit. It starts from the complete current Netcraze router catalog, the current Keenetic catalog filtered only after inventory for plausible USB/package-capable routers, and a bounded recent used-market set. A favorable class means only that documented static prerequisites line up. It never authorizes router access, installation, policy writes, or a hardware claim.

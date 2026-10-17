@@ -229,7 +229,7 @@ def build_external_transaction(
     allow_move: bool = False,
     hardware_contract: str = core.SUPPORTED_CONTRACT,
 ) -> Dict[str, object]:
-    if hardware_contract != core.SUPPORTED_CONTRACT:
+    if hardware_contract not in core.SUPPORTED_CONTRACTS:
         raise core.LiveAdapterError("External plan uses an unsupported hardware contract.")
 
     normalized_mac = None
@@ -377,7 +377,7 @@ def validate_external_transaction(
     _strict_keys(packet, expected_top, "External transaction packet")
     if packet["schema"] != EXTERNAL_TRANSACTION_SCHEMA:
         raise core.LiveAdapterError("External transaction schema is unsupported.")
-    if packet["hardware_contract"] != core.SUPPORTED_CONTRACT:
+    if packet["hardware_contract"] not in core.SUPPORTED_CONTRACTS:
         raise core.LiveAdapterError("External transaction hardware contract is unsupported.")
     if packet["snapshot_mode"] != SNAPSHOT_MODE:
         raise core.LiveAdapterError("External transaction snapshot mode is unsupported.")
@@ -667,7 +667,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--profile-slot", type=int)
     parser.add_argument("--move-device", action="store_true")
     parser.add_argument("--phase", choices=("pre", "running", "saved"), default="running")
-    parser.add_argument("--contract", default=core.SUPPORTED_CONTRACT)
+    parser.add_argument("--contract", choices=core.SUPPORTED_CONTRACTS)
     args = parser.parse_args(argv)
     if args.mode in ("plan", "verify") and not args.manifest_file:
         parser.error("plan/verify require --manifest-file")
@@ -700,7 +700,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 device_mac=args.device_mac,
                 profile_slot=args.profile_slot,
                 allow_move=args.move_device,
-                hardware_contract=args.contract,
+                hardware_contract=args.contract or core.SUPPORTED_CONTRACT,
             )
             write_external_transaction(Path(args.transaction_file), packet)
             print(
@@ -720,6 +720,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
         packet = load_external_transaction(Path(args.transaction_file))
+        if args.contract is not None and packet.get("hardware_contract") != args.contract:
+            raise core.LiveAdapterError("External transaction does not match the selected hardware contract.")
         result = verify_external_transaction(
             packet,
             manifest,

@@ -49,6 +49,7 @@ from routerkit_netcraze_plan import (
     validate_args as validate_netcraze_args,
 )
 from routerkit_profile_source import PayloadValidationError, validate_env_name
+from routerkit_netcraze_live import SUPPORTED_CONTRACT, SUPPORTED_CONTRACTS
 
 INSTALL_PLAN_NOTICE = (
     "Install is running in plan-only mode.\n"
@@ -1988,7 +1989,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     live_install.add_argument("--target-root", default="/opt")
     live_install.add_argument("--generated", default="generated")
     live_install.add_argument(
-        "--hardware-contract", default="nc3812-netcrazeos-5.1.5"
+        "--hardware-contract", choices=SUPPORTED_CONTRACTS, default=SUPPORTED_CONTRACT
     )
     live_install.add_argument("--artifact-manifest")
     live_source = live_install.add_mutually_exclusive_group()

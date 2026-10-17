@@ -36,6 +36,7 @@ All notable changes to this project will be documented in this file.
 - Setup now coordinates child shutdown and private profile cleanup for catchable SIGTERM/SIGHUP termination; uncatchable process or host termination remains a documented residual risk.
 
 ### Added
+- Exact `nc3812-netcrazeos-5.1.8` software support alongside the unchanged 5.1.5 default across native CLI, external transactions, live-install receipts/evidence, and JSON schemas. Added a sanitized native-syntax fixture, cross-contract isolation tests, and bilingual read-only compatibility evidence; full 5.1.8 runtime/write/reboot/rollback acceptance remains pending.
 - Explicit `local-router` and `external-evidence` runtime modes, target-side execution handoff/resume, runtime evidence fields, endpoint-manifest input, and regression coverage proving external workstation execution cannot mutate local `/opt`.
 - First-class `routerkit live-install plan|apply|resume|status` orchestration for issue #41, with the complete bounded stage order, one installation-scope confirmation, stop-on-failure behavior, and resume without rerunning proved stages.
 - Owner-only versioned `routerkit.live-install.v1` receipts and `routerkit.live-install.evidence.v1` observations with intent/endpoint fingerprints, explicit state epochs, component/reboot handoffs, secret/config exclusion, and checked-in schemas.

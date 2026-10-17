@@ -41,7 +41,8 @@ The packet schema is `routerkit.netcraze.external-transaction.v1`; its checked-i
 shape is [`routerkit-netcraze-external-transaction.v1.schema.json`](../../hardware/routerkit-netcraze-external-transaction.v1.schema.json).
 It contains:
 
-- the supported `nc3812-netcrazeos-5.1.5` hardware contract;
+- an exact supported contract: `nc3812-netcrazeos-5.1.5` (legacy default) or
+  `nc3812-netcrazeos-5.1.8` (explicit selection; [read-only evidence](../hardware/nc3812-netcrazeos-5.1.8.md));
 - manifest, pre-state, expected post-state, and Default-guard fingerprints;
 - deterministic slot -> native Proxy -> native Policy bindings;
 - `create`/`reuse` action per Proxy and Policy;

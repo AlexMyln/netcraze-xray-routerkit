@@ -438,3 +438,16 @@ Live-установка 2026-09-09 подтвердила рабочий пут�
 2. превратите повторяемые проблемы в code + regression tests, agent rules, concise docs или tracked issue;
 3. не публикуйте production secrets, MAC inventories, startup configs и subscription material;
 4. сокращайте следующую установку вместо добавления ещё одного слоя approval/audit ceremony.
+
+## Hopper SE на NetcrazeOS 5.1.8
+
+В код добавлен точный contract `nc3812-netcrazeos-5.1.8`. Для этой firmware
+передавайте `--hardware-contract nc3812-netcrazeos-5.1.8` в `live-install`
+или `--contract nc3812-netcrazeos-5.1.8` в standalone native/external tools.
+Примеры/default 5.1.5 остаются для 5.1.5; переносить receipt/evidence между
+firmware contracts нельзя. External verify с `--contract` требует точного
+совпадения контракта packet.
+См. [проверку от 2026-10-17 и оставшуюся acceptance](hardware/nc3812-netcrazeos-5.1.8.ru.md).
+Native readback/parser compatibility подтверждена; pinned Xray identity,
+фактическое владение listeners, runtime adoption, client DNS/HTTPS, native
+write, reboot и rollback требуют обычных свежих evidence и авторизации.

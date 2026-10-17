@@ -32,7 +32,7 @@
       "const": "routerkit.netcraze.external-transaction.v1"
     },
     "hardware_contract": {
-      "const": "nc3812-netcrazeos-5.1.5"
+      "enum": ["nc3812-netcrazeos-5.1.5", "nc3812-netcrazeos-5.1.8"]
     },
     "snapshot_mode": {
       "const": "owner-only-running-config-file"
