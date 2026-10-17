@@ -1,5 +1,10 @@
 # Публичный evidence для аппаратного canary Netcraze
 
+После очистки email в истории 2026-10-17 ID коммитов изменились, деревья файлов
+релизов сохранены. Исторические ID ниже остаются идентификаторами evidence.
+Для свежего checkout используйте [карту релизных тегов](../history-email-rewrite-tags.json)
+и [примечания об очистке](../public-data-hygiene.ru.md).
+
 Публиковать только после сверки с private manifest. Redaction не равна anonymity.
 
 ## Release и scope

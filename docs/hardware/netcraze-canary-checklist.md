@@ -1,5 +1,10 @@
 # Netcraze hardware-canary operator checklist
 
+Email-history rewrite on 2026-10-17 changed commit IDs without changing release
+file trees. Historical baseline IDs below remain evidence identifiers. For a fresh
+checkout, use the [release tag mapping](../history-email-rewrite-tags.json) and
+[cleanup notes](../public-data-hygiene.md#history-email-cleanup-2026-10-17).
+
 Packet: `routerkit.netcraze.hardware-canary.v1`
 Release: `v0.2.0-alpha.16`
 Expected commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`

@@ -1,0 +1,138 @@
+{
+  "date": "2026-10-17",
+  "purpose": "Git email metadata cleanup; file trees unchanged",
+  "tags": [
+    {
+      "tag": "v0.1.0",
+      "original_commit": "301d5493d7c2cbb9328661e3e1c511fc995040a8",
+      "noreply_commit": "6dd54154886cc0b68b596d2095bb28c0021b59d5",
+      "unchanged_tree": "3d5f1395bc8ff1b4c44480fa81be9d65abd2dfd1"
+    },
+    {
+      "tag": "v0.1.1",
+      "original_commit": "39ede45df3afe7c53fcbbd3ce86a0ec6cb97b152",
+      "noreply_commit": "07d47aee3baceccb52d460a10c1b76159d304b1f",
+      "unchanged_tree": "2e794679194f3b1b5b356d7815ed9c11dc6da87f"
+    },
+    {
+      "tag": "v0.1.2",
+      "original_commit": "a9468b5fb1b6315bcc5f507f12e8642c45a12c34",
+      "noreply_commit": "afd809ec9f1d94e32b67ec937f118f1ef339d1d6",
+      "unchanged_tree": "6960fc4944a709fa853f5f8677858504b5eaad0f"
+    },
+    {
+      "tag": "v0.1.3",
+      "original_commit": "06fe1d209253ee3317390aabf6ef6b745045d8f3",
+      "noreply_commit": "afb3ca73310b964321ac2b8bf2b81d305ba69f02",
+      "unchanged_tree": "1251e78801ee17ba31effda56b576a29853c6172"
+    },
+    {
+      "tag": "v0.2.0-alpha.1",
+      "original_commit": "2071dd438f8f7b417ab2db6ca5cdd51a6b00306e",
+      "noreply_commit": "69ea6f727c8e070b2c4d128dd2f45d89628a27b6",
+      "unchanged_tree": "6c50f85ce5696192ee4bbcdd74201f00d959844b"
+    },
+    {
+      "tag": "v0.2.0-alpha.10",
+      "original_commit": "004054a9aeebdf93536148a7b82f41fa0e795b79",
+      "noreply_commit": "3b69e1b1fac6d9ca5787688496605659e00a44a9",
+      "unchanged_tree": "0d40763626d4994217a08652c2eca71e9c82d58f"
+    },
+    {
+      "tag": "v0.2.0-alpha.11",
+      "original_commit": "e67da26481ac47b5b57aee2dbe18d4f6653f2659",
+      "noreply_commit": "19bfc09ff7ebc1548a77f90b91db98f33e9aba05",
+      "unchanged_tree": "20e66d978c429360da61baae250661c506b063b8"
+    },
+    {
+      "tag": "v0.2.0-alpha.12",
+      "original_commit": "cd7c18a4f02618818369e7cad708a95f79cbb825",
+      "noreply_commit": "0687b16af3b12e7f4e49f3d3bf905b2bc25cbdca",
+      "unchanged_tree": "6c9eef2fb6343d10b5f59a77a7ace550cf9be25e"
+    },
+    {
+      "tag": "v0.2.0-alpha.13",
+      "original_commit": "09f533666ca3429509c698999e17aee33ebec72f",
+      "noreply_commit": "aa89f0555ededa45d186a3f207447cab7d81ae47",
+      "unchanged_tree": "e4211a81158cb70833203bd579b1723e7d4f1889"
+    },
+    {
+      "tag": "v0.2.0-alpha.14",
+      "original_commit": "8c1f13aa7d72d420a48ea27bc09960577c29509f",
+      "noreply_commit": "bf92a15275b33b924df441dd781bd94c990de1ca",
+      "unchanged_tree": "06260b7f48a57a5946bc52b1a11e436cfbca22e5"
+    },
+    {
+      "tag": "v0.2.0-alpha.15",
+      "original_commit": "bf577058f777d7101784edb4a1e660b290093bda",
+      "noreply_commit": "d5622b6cc764c46afb415e0391dcf31f2c216086",
+      "unchanged_tree": "72fff80f5c7f721c5ef44438423d76c1e430227c"
+    },
+    {
+      "tag": "v0.2.0-alpha.16",
+      "original_commit": "c8f697635c93584e85e76a1d734f8fa797a76b51",
+      "noreply_commit": "fa18370b089d359b5fda8801f133821a2d6cf06a",
+      "unchanged_tree": "af9a05e754a31265bd8e8f001e8fa754da700c8c"
+    },
+    {
+      "tag": "v0.2.0-alpha.17",
+      "original_commit": "a72fcacd412da9f2724675c0ff815f4698f0b16e",
+      "noreply_commit": "164b712156b75a312528043c11ee66d72ba008bb",
+      "unchanged_tree": "b96a8cb25855953f3517ed3d29bcf67111c93274"
+    },
+    {
+      "tag": "v0.2.0-alpha.18",
+      "original_commit": "ff7d6485a6231ae273778bf844e667415816f4eb",
+      "noreply_commit": "72ccd67b84d1412299956812a7b2b95f2680736c",
+      "unchanged_tree": "6e6c3958f84c976e60d0cc5628e54699ec547e61"
+    },
+    {
+      "tag": "v0.2.0-alpha.2",
+      "original_commit": "6969750c2114d5cd5d898bd925ab9b4efed44c3d",
+      "noreply_commit": "d57fea8395dbe35d4532793b3a44fc9476cae00f",
+      "unchanged_tree": "47562871f90ab7a749ec2bcff1760fdec8398af2"
+    },
+    {
+      "tag": "v0.2.0-alpha.3",
+      "original_commit": "69a47067ad86cfbc8b09f323e543e4ea149eb20e",
+      "noreply_commit": "919407a95caf6b636cbffdc519f047ec7ff282be",
+      "unchanged_tree": "9f97135993aa232213c0fc805f675dd4c83f915b"
+    },
+    {
+      "tag": "v0.2.0-alpha.4",
+      "original_commit": "48b052e9ea84c72e47666629c72bbedfc7a2ac79",
+      "noreply_commit": "a94453d0d48726480bd19368673aaa1166bd3548",
+      "unchanged_tree": "eeb18c534a58108a595518a5db752bd8f25016ac"
+    },
+    {
+      "tag": "v0.2.0-alpha.5",
+      "original_commit": "7537a81a17734a3739a8dbb1909c8d029d2df1ea",
+      "noreply_commit": "6e3a09475312b77596e5ad8605b8e23ac7693a07",
+      "unchanged_tree": "9df710d0f8aec92238ca2d62e204963246861959"
+    },
+    {
+      "tag": "v0.2.0-alpha.6",
+      "original_commit": "cbbc8e9cbf97282cf4bff809657c55be1281f330",
+      "noreply_commit": "8d01aa1ec16e0e15102e0f0720403ef26fffade4",
+      "unchanged_tree": "128abceedb22abb55000427e182c338b9a923580"
+    },
+    {
+      "tag": "v0.2.0-alpha.7",
+      "original_commit": "fe7086323bf15b02083d59ed86fcae55de16cdec",
+      "noreply_commit": "b44673fff8ae5b389f70908f6e0a0e2c42e39480",
+      "unchanged_tree": "dddda808eabd1b9d019a41e3d4e83538545ac9f8"
+    },
+    {
+      "tag": "v0.2.0-alpha.8",
+      "original_commit": "b3de2464a32402aa19933cc16232ce039d744eaf",
+      "noreply_commit": "9e32dadd83def7e54ca6238ebc12fa39ae71b366",
+      "unchanged_tree": "38863467a4cd6de55f74afa70f2e27b911f15492"
+    },
+    {
+      "tag": "v0.2.0-alpha.9",
+      "original_commit": "57200ff71e87ff2dacb58f319f32559f18263711",
+      "noreply_commit": "f28e7c4097938b171753234387cbcb3a1b10140d",
+      "unchanged_tree": "a8639fa0f719f449fc5ff6f4152da28319ce0bcf"
+    }
+  ]
+}

@@ -55,6 +55,11 @@ Release tags retain their names and file contents. Recorded historical baseline
 IDs in acceptance documents remain records of the original runs, not new hardware
 acceptance claims.
 
+The [release tag mapping](history-email-rewrite-tags.json) records original and
+rewritten commit IDs with the unchanged file-tree ID for each tag. For the frozen
+alpha.16 canary contract, the original baseline ID remains an evidence identifier;
+resolve the current release tag through this mapping when checking out source.
+
 Use a fresh clone after the rewrite. Do not merge or push old branches/tags from
 an existing clone: doing so can restore the original email-bearing history. Keep
 any recovery bundle private and outside the repository. Existing forks, local
@@ -63,3 +68,6 @@ objects; branch/tag rewriting cannot remove those copies. Check those locations
 separately and use GitHub's support process where necessary.
 
 Русская версия: [public-data-hygiene.ru.md](public-data-hygiene.ru.md).
+
+GitHub references: [commit email setup](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address),
+[history cleanup and its limits](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).

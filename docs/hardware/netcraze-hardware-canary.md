@@ -1,5 +1,10 @@
 # Netcraze hardware-canary runbook
 
+Email-history rewrite on 2026-10-17 changed commit IDs without changing release
+file trees. Historical baseline IDs below remain evidence identifiers. For a fresh
+checkout, use the [release tag mapping](../history-email-rewrite-tags.json) and
+[cleanup notes](../public-data-hygiene.md#history-email-cleanup-2026-10-17).
+
 Repository/offline verdict: `READY_FOR_HARDWARE_CANARY`.
 
 This document is the primary operator sequence for the limited Netcraze/Keenetic hardware window. The supporting #21 and #15 packets remain useful research:

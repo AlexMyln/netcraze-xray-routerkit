@@ -1,5 +1,10 @@
 # Операторский checklist аппаратного canary Netcraze
 
+После очистки email в истории 2026-10-17 ID коммитов изменились, деревья файлов
+релизов сохранены. Исторические ID ниже остаются идентификаторами evidence.
+Для свежего checkout используйте [карту релизных тегов](../history-email-rewrite-tags.json)
+и [примечания об очистке](../public-data-hygiene.ru.md).
+
 Packet: `routerkit.netcraze.hardware-canary.v1`
 Release: `v0.2.0-alpha.16`
 Commit: `c8f697635c93584e85e76a1d734f8fa797a76b51`
