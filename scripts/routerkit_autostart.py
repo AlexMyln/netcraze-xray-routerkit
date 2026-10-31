@@ -520,7 +520,10 @@ def _socket_inodes_for_pid(proc_root: Path, pid: int) -> Optional[Set[str]]:
     return inodes
 
 
-def verify_runtime(paths: AutostartPaths, *, proc_root: Path = Path("/proc")) -> RuntimeVerification:
+def verify_runtime(
+    paths: AutostartPaths, *, proc_root: Path = Path("/proc"),
+    expected_ports: Sequence[int] = EXPECTED_PORTS,
+) -> RuntimeVerification:
     messages: List[str] = []
     try:
         pid = _read_pid(paths)
@@ -544,8 +547,11 @@ def verify_runtime(paths: AutostartPaths, *, proc_root: Path = Path("/proc")) ->
         rows: List[Tuple[str, int, str, str]] = []
     else:
         rows = rows4 + rows6
+    for port in set(EXPECTED_PORTS) - set(expected_ports):
+        if any(row[1] == port for row in rows):
+            messages.append(f"Unexpected listener on reserved RouterKit port {port}.")
     listeners: Dict[int, str] = {}
-    for port in EXPECTED_PORTS:
+    for port in expected_ports:
         port_rows = [row for row in rows if row[1] == port]
         if not port_rows:
             messages.append(f"Missing listener on {EXPECTED_HOST}:{port}.")

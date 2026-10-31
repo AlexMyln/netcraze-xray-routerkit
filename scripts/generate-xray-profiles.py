@@ -26,6 +26,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from routerkit_xray import build_vless_outbound  # noqa: E402
+
 from routerkit_profile_source import (  # noqa: E402
     NodeRecord,
     NodeValidationError,
@@ -133,42 +135,6 @@ def build_inbounds(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
             }
             for p in profiles
         ]
-    }
-
-
-def build_vless_outbound(profile: Dict[str, Any], node: NodeRecord) -> Dict[str, Any]:
-    user = {
-        "id": node["uuid"],
-        "encryption": "none",
-    }
-    if node.get("flow"):
-        user["flow"] = node["flow"]
-
-    reality = {
-        "serverName": node.get("sni") or node["host"],
-        "fingerprint": node.get("fp") or "chrome",
-        "publicKey": node["pbk"],
-        "shortId": node.get("sid", ""),
-        "spiderX": node.get("spx") or "/",
-    }
-
-    return {
-        "tag": f"vless-{profile['name']}",
-        "protocol": "vless",
-        "settings": {
-            "vnext": [
-                {
-                    "address": node["host"],
-                    "port": int(node["port"]),
-                    "users": [user],
-                }
-            ]
-        },
-        "streamSettings": {
-            "network": node.get("network") or "tcp",
-            "security": node.get("security") or "reality",
-            "realitySettings": reality,
-        },
     }
 
 

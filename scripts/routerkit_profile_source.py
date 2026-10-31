@@ -206,7 +206,9 @@ def _maybe_base64_decode(text: str) -> Optional[str]:
         raise PayloadValidationError("Decoded payload is too large.")
     padded = compact + "=" * (-len(compact) % 4)
     try:
-        decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+        # Keep both alphabets without the newer-Python altchars deprecation
+        # for standard '/' and '+'. Validation remains strict after translation.
+        decoded = base64.b64decode(padded.replace("-", "+").replace("_", "/"), validate=True)
         if len(decoded) > MAX_DECODED_BYTES:
             raise PayloadValidationError("Decoded payload is too large.")
         return decoded.decode("utf-8")

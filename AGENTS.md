@@ -49,6 +49,9 @@ For a full installation whose goal includes per-device VPN policies, prefer this
 6. Acquire the profile source through hidden input, protected file, or dedicated `ROUTERKIT_*` environment variable.
 7. Run generation, strict plan, preflight, backup, install, and healthcheck.
 8. Enable RouterKit autostart only after healthcheck passes.
+   For a recurring HTTPS subscription, also configure and enable the on-router
+   `subscription` worker; see `docs/subscription-refresh.ru.md`. Preserve the
+   protected source and exact node bindings. Static VLESS exports cannot refresh.
 9. If per-device routing is part of the requested goal, verify/install the native **Proxy client** system component before declaring the job complete.
 10. Use one controlled reboot, when authorized, to prove USB -> `/opt` -> Entware -> Xray -> autostart recovery.
 11. Create native loopback SOCKS proxy interfaces and native Internet access policies.

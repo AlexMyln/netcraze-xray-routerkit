@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import urllib.parse
 import uuid
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -94,6 +95,15 @@ class PayloadParsingTests(unittest.TestCase):
         link = make_link()
         payload = base64.b64encode((link + "\n").encode()).decode()
         self.assertEqual(core.extract_vless_links(payload), [link])
+
+    def test_both_base64_alphabets_remain_strict_without_deprecation_warnings(self):
+        link = make_link()
+        payload = ("???\n" + link).encode()
+        for encoder in (base64.b64encode, base64.urlsafe_b64encode):
+            encoded = encoder(payload).decode()
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", DeprecationWarning)
+                self.assertEqual(core.parse_compatible_nodes(encoded)[0].raw_link, link)
 
     def test_nested_json(self):
         link = make_link()
