@@ -13,6 +13,10 @@ Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 Guided installer docs: [docs/guided-installer.md](docs/guided-installer.md)
 
+Subscription refresh every two hours: [setup, verification and rollback (RU)](docs/subscription-refresh.ru.md).
+On an installed router, run `subscription configure --yes`, then `subscription enable --yes`
+through the unified CLI in the target's Entware shell. Existing static installs require this opt-in.
+
 Platform and firmware compatibility: [docs/hardware/platform-compatibility.md](docs/hardware/platform-compatibility.md)
 
 Bootstrap design: [execution-model ADR](docs/architecture/bootstrap-execution-model.md) · [pinned Xray verification](docs/xray-artifact-pin.md)

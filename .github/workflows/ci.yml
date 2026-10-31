@@ -41,6 +41,9 @@ jobs:
         run: |
           python3 -m py_compile scripts/check_public_data.py
           python3 -m py_compile scripts/routerkit_private_io.py
+          python3 -m py_compile scripts/routerkit_xray.py
+          python3 -m py_compile scripts/routerkit_subscription.py
+          python3 -m py_compile scripts/routerkit-subscription.py
           python3 -m py_compile scripts/routerkit_profile_network.py
           python3 -m py_compile scripts/routerkit_profile_source.py
           python3 -m py_compile scripts/routerkit-profile-source.py

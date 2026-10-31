@@ -79,6 +79,11 @@ Bootstrap design: [ADR модели выполнения](docs/architecture/boot
 
 ## Быстрый старт
 
+Автообновление HTTPS-подписки каждые 2 часа на самом роутере:
+[включение, безопасное применение и откат](docs/subscription-refresh.ru.md).
+Для уже установленного RouterKit: `subscription configure --yes`, затем
+`subscription enable --yes`; команды выполняются в Entware shell роутера.
+
 > Это не образ флешки и не автоматический установщик. Entware/OPKG нужно подготовить отдельно; standalone bootstrap apply поддерживает как замену существующего Xray, так и clean install.
 
 Guided setup версии v0.2-alpha теперь объединяет profile-source acquisition, приватную генерацию, strict planning и явно подтверждённые apply stages. Flow описан в [документации guided installer](docs/guided-installer.ru.md).

@@ -406,6 +406,16 @@ def setup_reuse_path(args: argparse.Namespace) -> Optional[str]:
 def build_command(args: argparse.Namespace, repo_root: Path) -> List[str]:
     repo_root = Path(repo_root)
 
+    if args.command == "subscription":
+        command = [sys.executable, _repo_script(repo_root, "routerkit-subscription.py"), args.mode]
+        for flag, value in (("--source-file", args.source_file), ("--source-env", args.source_env),
+                            ("--selection-file", args.selection_file)):
+            if value is not None:
+                command.extend((flag, value))
+        if args.yes:
+            command.append("--yes")
+        return command
+
     if args.command == "live-install":
         command = [
             sys.executable,
@@ -1964,6 +1974,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subscription = subparsers.add_parser(
+        "subscription", help="Configure, refresh or schedule subscription updates every two hours."
+    )
+    subscription.add_argument("mode", choices=("configure", "run", "enable", "disable", "status"))
+    subscription_source = subscription.add_mutually_exclusive_group()
+    subscription_source.add_argument("--source-file")
+    subscription_source.add_argument("--source-env")
+    subscription.add_argument("--selection-file")
+    subscription.add_argument("--yes", action="store_true")
 
     live_install = subparsers.add_parser(
         "live-install",

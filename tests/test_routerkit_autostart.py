@@ -171,6 +171,27 @@ class AutostartCliValidationTests(unittest.TestCase):
 
 
 class AutostartRuntimeTests(unittest.TestCase):
+    def test_selected_single_profile_requires_only_its_listener(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, proc = build_synthetic_runtime(Path(directory))
+            tcp = proc / "net" / "tcp"
+            lines = tcp.read_text().splitlines()
+            tcp.write_text("\n".join(lines[:2]) + "\n")
+            runtime = autostart.verify_runtime(
+                autostart.AutostartPaths(opt), proc_root=proc, expected_ports=[1082]
+            )
+        self.assertTrue(runtime.ok)
+        self.assertEqual(set(runtime.listeners), {1082})
+
+    def test_selected_single_profile_rejects_unexpected_reserved_listener(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opt, proc = build_synthetic_runtime(Path(directory), exposed_port=1083)
+            runtime = autostart.verify_runtime(
+                autostart.AutostartPaths(opt), proc_root=proc, expected_ports=[1082]
+            )
+        self.assertFalse(runtime.ok)
+        self.assertTrue(any("Unexpected listener" in message for message in runtime.messages))
+
     def test_verify_accepts_expected_loopback_listeners_owned_by_pid(self):
         with tempfile.TemporaryDirectory() as directory:
             opt, proc = build_synthetic_runtime(Path(directory))

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Subscription refresh
+- Added `routerkit subscription configure|run|enable|disable|status`: protected HTTPS source retention, exact node-name bindings and an on-router Entware cron job every two hours.
+- Refresh changes only the existing VLESS outbound fragment after staged Xray validation; loopback listeners, split routing and native client policies are preserved. Post-restart process/listener and HTTPS checks gate acceptance, with a bounded write-ahead rollback journal for interruption recovery.
+- Enrollment can adopt a subscription after a server-port-only change. Reordered nodes retain their slots; missing/ambiguous names fail closed. An unchanged configuration is checked without restarting Xray.
+- Explicit migration with `configure --selection-file` accepts only a protected RouterKit-generated selection with the exact installed profile set and exact current subscription-node parameters, supporting intentional endpoint replacements without fuzzy or index-based enrollment.
+- Shared outbound generation between setup and refresh, and retained strict standard/URL-safe Base64 decoding without newer-Python deprecation output.
+- Added offline subscription transaction, scheduler installation, copied-worker, signal, recovery and one-profile verifier coverage. Hardware deployment/cron execution remain separate acceptance steps.
+
 ### Security
 - `live-install` now separates RouterKit runtime execution from native router transport: external native mode safely defaults to `external-evidence`, cannot launch local `/opt` runtime subprocesses or write receipt/transaction state below local `/opt`, and returns `ROUTERKIT_RUNTIME_EXECUTION_REQUIRED` for fresh/mutating target runtime work.
 - Brownfield runtime reuse now requires strict target/runtime evidence plus an explicit validated, fingerprint-bound `routerkit.local-endpoints.v1` manifest; adoption performs no profile acquisition, generation, bootstrap, backup, install, or autostart mutation and is recorded distinctly as `ADOPTED`.
